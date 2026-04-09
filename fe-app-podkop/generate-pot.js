@@ -3,12 +3,24 @@ import { execSync } from 'child_process';
 
 const inputFile = 'locales/calls.json';
 const outputFile = 'locales/podkop.pot';
-const projectId = 'PODKOP';
+const projectId = 'PODKOP PLUS';
 
 function getGitUser() {
-    const name = execSync('git config user.name').toString().trim();
-    const email = execSync('git config user.email').toString().trim();
-    return { name, email };
+    try {
+        const name = execSync('git config user.name', { stdio: ['ignore', 'pipe', 'ignore'] }).toString().trim();
+        const email = execSync('git config user.email', { stdio: ['ignore', 'pipe', 'ignore'] }).toString().trim();
+
+        if (name && email) {
+            return { name, email };
+        }
+    } catch (error) {
+        // Fall through to deterministic defaults when git identity is not configured.
+    }
+
+    return {
+        name: 'Podkop Plus',
+        email: 'noreply@podkop.plus',
+    };
 }
 
 function getPotHeader({ name, email }) {

@@ -29,7 +29,7 @@ export async function runSectionsCheck() {
       items: [],
     });
 
-    throw new Error('Sections checks failed');
+    throw new Error('Rule outbounds checks failed');
   }
 
   const items = (await Promise.all(
@@ -127,6 +127,6 @@ export async function runSectionsCheck() {
   });
 
   if (!atLeastOneGood) {
-    throw new Error('Sections checks failed');
+    throw new Error('Rule outbounds checks failed');
   }
 }

@@ -31,9 +31,10 @@ export async function runFakeIPCheck() {
       checkFakeIPResponse.data.IP !== checkIPResponse.data.IP,
   };
 
-  const allGood = checks.router || checks.browserFakeIP || checks.differentIP;
-  const atLeastOneGood =
+  const allGood =
     checks.router && checks.browserFakeIP && checks.differentIP;
+  const atLeastOneGood =
+    checks.router || checks.browserFakeIP || checks.differentIP;
 
   const { state, description } = getMeta({ atLeastOneGood, allGood });
 

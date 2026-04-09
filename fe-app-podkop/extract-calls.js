@@ -19,12 +19,12 @@ function stripIllegalReturn(code) {
 
 const files = await glob([
     'src/**/*.ts',
-    '../luci-app-podkop/htdocs/luci-static/resources/view/podkop/**/*.js',
+    '../luci-app-podkop-plus/htdocs/luci-static/resources/view/podkop/**/*.js',
 ], {
     ignore: [
         '**/*.test.ts',
         '**/main.js',
-        '../luci-app-podkop/htdocs/luci-static/resources/view/podkop/main.js',
+        '../luci-app-podkop-plus/htdocs/luci-static/resources/view/podkop/main.js',
     ],
     absolute: true,
 });
@@ -34,7 +34,7 @@ const results = {};
 for (const file of files) {
     const contentRaw = await fs.readFile(file, 'utf8');
     const content = stripIllegalReturn(contentRaw);
-    const relativePath = path.relative(process.cwd(), file);
+    const relativePath = path.relative(process.cwd(), file).replaceAll('\\', '/');
 
     let ast;
     try {

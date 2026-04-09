@@ -1,29 +1,55 @@
 import { PodkopShellMethods } from '../methods';
-import { store } from '../services';
+import { logger, store } from '../services';
+import { Podkop } from '../types';
+
+let latestServicesInfoRequestId = 0;
+
+function getSettledMethodResponse<T>(
+  scope: string,
+  result: PromiseSettledResult<Podkop.MethodResponse<T>>,
+): Podkop.MethodResponse<T> {
+  if (result.status === 'fulfilled') {
+    return result.value;
+  }
+
+  logger.error('[SERVICES_INFO]', `${scope} failed`, result.reason);
+
+  return {
+    success: false,
+    error: result.reason instanceof Error ? result.reason.message : '',
+  };
+}
 
 export async function fetchServicesInfo() {
-  const [podkop, singbox] = await Promise.all([
+  const requestId = ++latestServicesInfoRequestId;
+
+  const [podkopResult, singboxResult, zapretResult] = await Promise.allSettled([
     PodkopShellMethods.getStatus(),
     PodkopShellMethods.getSingBoxStatus(),
+    PodkopShellMethods.getZapretStatus(),
   ]);
 
-  if (!podkop.success || !singbox.success) {
-    store.set({
-      servicesInfoWidget: {
-        loading: false,
-        failed: true,
-        data: { singbox: 0, podkop: 0 },
-      },
-    });
+  if (requestId !== latestServicesInfoRequestId) {
+    return;
   }
 
-  if (podkop.success && singbox.success) {
-    store.set({
-      servicesInfoWidget: {
-        loading: false,
-        failed: false,
-        data: { singbox: singbox.data.running, podkop: podkop.data.enabled },
+  const podkop = getSettledMethodResponse('getStatus', podkopResult);
+  const singbox = getSettledMethodResponse(
+    'getSingBoxStatus',
+    singboxResult,
+  );
+  const zapret = getSettledMethodResponse('getZapretStatus', zapretResult);
+
+  store.set({
+    servicesInfoWidget: {
+      loading: false,
+      failed: !podkop.success || !singbox.success || !zapret.success,
+      data: {
+        singbox: singbox.success ? singbox.data.running : 0,
+        podkopRunning: podkop.success ? podkop.data.running : 0,
+        podkopEnabled: podkop.success ? podkop.data.enabled : 0,
+        zapret: zapret.success ? zapret.data.ready : 0,
       },
-    });
-  }
+    },
+  });
 }

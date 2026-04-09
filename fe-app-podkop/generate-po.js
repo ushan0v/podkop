@@ -36,14 +36,14 @@ function getHeader(lang) {
         : 'nplurals=2; plural=(n != 1);';
 
     return [
-        `# ${lang.toUpperCase()} translations for PODKOP package.`,
-        `# Copyright (C) ${now.getFullYear()} THE PODKOP'S COPYRIGHT HOLDER`,
-        `# This file is distributed under the same license as the PODKOP package.`,
+        `# ${lang.toUpperCase()} translations for PODKOP PLUS package.`,
+        `# Copyright (C) ${now.getFullYear()} THE PODKOP PLUS COPYRIGHT HOLDER`,
+        `# This file is distributed under the same license as the PODKOP PLUS package.`,
         `# ${translator}, ${now.getFullYear()}.`,
         '#',
         'msgid ""',
         'msgstr ""',
-        `"Project-Id-Version: PODKOP\\n"`,
+        `"Project-Id-Version: PODKOP PLUS\\n"`,
         `"Report-Msgid-Bugs-To: \\n"`,
         `"POT-Creation-Date: ${date} ${time}${tzOffset}\\n"`,
         `"PO-Revision-Date: ${date} ${time}${tzOffset}\\n"`,

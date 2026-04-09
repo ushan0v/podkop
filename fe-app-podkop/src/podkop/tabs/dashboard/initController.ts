@@ -340,12 +340,12 @@ async function renderServicesInfoWidget() {
     title: _('Services info'),
     items: [
       {
-        key: _('Podkop'),
-        value: servicesInfoWidget.data.podkop
-          ? _('✔ Enabled')
-          : _('✘ Disabled'),
+        key: _('Podkop Plus'),
+        value: servicesInfoWidget.data.podkopRunning
+          ? _('✔ Running')
+          : _('✘ Stopped'),
         attributes: {
-          class: servicesInfoWidget.data.podkop
+          class: servicesInfoWidget.data.podkopRunning
             ? 'pdk_dashboard-page__widgets-section__item__row--success'
             : 'pdk_dashboard-page__widgets-section__item__row--error',
         },
@@ -357,6 +357,17 @@ async function renderServicesInfoWidget() {
           : _('✘ Stopped'),
         attributes: {
           class: servicesInfoWidget.data.singbox
+            ? 'pdk_dashboard-page__widgets-section__item__row--success'
+            : 'pdk_dashboard-page__widgets-section__item__row--error',
+        },
+      },
+      {
+        key: _('Zapret'),
+        value: servicesInfoWidget.data.zapret
+          ? _('✔ Running')
+          : _('✘ Stopped'),
+        attributes: {
+          class: servicesInfoWidget.data.zapret
             ? 'pdk_dashboard-page__widgets-section__item__row--success'
             : 'pdk_dashboard-page__widgets-section__item__row--error',
         },
@@ -420,7 +431,16 @@ function onPageUnmount() {
   socket.resetAll();
 }
 
+let dashboardLifecycleRegistered = false;
+let dashboardControllerInitialized = false;
+
 function registerLifecycleListeners() {
+  if (dashboardLifecycleRegistered) {
+    return;
+  }
+
+  dashboardLifecycleRegistered = true;
+
   store.subscribe((next, prev, diff) => {
     if (
       diff.tabService &&
@@ -455,6 +475,12 @@ function registerLifecycleListeners() {
 }
 
 export async function initController(): Promise<void> {
+  if (dashboardControllerInitialized) {
+    return;
+  }
+
+  dashboardControllerInitialized = true;
+
   onMount('dashboard-status').then(() => {
     logger.debug('[DASHBOARD]', 'initController', 'onMount');
     onPageMount();

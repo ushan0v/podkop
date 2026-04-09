@@ -18,7 +18,7 @@ const config = {
 
 const syncDirs = [
   {
-    local: path.resolve(process.env.LOCAL_DIR_FE ?? '../luci-app-podkop/htdocs/luci-static/resources/view/podkop'),
+    local: path.resolve(process.env.LOCAL_DIR_FE ?? '../luci-app-podkop-plus/htdocs/luci-static/resources/view/podkop'),
     remote: process.env.REMOTE_DIR_FE ?? '/www/luci-static/resources/view/podkop',
   },
   {
@@ -27,7 +27,7 @@ const syncDirs = [
   },
   {
     local: path.resolve(process.env.LOCAL_DIR_LIB ?? '../podkop/files/usr/lib/'),
-    remote: process.env.REMOTE_DIR_LIB ?? '/usr/lib/podkop/',
+    remote: process.env.REMOTE_DIR_LIB ?? '/usr/lib/podkop-plus/',
   },
   {
     local: path.resolve(process.env.LOCAL_DIR_INIT ?? '../podkop/files/etc/init.d/'),

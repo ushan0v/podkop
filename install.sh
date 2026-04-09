@@ -1,43 +1,153 @@
 #!/bin/sh
 # shellcheck shell=dash
 
-REPO="https://api.github.com/repos/itdoginfo/podkop/releases/latest"
-DOWNLOAD_DIR="/tmp/podkop"
-COUNT=3
+REPO_OWNER="ushan0v"
+REPO_NAME="podkop-plus"
 
-# Cached flag to switch between ipk or apk package managers
+PODKOP_PLUS_RELEASE_TAG="${PODKOP_PLUS_RELEASE_TAG:-}"
+PODKOP_PLUS_SOURCE_REF="${PODKOP_PLUS_SOURCE_REF:-}"
+ZAPRET_RELEASE_TAG="${ZAPRET_RELEASE_TAG:-}"
+
+DOWNLOAD_RETRIES="${DOWNLOAD_RETRIES:-3}"
+REQUIRED_SPACE_KB=15360
+PODKOP_PLUS_ASSUME_YES="${PODKOP_PLUS_ASSUME_YES:-0}"
+PODKOP_PLUS_KEEP_EXISTING_ZAPRET="${PODKOP_PLUS_KEEP_EXISTING_ZAPRET:-0}"
+
 PKG_IS_APK=0
+FETCHER=""
+TMP_DIR=""
+PODKOP_WAS_ENABLED=0
+TARGET_ARCH=""
+ZAPRET_ARCH=""
+ZAPRET_ARCH_CANDIDATES=""
+
+PODKOP_PLUS_RELEASE_JSON=""
+PODKOP_PLUS_PACKAGE_URL=""
+PODKOP_PLUS_PACKAGE_NAME=""
+PODKOP_PLUS_PACKAGE_FILE=""
+PODKOP_PLUS_I18N_URL=""
+PODKOP_PLUS_I18N_NAME=""
+PODKOP_PLUS_I18N_FILE=""
+PODKOP_PLUS_PACKAGE_VERSION=""
+
+ZAPRET_RELEASE_JSON=""
+ZAPRET_RELEASE_TAG_RESOLVED=""
+ZAPRET_BUNDLE_URL=""
+ZAPRET_BUNDLE_NAME=""
+ZAPRET_PACKAGE_NAME=""
+ZAPRET_PACKAGE_FILE=""
+ZAPRET_PACKAGE_VERSION=""
+
 command -v apk >/dev/null 2>&1 && PKG_IS_APK=1
 
-rm -rf "$DOWNLOAD_DIR"
-mkdir -p "$DOWNLOAD_DIR"
-
 msg() {
-    printf "\033[32;1m%s\033[0m\n" "$1"
+    printf '\033[32;1m%s\033[0m\n' "$1"
 }
 
-pkg_is_installed () {
-    local pkg_name="$1"
+warn() {
+    printf '\033[33;1m%s\033[0m\n' "$1"
+}
 
-    if [ "$PKG_IS_APK" -eq 1 ]; then
-        # grep -q should work without change based on example from documentation
-        # apk list --installed --providers dnsmasq
-        # <dnsmasq> dnsmasq-full-2.90-r3 x86_64 {feeds/base/package/network/services/dnsmasq} (GPL-2.0) [installed]
-        apk list --installed | grep -q "$pkg_name"
-    else
-        opkg list-installed | grep -q "$pkg_name"
+fail() {
+    printf '\033[31;1m%s\033[0m\n' "$1" >&2
+    exit 1
+}
+
+cleanup() {
+    [ -n "$TMP_DIR" ] && rm -rf "$TMP_DIR"
+}
+
+command_exists() {
+    command -v "$1" >/dev/null 2>&1
+}
+
+init_tmp_dir() {
+    TMP_DIR="$(mktemp -d /tmp/podkop-plus.XXXXXX 2>/dev/null || true)"
+
+    if [ -z "$TMP_DIR" ]; then
+        TMP_DIR="/tmp/podkop-plus.$$"
+        mkdir -p "$TMP_DIR" || fail "Failed to create temporary directory: $TMP_DIR"
     fi
 }
 
-pkg_remove() {
-    local pkg_name="$1"
+detect_fetcher() {
+    if command_exists wget; then
+        FETCHER="wget"
+        return 0
+    fi
+
+    if command_exists curl; then
+        FETCHER="curl"
+        return 0
+    fi
+
+    fail "wget or curl is required to download Podkop Plus"
+}
+
+http_get() {
+    case "$FETCHER" in
+        wget)
+            wget -qO- "$1"
+            ;;
+        curl)
+            curl -fsSL "$1"
+            ;;
+        *)
+            return 1
+            ;;
+    esac
+}
+
+download_file_once() {
+    case "$FETCHER" in
+        wget)
+            wget -q -O "$2" "$1"
+            ;;
+        curl)
+            curl -fsSL "$1" -o "$2"
+            ;;
+        *)
+            return 1
+            ;;
+    esac
+}
+
+download_with_retry() {
+    url="$1"
+    output_path="$2"
+    label="$3"
+    attempt=1
+
+    while [ "$attempt" -le "$DOWNLOAD_RETRIES" ]; do
+        msg "Downloading $label ($attempt/$DOWNLOAD_RETRIES)"
+
+        if download_file_once "$url" "$output_path" && [ -s "$output_path" ]; then
+            return 0
+        fi
+
+        rm -f "$output_path"
+        warn "Retrying $label"
+        attempt=$((attempt + 1))
+    done
+
+    return 1
+}
+
+pkg_list_installed_names() {
+    if [ "$PKG_IS_APK" -eq 1 ]; then
+        apk info 2>/dev/null
+    else
+        opkg list-installed 2>/dev/null | awk '{print $1}'
+    fi
+}
+
+pkg_is_installed() {
+    pkg_name="$1"
 
     if [ "$PKG_IS_APK" -eq 1 ]; then
-        # TODO: check --force-depends flag
-        # Nothing here: https://openwrt.org/docs/guide-user/additional-software/opkg-to-apk-cheatsheet
-        apk del "$pkg_name"
+        apk info -e "$pkg_name" >/dev/null 2>&1
     else
-        opkg remove --force-depends "$pkg_name"
+        opkg list-installed 2>/dev/null | grep -Eq "^${pkg_name}([[:space:]-]|$)"
     fi
 }
 
@@ -49,262 +159,539 @@ pkg_list_update() {
     fi
 }
 
-pkg_install() {
-    local pkg_file="$1"
+pkg_install_name() {
+    pkg_name="$1"
 
     if [ "$PKG_IS_APK" -eq 1 ]; then
-        # Can't install without flag based on info from documentation
-        # If you're installing a non-standard (self-built) package, use the --allow-untrusted option:
-        apk add --allow-untrusted "$pkg_file"
+        apk add "$pkg_name"
     else
-        opkg install "$pkg_file"
+        opkg install "$pkg_name"
     fi
 }
 
-update_config() {
-    printf "\033[48;5;196m\033[1m╔══════════════════════════════════════════════════════════════════════╗\033[0m\n"
-    printf "\033[48;5;196m\033[1m║ ! Обнаружена старая версия podkop.                                   ║\033[0m\n"
-    printf "\033[48;5;196m\033[1m║ Если продолжите обновление, вам потребуется настроить Podkop заново. ║\033[0m\n"
-    printf "\033[48;5;196m\033[1m║ Старая конфигурация будет сохранена в /etc/config/podkop-070         ║\033[0m\n"
-    printf "\033[48;5;196m\033[1m║ Подробности: https://github.com/itdoginfo/podkop                     ║\033[0m\n"
-    printf "\033[48;5;196m\033[1m║ Точно хотите продолжить?                                             ║\033[0m\n"
-    printf "\033[48;5;196m\033[1m╚══════════════════════════════════════════════════════════════════════╝\033[0m\n"
+pkg_remove_if_installed() {
+    pkg_name="$1"
 
-    echo ""
+    if ! pkg_is_installed "$pkg_name"; then
+        return 0
+    fi
 
-    printf "\033[48;5;196m\033[1m╔══════════════════════════════════════════════════════════════════════╗\033[0m\n"
-    printf "\033[48;5;196m\033[1m║ ! Detected old podkop version.                                       ║\033[0m\n"
-    printf "\033[48;5;196m\033[1m║ If you continue the update, you will need to RECONFIGURE podkop.     ║\033[0m\n"
-    printf "\033[48;5;196m\033[1m║ Your old configuration will be saved to /etc/config/podkop-070       ║\033[0m\n"
-    printf "\033[48;5;196m\033[1m║ Details: https://github.com/itdoginfo/podkop                         ║\033[0m\n"
-    printf "\033[48;5;196m\033[1m║ Are you sure you want to continue?                                   ║\033[0m\n"
-    printf "\033[48;5;196m\033[1m╚══════════════════════════════════════════════════════════════════════╝\033[0m\n"
+    if [ "$PKG_IS_APK" -eq 1 ]; then
+        apk del "$pkg_name" >/dev/null 2>&1 || true
+    else
+        opkg remove --force-depends "$pkg_name" >/dev/null 2>&1 || true
+    fi
+}
 
-    msg "Continue? (yes/no)"
+pkg_remove_matching_prefix() {
+    prefix="$1"
 
-    while true; do
-            read -r -p '' CONFIG_UPDATE
-            case $CONFIG_UPDATE in
-
-            yes|y|Y)
-                mv /etc/config/podkop /etc/config/podkop-070
-                wget -O /etc/config/podkop https://raw.githubusercontent.com/itdoginfo/podkop/refs/heads/main/podkop/files/etc/config/podkop
-                msg "Podkop config has been reset to default. Your old config saved in /etc/config/podkop-070"
-                break
-                ;;
-            *)
-                msg "Exit"
-                exit 1
-                ;;
-        esac
+    for pkg_name in $(pkg_list_installed_names | grep "^$prefix" 2>/dev/null); do
+        pkg_remove_if_installed "$pkg_name"
     done
 }
 
-main() {
-    check_system
-    sing_box
-
-    /usr/sbin/ntpd -q -p 194.190.168.1 -p 216.239.35.0 -p 216.239.35.4 -p 162.159.200.1 -p 162.159.200.123
-
-    pkg_list_update || { echo "Packages list update failed"; exit 1; }
-
-    if [ -f "/etc/init.d/podkop" ]; then
-        msg "Podkop is already installed. Upgrading..."
-    else
-        msg "Installing podkop..."
-    fi
-
-    if command -v curl >/dev/null 2>&1; then
-        check_response=$(curl -s "https://api.github.com/repos/itdoginfo/podkop/releases/latest")
-
-        if echo "$check_response" | grep -q 'API rate limit '; then
-            msg "You've reached the GitHub rate limit. Repeat in five minutes."
-            exit 1
-        fi
-    fi
-
-    local grep_url_pattern
+pkg_install_files() {
     if [ "$PKG_IS_APK" -eq 1 ]; then
-        grep_url_pattern='https://[^"[:space:]]*\.apk'
+        apk add --allow-untrusted "$@"
     else
-        grep_url_pattern='https://[^"[:space:]]*\.ipk'
+        opkg install "$@"
+    fi
+}
+
+ensure_bootstrap_tool() {
+    tool_name="$1"
+    package_name="$2"
+
+    if command_exists "$tool_name"; then
+        return 0
     fi
 
-    wget -qO- "$REPO" | grep -o "$grep_url_pattern" | while read -r url; do
-        filename=$(basename "$url")
-        filepath="$DOWNLOAD_DIR/$filename"
+    msg "Installing bootstrap dependency: $package_name"
+    pkg_install_name "$package_name" || fail "Failed to install $package_name"
+}
 
-        attempt=0
-        while [ $attempt -lt $COUNT ]; do
-            msg "Download $filename (count $((attempt+1)))..."
-            if wget -q -O "$filepath" "$url"; then
-                if [ -s "$filepath" ]; then
-                    msg "$filename successfully downloaded"
-                    break
-                fi
-            fi
-            msg "Download error for $filename. Retrying..."
-            rm -f "$filepath"
-            attempt=$((attempt+1))
-        done
-
-        if [ $attempt -eq $COUNT ]; then
-            msg "Failed to download $filename after $COUNT attempts"
-        fi
-    done
-
-    # Check if any files were downloaded
-    if ! ls "$DOWNLOAD_DIR"/*podkop* >/dev/null 2>&1; then
-        msg "No packages were downloaded successfully"
-        exit 1
+sync_time() {
+    if ! command_exists ntpd; then
+        return 0
     fi
 
-    for pkg in podkop luci-app-podkop; do
-        file=""
-        for f in "$DOWNLOAD_DIR"/"$pkg"*; do
-            if [ -f "$f" ]; then
-                file=$(basename "$f")
-                break
-            fi
-        done
-        if [ -n "$file" ]; then
-            msg "Installing $file..."
-            pkg_install "$DOWNLOAD_DIR/$file"
-            sleep 3
-        fi
-    done
+    ntpd -q \
+        -p 194.190.168.1 \
+        -p 216.239.35.0 \
+        -p 216.239.35.4 \
+        -p 162.159.200.1 \
+        -p 162.159.200.123 >/dev/null 2>&1 || true
+}
 
-    ru=""
-    for f in "$DOWNLOAD_DIR"/luci-i18n-podkop-ru*; do
-        if [ -f "$f" ]; then
-            ru=$(basename "$f")
-            break
-        fi
-    done
-    if [ -n "$ru" ]; then
-        if pkg_is_installed luci-i18n-podkop-ru; then
-                msg "Upgrading Russian translation..."
-                pkg_remove luci-i18n-podkop*
-                pkg_install "$DOWNLOAD_DIR/$ru"
-        else
-            msg "Русский язык интерфейса ставим? y/n (Install the Russian interface language?)"
-            while true; do
-                read -r -p '' RUS
-                case $RUS in
-                y)
-                    pkg_remove luci-i18n-podkop*
-                    pkg_install "$DOWNLOAD_DIR/$ru"
-                    break
-                    ;;
-                n)
-                    break
-                    ;;
-                *)
-                    echo "Введите y или n"
-                    ;;
-                esac
-            done
-        fi
+check_root() {
+    if command_exists id && [ "$(id -u)" != "0" ]; then
+        fail "Please run this installer as root"
     fi
-
-    find "$DOWNLOAD_DIR" -type f -name '*podkop*' -exec rm {} \;
 }
 
 check_system() {
-    # Get router model
-    MODEL=$(cat /tmp/sysinfo/model)
-    msg "Router model: $MODEL"
+    release=""
+    major=""
+    model=""
+    available_space=""
 
-    # Check OpenWrt version
-    openwrt_version=$(cat /etc/openwrt_release | grep DISTRIB_RELEASE | cut -d"'" -f2 | cut -d'.' -f1)
-    if [ "$openwrt_version" = "23" ]; then
-        msg "OpenWrt 23.05 не поддерживается начиная с podkop 0.5.0"
-        msg "Для OpenWrt 23.05 используйте podkop версии 0.4.11 или устанавливайте зависимости и podkop вручную"
-        msg "Подробности: https://podkop.net/docs/install/#%d1%83%d1%81%d1%82%d0%b0%d0%bd%d0%be%d0%b2%d0%ba%d0%b0-%d0%bd%d0%b0-2305"
-        exit 1
+    [ -f /etc/openwrt_release ] || fail "This installer supports OpenWrt only"
+
+    model="$(cat /tmp/sysinfo/model 2>/dev/null || true)"
+    [ -n "$model" ] && msg "Router model: $model"
+
+    release="$(sed -n "s/^DISTRIB_RELEASE='\(.*\)'/\1/p" /etc/openwrt_release | head -n 1)"
+    major="$(printf '%s' "$release" | sed 's/[^0-9].*$//' | cut -d. -f1)"
+
+    if [ -n "$major" ] && [ "$major" -lt 24 ]; then
+        fail "Podkop Plus requires OpenWrt 24.10 or newer"
     fi
 
-    # Check available space
-    AVAILABLE_SPACE=$(df /overlay | awk 'NR==2 {print $4}')
-    REQUIRED_SPACE=15360 # 15MB in KB
+    available_space="$(df /overlay 2>/dev/null | awk 'NR==2 {print $4}')"
+    [ -n "$available_space" ] || available_space="$(df / 2>/dev/null | awk 'NR==2 {print $4}')"
 
-    if [ "$AVAILABLE_SPACE" -lt "$REQUIRED_SPACE" ]; then
-        msg "Error: Insufficient space in flash"
-        msg "Available: $((AVAILABLE_SPACE/1024))MB"
-        msg "Required: $((REQUIRED_SPACE/1024))MB"
-        exit 1
-    fi
-
-    if ! nslookup google.com >/dev/null 2>&1; then
-        msg "DNS is not working."
-        exit 1
-    fi
-
-    # Check version
-    if command -v podkop > /dev/null 2>&1; then
-        local version
-        version=$(/usr/bin/podkop show_version 2> /dev/null)
-        if [ -n "$version" ]; then
-            version=$(echo "$version" | sed 's/^v//')
-            local major
-            local minor
-            local patch
-            major=$(echo "$version" | cut -d. -f1)
-            minor=$(echo "$version" | cut -d. -f2)
-            patch=$(echo "$version" | cut -d. -f3)
-
-            # Compare version: must be >= 0.7.0
-            if [ "$major" -gt 0 ] ||
-                [ "$major" -eq 0 ] && [ "$minor" -gt 7 ] ||
-                [ "$major" -eq 0 ] && [ "$minor" -eq 7 ] && [ "$patch" -ge 0 ]; then
-                msg "Podkop version >= 0.7.0"
-                break
-            else
-                msg "Podkop version < 0.7.0"
-                update_config
-            fi
-        else
-            msg "Unknown podkop version"
-            update_config
-        fi
-    fi
-
-    if pkg_is_installed https-dns-proxy; then
-        msg "Conflicting package detected: https-dns-proxy. Remove?"
-
-        while true; do
-                read -r -p '' DNSPROXY
-                case $DNSPROXY in
-
-                yes|y|Y)
-                    pkg_remove luci-app-https-dns-proxy
-                    pkg_remove https-dns-proxy
-                    pkg_remove luci-i18n-https-dns-proxy*
-                    break
-                    ;;
-                *)
-                    msg "Exit"
-                    exit 1
-                    ;;
-        esac
-    done
+    if [ -n "$available_space" ] && [ "$available_space" -lt "$REQUIRED_SPACE_KB" ]; then
+        fail "Not enough free flash space. Available: $((available_space / 1024)) MB, required: $((REQUIRED_SPACE_KB / 1024)) MB"
     fi
 }
 
-sing_box() {
-    if ! pkg_is_installed "^sing-box"; then
-        return
+confirm_prompt() {
+    prompt_text="$1"
+    answer=""
+
+    if [ "$PODKOP_PLUS_ASSUME_YES" = "1" ]; then
+        return 0
     fi
 
-    sing_box_version=$(sing-box version | head -n 1 | awk '{print $3}')
+    printf '%s [y/N]: ' "$prompt_text"
+    read -r answer || return 1
+
+    case "$answer" in
+        y|Y|yes|YES|Yes)
+            return 0
+            ;;
+        *)
+            return 1
+            ;;
+    esac
+}
+
+sanitize_semver() {
+    printf '%s\n' "$1" | sed 's/^v//;s/-.*$//;s/[^0-9.].*$//'
+}
+
+version_ge() {
+    awk \
+        -v lhs="$(sanitize_semver "$1")" \
+        -v rhs="$(sanitize_semver "$2")" \
+        '
+        function fill(version, out,    parts, count, i) {
+            count = split(version, parts, ".")
+            for (i = 1; i <= 3; i++) {
+                out[i] = (i <= count && parts[i] ~ /^[0-9]+$/) ? parts[i] + 0 : 0
+            }
+        }
+
+        BEGIN {
+            fill(lhs, a)
+            fill(rhs, b)
+
+            if (
+                a[1] > b[1] ||
+                (a[1] == b[1] && a[2] > b[2]) ||
+                (a[1] == b[1] && a[2] == b[2] && a[3] >= b[3])
+            ) {
+                exit 0
+            }
+
+            exit 1
+        }
+        '
+}
+
+extract_package_version() {
+    package_name="$1"
+
+    case "$package_name" in
+        luci-app-podkop-plus_*.ipk|luci-app-podkop-plus_*.apk)
+            printf '%s\n' "$package_name" | sed 's/^luci-app-podkop-plus_//;s/\.\(ipk\|apk\)$//'
+            ;;
+        zapret_*.ipk)
+            printf '%s\n' "$package_name" | sed 's/^zapret_//;s/_[^_]*\.ipk$//'
+            ;;
+        zapret-*.apk)
+            printf '%s\n' "$package_name" | sed 's/^zapret-//;s/\.apk$//'
+            ;;
+        *)
+            printf '%s\n' "$package_name"
+            ;;
+    esac
+}
+
+fetch_github_release_json() {
+    owner="$1"
+    repo="$2"
+    tag="$3"
+    url=""
+    response=""
+    message=""
+
+    if [ -n "$tag" ]; then
+        url="https://api.github.com/repos/${owner}/${repo}/releases/tags/${tag}"
+    else
+        url="https://api.github.com/repos/${owner}/${repo}/releases/latest"
+    fi
+
+    response="$(http_get "$url" 2>/dev/null || true)"
+    [ -n "$response" ] || fail "Failed to query GitHub release metadata for ${owner}/${repo}"
+
+    printf '%s' "$response" | jq -e . >/dev/null 2>&1 || fail "GitHub returned an invalid response for ${owner}/${repo}"
+
+    message="$(printf '%s' "$response" | jq -r '.message // empty')"
+    case "$message" in
+        *"API rate limit"*|*"rate limit exceeded"*)
+            fail "GitHub API rate limit reached. Try again later or set PODKOP_PLUS_RELEASE_TAG/ZAPRET_RELEASE_TAG manually."
+            ;;
+        "Not Found")
+            if [ -n "$tag" ]; then
+                fail "GitHub release tag not found: ${owner}/${repo}@${tag}"
+            fi
+            fail "No published releases found for ${owner}/${repo}"
+            ;;
+    esac
+
+    printf '%s' "$response"
+}
+
+resolve_podkop_plus_release() {
+    asset_ext="ipk"
+
+    [ "$PKG_IS_APK" -eq 1 ] && asset_ext="apk"
+
+    PODKOP_PLUS_RELEASE_JSON="$(fetch_github_release_json "$REPO_OWNER" "$REPO_NAME" "$PODKOP_PLUS_RELEASE_TAG")"
+    PODKOP_PLUS_RELEASE_TAG="$(printf '%s' "$PODKOP_PLUS_RELEASE_JSON" | jq -r '.tag_name // empty')"
+    [ -n "$PODKOP_PLUS_RELEASE_TAG" ] || fail "Failed to detect the Podkop Plus release tag"
+
+    [ -n "$PODKOP_PLUS_SOURCE_REF" ] || PODKOP_PLUS_SOURCE_REF="$PODKOP_PLUS_RELEASE_TAG"
+
+    PODKOP_PLUS_PACKAGE_URL="$(printf '%s' "$PODKOP_PLUS_RELEASE_JSON" | jq -r --arg ext "$asset_ext" '.assets[] | select((.name | startswith("luci-app-podkop-plus_")) and (.name | endswith("." + $ext))) | .browser_download_url' | sed -n '1p')"
+    PODKOP_PLUS_I18N_URL="$(printf '%s' "$PODKOP_PLUS_RELEASE_JSON" | jq -r --arg ext "$asset_ext" '.assets[] | select((.name | startswith("luci-i18n-podkop-plus-ru_")) and (.name | endswith("." + $ext))) | .browser_download_url' | sed -n '1p')"
+
+    [ -n "$PODKOP_PLUS_PACKAGE_URL" ] || fail "The Podkop Plus release does not contain a luci-app-podkop-plus .$asset_ext package"
+    [ -n "$PODKOP_PLUS_I18N_URL" ] || fail "The Podkop Plus release does not contain a luci-i18n-podkop-plus-ru .$asset_ext package"
+
+    PODKOP_PLUS_PACKAGE_NAME="$(basename "$PODKOP_PLUS_PACKAGE_URL")"
+    PODKOP_PLUS_I18N_NAME="$(basename "$PODKOP_PLUS_I18N_URL")"
+    PODKOP_PLUS_PACKAGE_VERSION="$(extract_package_version "$PODKOP_PLUS_PACKAGE_NAME")"
+}
+
+detect_installed_podkop_version() {
+    version=""
+
+    if command_exists podkop-plus; then
+        version="$(podkop-plus show_version 2>/dev/null | head -n 1)"
+    fi
+
+    if [ -z "$version" ] && command_exists podkop; then
+        version="$(podkop show_version 2>/dev/null | head -n 1)"
+    fi
+
+    printf '%s' "$version"
+}
+
+reset_legacy_config_if_needed() {
+    current_version=""
+    backup_path=""
+    default_config_url=""
+    default_config_tmp=""
+
+    [ -f /etc/config/podkop ] || return 0
+
+    current_version="$(detect_installed_podkop_version)"
+
+    if [ -n "$current_version" ] && version_ge "$current_version" "0.7.0"; then
+        return 0
+    fi
+
+    if ! pkg_is_installed "podkop" && ! pkg_is_installed "luci-app-podkop" && [ ! -x /etc/init.d/podkop ]; then
+        return 0
+    fi
+
+    warn "Detected a legacy podkop installation."
+    warn "The current config will be backed up to /etc/config/podkop-070.<timestamp> and replaced with the Podkop Plus default config."
+
+    confirm_prompt "Continue and reset /etc/config/podkop?" || fail "Installation cancelled by user"
+
+    backup_path="/etc/config/podkop-070.$(date +%Y%m%d%H%M%S 2>/dev/null || echo "$$")"
+    mv /etc/config/podkop "$backup_path" || fail "Failed to back up /etc/config/podkop"
+
+    default_config_url="https://raw.githubusercontent.com/${REPO_OWNER}/${REPO_NAME}/${PODKOP_PLUS_SOURCE_REF}/podkop/files/etc/config/podkop"
+    default_config_tmp="$TMP_DIR/default-podkop-config"
+
+    download_with_retry "$default_config_url" "$default_config_tmp" "default Podkop Plus config" || fail "Failed to download the default Podkop Plus config"
+    cp "$default_config_tmp" /etc/config/podkop || fail "Failed to restore /etc/config/podkop"
+    chmod 0644 /etc/config/podkop || true
+
+    msg "A fresh Podkop Plus config was installed. Backup saved to $backup_path"
+}
+
+remove_conflicting_dns_proxy() {
+    if ! pkg_is_installed "https-dns-proxy"; then
+        return 0
+    fi
+
+    warn "Detected conflicting package: https-dns-proxy"
+    confirm_prompt "Remove https-dns-proxy and continue?" || fail "Please remove https-dns-proxy manually and run the installer again"
+
+    pkg_remove_if_installed "luci-app-https-dns-proxy"
+    pkg_remove_if_installed "https-dns-proxy"
+    pkg_remove_matching_prefix "luci-i18n-https-dns-proxy"
+}
+
+remove_old_sing_box_if_needed() {
+    installed_version=""
     required_version="1.12.4"
 
-    if [ "$(printf '%s\n%s\n' "$sing_box_version" "$required_version" | sort -V | head -n 1)" != "$required_version" ]; then
-        msg "sing-box version $sing_box_version is older than the required version $required_version."
-        msg "Removing old version..."
-        service podkop stop
-        pkg_remove sing-box
+    pkg_is_installed "sing-box" || return 0
+    command_exists sing-box || return 0
+
+    installed_version="$(sing-box version 2>/dev/null | head -n 1 | awk '{print $3}')"
+    [ -n "$installed_version" ] || return 0
+
+    if version_ge "$installed_version" "$required_version"; then
+        return 0
     fi
+
+    warn "sing-box $installed_version is older than the required version $required_version. Removing the old package first."
+    [ -x /etc/init.d/podkop-plus ] && /etc/init.d/podkop-plus stop >/dev/null 2>&1 || true
+    [ -x /etc/init.d/podkop ] && /etc/init.d/podkop stop >/dev/null 2>&1 || true
+    pkg_remove_if_installed "sing-box"
+}
+
+remember_autostart_state() {
+    if [ -x /etc/init.d/podkop-plus ] && /etc/init.d/podkop-plus enabled >/dev/null 2>&1; then
+        PODKOP_WAS_ENABLED=1
+        return 0
+    fi
+
+    if [ -x /etc/init.d/podkop ] && /etc/init.d/podkop enabled >/dev/null 2>&1; then
+        PODKOP_WAS_ENABLED=1
+    fi
+}
+
+stop_conflicting_services() {
+    [ -x /etc/init.d/podkop-plus ] && /etc/init.d/podkop-plus stop >/dev/null 2>&1 || true
+    [ -x /etc/init.d/podkop-plus ] && /etc/init.d/podkop-plus disable >/dev/null 2>&1 || true
+    [ -x /etc/init.d/podkop ] && /etc/init.d/podkop stop >/dev/null 2>&1 || true
+    [ -x /etc/init.d/podkop ] && /etc/init.d/podkop disable >/dev/null 2>&1 || true
+}
+
+cleanup_legacy_installation() {
+    remember_autostart_state
+    stop_conflicting_services
+
+    pkg_remove_matching_prefix "luci-i18n-podkop-plus"
+    pkg_remove_matching_prefix "luci-i18n-podkop-"
+    pkg_remove_if_installed "luci-app-podkop-plus"
+    pkg_remove_if_installed "luci-app-podkop"
+    pkg_remove_if_installed "podkop"
+
+    rm -rf /usr/lib/podkop-plus /usr/lib/podkop /www/luci-static/resources/view/podkop
+    rm -f /etc/init.d/podkop-plus /etc/init.d/podkop
+    rm -f /usr/bin/podkop-plus /usr/bin/podkop
+    rm -f /usr/share/luci/menu.d/luci-app-podkop-plus.json
+    rm -f /usr/share/rpcd/acl.d/luci-app-podkop-plus.json
+    rm -f /usr/share/luci/menu.d/luci-app-podkop.json
+    rm -f /usr/share/rpcd/acl.d/luci-app-podkop.json
+    rm -f /etc/uci-defaults/50_luci-podkop-plus /etc/uci-defaults/50_luci-podkop
+}
+
+append_arch_candidate() {
+    candidate="$1"
+
+    [ -n "$candidate" ] || return 0
+
+    case " $ZAPRET_ARCH_CANDIDATES " in
+        *" $candidate "*)
+            return 0
+            ;;
+    esac
+
+    if [ -n "$ZAPRET_ARCH_CANDIDATES" ]; then
+        ZAPRET_ARCH_CANDIDATES="$ZAPRET_ARCH_CANDIDATES $candidate"
+    else
+        ZAPRET_ARCH_CANDIDATES="$candidate"
+    fi
+}
+
+add_arch_family_fallbacks() {
+    arch="$1"
+
+    append_arch_candidate "$arch"
+
+    case "$arch" in
+        aarch64_*)
+            append_arch_candidate "aarch64_generic"
+            ;;
+        riscv64_*)
+            append_arch_candidate "riscv64_generic"
+            ;;
+        arm_cortex-a7_neon-vfpv4)
+            append_arch_candidate "arm_cortex-a7_vfpv4"
+            append_arch_candidate "arm_cortex-a7"
+            ;;
+        arm_cortex-a7_*)
+            append_arch_candidate "arm_cortex-a7"
+            ;;
+        arm_cortex-a9_*)
+            append_arch_candidate "arm_cortex-a9"
+            ;;
+        mipsel_24kc_24kf)
+            append_arch_candidate "mipsel_24kc"
+            ;;
+    esac
+}
+
+resolve_arch_candidates() {
+    arch_list=""
+
+    if [ "$PKG_IS_APK" -eq 1 ]; then
+        arch_list="$(apk --print-arch 2>/dev/null || true)"
+    else
+        arch_list="$(opkg print-architecture 2>/dev/null | awk '$1 == "arch" && $2 !~ /^(all|noarch)$/ {print $2 " " $3}' | sort -k2,2nr | awk '{print $1}')"
+    fi
+
+    if [ -z "$arch_list" ]; then
+        arch_list="$(uname -m 2>/dev/null || true)"
+    fi
+
+    for arch in $arch_list; do
+        [ -n "$TARGET_ARCH" ] || TARGET_ARCH="$arch"
+        add_arch_family_fallbacks "$arch"
+    done
+
+    [ -n "$TARGET_ARCH" ] || fail "Failed to detect the router package architecture"
+}
+
+resolve_zapret_release() {
+    candidate_name=""
+
+    if [ "$PODKOP_PLUS_KEEP_EXISTING_ZAPRET" = "1" ] && pkg_is_installed "zapret"; then
+        warn "Keeping the existing zapret package because PODKOP_PLUS_KEEP_EXISTING_ZAPRET=1"
+        return 0
+    fi
+
+    ZAPRET_RELEASE_JSON="$(fetch_github_release_json "remittor" "zapret-openwrt" "$ZAPRET_RELEASE_TAG")"
+    ZAPRET_RELEASE_TAG_RESOLVED="$(printf '%s' "$ZAPRET_RELEASE_JSON" | jq -r '.tag_name // empty')"
+    [ -n "$ZAPRET_RELEASE_TAG_RESOLVED" ] || fail "Failed to detect the zapret release tag"
+
+    for arch in $ZAPRET_ARCH_CANDIDATES; do
+        candidate_name="$(printf '%s' "$ZAPRET_RELEASE_JSON" | jq -r --arg arch "$arch" '.assets[] | select(.name | endswith("_" + $arch + ".zip")) | .name' | sed -n '1p')"
+
+        if [ -n "$candidate_name" ]; then
+            ZAPRET_ARCH="$arch"
+            ZAPRET_BUNDLE_NAME="$candidate_name"
+            break
+        fi
+    done
+
+    [ -n "$ZAPRET_BUNDLE_NAME" ] || fail "No zapret package was found for architecture: $TARGET_ARCH. Tried: $ZAPRET_ARCH_CANDIDATES"
+
+    ZAPRET_BUNDLE_URL="$(printf '%s' "$ZAPRET_RELEASE_JSON" | jq -r --arg name "$ZAPRET_BUNDLE_NAME" '.assets[] | select(.name == $name) | .browser_download_url' | sed -n '1p')"
+    [ -n "$ZAPRET_BUNDLE_URL" ] || fail "Failed to resolve the zapret download URL for $ZAPRET_BUNDLE_NAME"
+}
+
+download_podkop_plus_packages() {
+    PODKOP_PLUS_PACKAGE_FILE="$TMP_DIR/$PODKOP_PLUS_PACKAGE_NAME"
+    PODKOP_PLUS_I18N_FILE="$TMP_DIR/$PODKOP_PLUS_I18N_NAME"
+
+    download_with_retry "$PODKOP_PLUS_PACKAGE_URL" "$PODKOP_PLUS_PACKAGE_FILE" "$PODKOP_PLUS_PACKAGE_NAME" || fail "Failed to download $PODKOP_PLUS_PACKAGE_NAME"
+    download_with_retry "$PODKOP_PLUS_I18N_URL" "$PODKOP_PLUS_I18N_FILE" "$PODKOP_PLUS_I18N_NAME" || fail "Failed to download $PODKOP_PLUS_I18N_NAME"
+}
+
+download_and_extract_zapret_package() {
+    bundle_file=""
+    inner_package_path=""
+
+    [ -n "$ZAPRET_BUNDLE_URL" ] || return 0
+
+    bundle_file="$TMP_DIR/$ZAPRET_BUNDLE_NAME"
+    download_with_retry "$ZAPRET_BUNDLE_URL" "$bundle_file" "$ZAPRET_BUNDLE_NAME" || fail "Failed to download $ZAPRET_BUNDLE_NAME"
+
+    if [ "$PKG_IS_APK" -eq 1 ]; then
+        inner_package_path="$(unzip -l "$bundle_file" | awk '{print $4}' | grep -E '^apk/zapret-.*\.apk$' | sed -n '1p')"
+    else
+        inner_package_path="$(unzip -l "$bundle_file" | awk '{print $4}' | grep -E "^zapret_.*_${ZAPRET_ARCH}\.ipk$" | sed -n '1p')"
+        [ -n "$inner_package_path" ] || inner_package_path="$(unzip -l "$bundle_file" | awk '{print $4}' | grep -E '^zapret_.*\.ipk$' | sed -n '1p')"
+    fi
+
+    [ -n "$inner_package_path" ] || fail "Failed to locate the zapret package inside $ZAPRET_BUNDLE_NAME"
+
+    ZAPRET_PACKAGE_NAME="$(basename "$inner_package_path")"
+    ZAPRET_PACKAGE_FILE="$TMP_DIR/$ZAPRET_PACKAGE_NAME"
+    ZAPRET_PACKAGE_VERSION="$(extract_package_version "$ZAPRET_PACKAGE_NAME")"
+
+    unzip -p "$bundle_file" "$inner_package_path" > "$ZAPRET_PACKAGE_FILE" || fail "Failed to extract $ZAPRET_PACKAGE_NAME"
+    [ -s "$ZAPRET_PACKAGE_FILE" ] || fail "The extracted zapret package is empty"
+}
+
+install_packages() {
+    if [ "$PODKOP_PLUS_KEEP_EXISTING_ZAPRET" = "1" ] && pkg_is_installed "zapret"; then
+        pkg_install_files "$PODKOP_PLUS_PACKAGE_FILE" "$PODKOP_PLUS_I18N_FILE" || fail "Podkop Plus package installation failed"
+        return 0
+    fi
+
+    pkg_remove_if_installed "zapret"
+    pkg_install_files "$ZAPRET_PACKAGE_FILE" "$PODKOP_PLUS_PACKAGE_FILE" "$PODKOP_PLUS_I18N_FILE" || fail "Package installation failed"
+}
+
+post_install() {
+    rm -f /var/luci-indexcache* /tmp/luci-indexcache*
+    [ -x /etc/init.d/rpcd ] && /etc/init.d/rpcd reload >/dev/null 2>&1 || true
+
+    if [ "$PODKOP_WAS_ENABLED" -eq 1 ] && [ -x /etc/init.d/podkop-plus ]; then
+        /etc/init.d/podkop-plus enable >/dev/null 2>&1 || true
+    fi
+}
+
+main() {
+    trap cleanup EXIT HUP INT TERM
+
+    check_root
+    init_tmp_dir
+    detect_fetcher
+    sync_time
+    check_system
+
+    pkg_list_update || fail "Failed to update package lists"
+    ensure_bootstrap_tool "jq" "jq"
+    ensure_bootstrap_tool "unzip" "unzip"
+
+    resolve_podkop_plus_release
+    reset_legacy_config_if_needed
+    remove_conflicting_dns_proxy
+    remove_old_sing_box_if_needed
+    resolve_arch_candidates
+    resolve_zapret_release
+
+    cleanup_legacy_installation
+    download_podkop_plus_packages
+    download_and_extract_zapret_package
+    install_packages
+    post_install
+
+    msg "Podkop Plus $PODKOP_PLUS_PACKAGE_VERSION has been installed successfully"
+    msg "Source release: ${REPO_OWNER}/${REPO_NAME}@${PODKOP_PLUS_RELEASE_TAG}"
+
+    if [ -n "$ZAPRET_PACKAGE_VERSION" ]; then
+        msg "zapret $ZAPRET_PACKAGE_VERSION installed for architecture $ZAPRET_ARCH"
+        msg "zapret source: remittor/zapret-openwrt@${ZAPRET_RELEASE_TAG_RESOLVED}"
+    elif [ "$PODKOP_PLUS_KEEP_EXISTING_ZAPRET" = "1" ] && pkg_is_installed "zapret"; then
+        warn "Keeping the existing zapret package"
+    fi
+
+    warn "Open LuCI and review your rules before enabling Podkop Plus"
 }
 
 main

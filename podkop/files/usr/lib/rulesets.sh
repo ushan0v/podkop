@@ -176,5 +176,18 @@ extract_ip_cidr_from_json_ruleset_to_file() {
     local output_file="$2"
 
     log "Extracting ip_cidr entries from $json_file to $output_file" "debug"
-    jq -r '.rules[].ip_cidr[]' "$json_file" > "$output_file"
+    jq -r '.rules[]? | select(has("ip_cidr")) | .ip_cidr[]?' "$json_file" > "$output_file"
+}
+
+# Extracts plain domain/domain_suffix entries from a JSON ruleset file and writes them to an output file.
+# Domain keyword/regex matchers are intentionally skipped because zapret hostlists only support suffix-style hosts.
+extract_domains_from_json_ruleset_to_file() {
+    local json_file="$1"
+    local output_file="$2"
+
+    log "Extracting domain entries from $json_file to $output_file" "debug"
+    jq -r '
+        .rules[]? |
+        (.domain[]?, .domain_suffix[]?) // empty
+    ' "$json_file" > "$output_file"
 }

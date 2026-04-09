@@ -1,4 +1,4 @@
-PODKOP_LIB="/usr/lib/podkop"
+PODKOP_LIB="/usr/lib/podkop-plus"
 . "$PODKOP_LIB/helpers.sh"
 . "$PODKOP_LIB/sing_box_config_manager.sh"
 

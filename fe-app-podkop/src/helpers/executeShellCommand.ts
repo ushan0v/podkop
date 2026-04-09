@@ -19,7 +19,7 @@ export async function executeShellCommand({
   timeout = COMMAND_TIMEOUT,
 }: ExecuteShellCommandParams): Promise<ExecuteShellCommandResponse> {
   try {
-    return withTimeout(
+    return await withTimeout(
       fs.exec(command, args),
       timeout,
       [command, ...args].join(' '),

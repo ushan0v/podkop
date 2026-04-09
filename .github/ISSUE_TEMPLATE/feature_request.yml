@@ -1,6 +1,6 @@
 ---
 name: ✨ Запрос новой функции
-description: Предложите новую функцию или улучшение для Podkop
+description: Предложите новую функцию или улучшение для Podkop Plus
 title: "[FEATURE] "
 labels: ["enhancement", "needs-discussion"]
 assignees: []
@@ -11,14 +11,14 @@ body:
         Спасибо за предложение новой функции!
         
         Перед отправкой, пожалуйста:
-        - Проверьте [существующие запросы](https://github.com/itdoginfo/podkop/issues?q=is%3Aissue+label%3Aenhancement)
-        - Убедитесь, что функции не существует в [документации](https://podkop.net)
+        - Проверьте [существующие запросы](https://github.com/ushan0v/podkop-plus/issues?q=is%3Aissue+label%3Aenhancement)
+        - Убедитесь, что функции не существует в [README проекта](https://github.com/ushan0v/podkop-plus#readme)
 
   - type: textarea
     id: summary
     attributes:
       label: Краткое описание
-      description: Краткое описание предлагаемой функции
+      description: Краткое описание предлагаемой функции для Podkop Plus
       placeholder: В одном предложении опишите, что вы хотите добавить...
     validations:
       required: true

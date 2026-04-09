@@ -10,7 +10,7 @@ log() {
         level="info"
     fi
 
-    logger -t "podkop" "[$level] $message"
+    logger -t "podkop-plus" "[$level] $message"
 }
 
 nolog() {

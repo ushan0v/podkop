@@ -11,7 +11,7 @@
 #
 # Usage:
 #   Include this script in your ash script with:
-#     . /usr/lib/podkop/sing_box_config_manager.sh
+#     . /usr/lib/podkop-plus/sing_box_config_manager.sh
 #
 #   After that, sing_box_cm_* functions are available for generating
 #   and modifying sing-box JSON configuration.
@@ -287,7 +287,7 @@ sing_box_cm_patch_dns_route_rule() {
         --arg tag "$tag" \
         --arg key "$key" \
         --argjson value "$value" \
-        'import "helpers" as h {"search": "/usr/lib/podkop"};
+'import "helpers" as h {"search": "/usr/lib/podkop-plus"};
         .dns.rules |= map(
             if .[$service_tag] == $tag then
                 if has($key) then
@@ -439,13 +439,18 @@ sing_box_cm_add_mixed_inbound() {
 sing_box_cm_add_direct_outbound() {
     local config="$1"
     local tag="$2"
+    local routing_mark="$3"
 
     echo "$config" | jq \
         --arg tag "$tag" \
-        '.outbounds += [{
-            type: "direct",
-            tag: $tag
-        }]'
+        --arg routing_mark "$routing_mark" \
+        '.outbounds += [(
+            {
+                type: "direct",
+                tag: $tag
+            }
+            + (if $routing_mark != "" then { routing_mark: ($routing_mark | tonumber) } else {} end)
+        )]'
 }
 
 #######################################
@@ -1115,7 +1120,7 @@ sing_box_cm_patch_route_rule() {
         --arg tag "$tag" \
         --arg key "$key" \
         --argjson value "$value" \
-        'import "helpers" as h {"search": "/usr/lib/podkop"};
+'import "helpers" as h {"search": "/usr/lib/podkop-plus"};
         .route.rules |= map(
             if .[$service_tag] == $tag then
                 if has($key) then
@@ -1278,11 +1283,11 @@ sing_box_cm_add_inline_ruleset_rule() {
 
     value=$(_normalize_arg "$value")
 
-    echo "$config" | jq -L /usr/lib/podkop \
+    echo "$config" | jq -L /usr/lib/podkop-plus \
         --arg tag "$tag" \
         --arg key "$key" \
         --argjson value "$value" \
-        'import "helpers" as h {"search": "/usr/lib/podkop"};
+'import "helpers" as h {"search": "/usr/lib/podkop-plus"};
         .route.rule_set |= map(
             if .tag == $tag then
                 if has($key) then

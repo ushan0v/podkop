@@ -1,30 +1,46 @@
-export async function onMount(id: string): Promise<HTMLElement> {
-  return new Promise((resolve) => {
-    const el = document.getElementById(id);
+function getTarget(target: string | HTMLElement): HTMLElement | null {
+  if (typeof target === 'string') {
+    return document.getElementById(target);
+  }
 
-    if (el && el.offsetParent !== null) {
-      return resolve(el);
+  return target;
+}
+
+export async function onMount(
+  target: string | HTMLElement,
+): Promise<HTMLElement> {
+  return new Promise((resolve) => {
+    let observer: MutationObserver | null = null;
+
+    const resolveIfMountedAndVisible = () => {
+      const mountedTarget = getTarget(target);
+
+      if (
+        mountedTarget &&
+        mountedTarget.isConnected &&
+        mountedTarget.offsetParent !== null
+      ) {
+        observer?.disconnect();
+        resolve(mountedTarget);
+        return true;
+      }
+
+      return false;
+    };
+
+    if (resolveIfMountedAndVisible()) {
+      return;
     }
 
-    const observer = new MutationObserver(() => {
-      const target = document.getElementById(id);
-      if (target) {
-        const io = new IntersectionObserver((entries) => {
-          const visible = entries.some((e) => e.isIntersecting);
-          if (visible) {
-            observer.disconnect();
-            io.disconnect();
-            resolve(target);
-          }
-        });
-
-        io.observe(target);
-      }
+    observer = new MutationObserver(() => {
+      resolveIfMountedAndVisible();
     });
 
     observer.observe(document.body, {
       childList: true,
       subtree: true,
+      attributes: true,
+      attributeFilter: ['class', 'style', 'hidden'],
     });
   });
 }

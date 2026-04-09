@@ -13,13 +13,73 @@ ${PartialStyles}
     display: none;
 }
 
-/* Hide extra H3 for sections tab */
-#cbi-podkop-section > h3:nth-child(1) {
+/* Hide extra H3 for rules tab */
+#cbi-podkop-rule > h3:nth-child(1) {
     display: none;
 }
 
-/* Vertical align for remove section action button */
-#cbi-podkop-section > .cbi-section-remove {
+/* Hide extra H3 for nodes tab */
+#cbi-podkop-node > h3:nth-child(1) {
+    display: none;
+}
+
+/* Hide extra H3 for rule set tab */
+#cbi-podkop-ruleset > h3:nth-child(1) {
+    display: none;
+}
+
+/* Vertical align for remove rule action button */
+#cbi-podkop-rule > .cbi-section-remove {
+    margin-bottom: -32px;
+}
+
+#cbi-podkop-rule .cbi-section-actions > div {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+}
+
+/* Rule reorder visuals */
+#cbi-podkop-rule {
+    position: relative;
+}
+
+#cbi-podkop-rule .cbi-section-table-row {
+    position: relative;
+}
+
+#cbi-podkop-rule .cbi-section-table-row.placeholder {
+    opacity: 1;
+}
+
+#cbi-podkop-rule .cbi-section-table-row.placeholder em {
+    font-style: italic;
+}
+
+#cbi-podkop-rule .cbi-section-table-row.drag-over-above::after,
+#cbi-podkop-rule .cbi-section-table-row.drag-over-below::after {
+    content: '';
+    position: absolute;
+    left: 10px;
+    right: 10px;
+    height: 2px;
+    border-radius: 2px;
+    background: var(--primary-color-high, #1976d2);
+    pointer-events: none;
+    z-index: 2;
+}
+
+#cbi-podkop-rule .cbi-section-table-row.drag-over-above::after {
+    top: -1px;
+}
+
+#cbi-podkop-rule .cbi-section-table-row.drag-over-below::after {
+    bottom: -1px;
+}
+
+/* Vertical align for remove node action button */
+#cbi-podkop-node > .cbi-section-remove,
+#cbi-podkop-ruleset > .cbi-section-remove {
     margin-bottom: -32px;
 }
 

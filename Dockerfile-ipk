@@ -3,9 +3,10 @@ FROM itdoginfo/openwrt-sdk-ipk:24.10.3
 ARG PODKOP_VERSION
 
 COPY ./podkop /builder/package/feeds/utilities/podkop
-COPY ./luci-app-podkop /builder/package/feeds/luci/luci-app-podkop
+COPY ./luci-app-podkop-plus /builder/package/feeds/luci/luci-app-podkop-plus
 
-RUN export PODKOP_VERSION="v${PODKOP_VERSION}" && \
+RUN export PODKOP_VERSION="${PODKOP_VERSION}" && \
+    ./scripts/feeds update -a && \
+    ./scripts/feeds install -a && \
     make defconfig && \
-    make package/podkop/compile V=s -j4 && \
-    make package/luci-app-podkop/compile V=s -j4
+    make package/luci-app-podkop-plus/compile V=s -j4

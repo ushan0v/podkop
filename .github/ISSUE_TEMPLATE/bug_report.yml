@@ -11,8 +11,8 @@ body:
         Спасибо за создание отчета об ошибке!
         
         Перед отправкой, пожалуйста:
-        - Проверьте [существующие issues](https://github.com/itdoginfo/podkop/issues)
-        - Просмотрите [документацию](https://podkop.net)
+        - Проверьте [существующие issues](https://github.com/ushan0v/podkop-plus/issues)
+        - Просмотрите [README проекта](https://github.com/ushan0v/podkop-plus#readme)
 
   - type: textarea
     id: description
@@ -53,7 +53,7 @@ body:
         Информация о вашей системе (заполните всё применимое)
       value: |
         - **OpenWrt версия**: 
-        - **Podkop версия**: 
+        - **Podkop Plus версия**: 
         - **Роутер модель**: 
         - **Sing-box версия**: 
       render: markdown

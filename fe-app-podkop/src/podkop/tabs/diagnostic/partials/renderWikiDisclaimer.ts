@@ -28,10 +28,10 @@ export function renderWikiDisclaimer(kind: 'default' | 'error' | 'warning') {
     ]),
     renderButton({
       classNames: ['cbi-button-save'],
-      text: _('Visit Wiki'),
+      text: _('Open Project Page'),
       onClick: () =>
         window.open(
-          'https://podkop.net/docs/troubleshooting/?utm_source=podkop',
+          'https://github.com/ushan0v/podkop-plus#readme',
           '_blank',
           'noopener,noreferrer',
         ),

@@ -1,0 +1,1985 @@
+"use strict";
+"require form";
+"require baseclass";
+"require fs";
+"require ui";
+"require tools.widgets as widgets";
+"require uci";
+"require view.podkop.main as main";
+
+function valuesToText(values) {
+  if (!values) {
+    return "";
+  }
+
+  if (Array.isArray(values)) {
+    return values.filter(Boolean).join("\n");
+  }
+
+  return values ? `${values}` : "";
+}
+
+function normalizeOptionValues(value) {
+  if (!value) {
+    return [];
+  }
+
+  if (Array.isArray(value)) {
+    return value
+      .filter(Boolean)
+      .map((item) => `${item}`.trim())
+      .filter(Boolean);
+  }
+
+  return `${value}`
+    .split(/\s+/)
+    .map((item) => item.trim())
+    .filter(Boolean);
+}
+
+const ZAPRET_LEGACY_DEFAULT_NFQWS_OPT =
+  "--filter-tcp=80 <HOSTLIST> --dpi-desync=fake,fakedsplit --dpi-desync-autottl=2 --dpi-desync-fooling=badsum --new --filter-tcp=443 --hostlist=/opt/zapret/ipset/zapret-hosts-google.txt --dpi-desync=fake,multidisorder --dpi-desync-split-pos=1,midsld --dpi-desync-repeats=11 --dpi-desync-fooling=badsum --dpi-desync-fake-tls-mod=rnd,dupsid,sni=www.google.com --new --filter-udp=443 --hostlist=/opt/zapret/ipset/zapret-hosts-google.txt --dpi-desync=fake --dpi-desync-repeats=11 --dpi-desync-fake-quic=/opt/zapret/files/fake/quic_initial_www_google_com.bin --new --filter-udp=443 <HOSTLIST_NOAUTO> --dpi-desync=fake --dpi-desync-repeats=11 --new --filter-tcp=443 <HOSTLIST> --dpi-desync=multidisorder --dpi-desync-split-pos=1,sniext+1,host+1,midsld-2,midsld,midsld+2,endhost-1";
+
+const ZAPRET_DEFAULT_NFQWS_OPT =
+  "--filter-tcp=80 --dpi-desync=fake,fakedsplit --dpi-desync-autottl=2 --dpi-desync-fooling=badsum --new --filter-tcp=443 --dpi-desync=fake,multidisorder --dpi-desync-split-pos=1,midsld --dpi-desync-repeats=11 --dpi-desync-fooling=badsum --dpi-desync-fake-tls-mod=rnd,dupsid,sni=www.google.com --new --filter-udp=443 --dpi-desync=fake --dpi-desync-repeats=11 --dpi-desync-fake-quic=/opt/zapret/files/fake/quic_initial_www_google_com.bin";
+
+const ANNOTATED_TEXTAREA_STYLE_ID = "pdk-annotated-textarea-styles";
+const NFQWS_REMOTE_VALIDATION_DEBOUNCE_MS = 500;
+const NFQWS_VALIDATION_COMMAND = "/usr/bin/podkop-plus";
+const nfqwsRemoteValidationCache = new Map();
+const nfqwsRemoteValidationInflight = new Map();
+const NFQWS_OPTIONAL_ARG_OPTIONS = new Set([
+  "--comment",
+  "--ctrack-disable",
+  "--debug",
+  "--dpi-desync-any-protocol",
+  "--dpi-desync-autottl",
+  "--dpi-desync-autottl6",
+  "--dpi-desync-skip-nosni",
+  "--dpi-desync-tcp-flags-set",
+  "--dpi-desync-tcp-flags-unset",
+  "--dup-autottl",
+  "--dup-autottl6",
+  "--dup-replace",
+  "--dup-tcp-flags-set",
+  "--dup-tcp-flags-unset",
+  "--ipcache-hostname",
+  "--orig-autottl",
+  "--orig-autottl6",
+  "--orig-tcp-flags-set",
+  "--orig-tcp-flags-unset",
+  "--synack-split",
+]);
+const NFQWS_NO_ARG_OPTIONS = new Set([
+  "--bind-fix4",
+  "--bind-fix6",
+  "--daemon",
+  "--domcase",
+  "--dry-run",
+  "--hostcase",
+  "--hostnospace",
+  "--methodeol",
+  "--new",
+  "--skip",
+  "--version",
+]);
+const NFQWS_REQUIRED_ARG_OPTIONS = new Set([
+  "--ctrack-timeouts",
+  "--dpi-desync",
+  "--dpi-desync-badack-increment",
+  "--dpi-desync-badseq-increment",
+  "--dpi-desync-cutoff",
+  "--dpi-desync-fake-dht",
+  "--dpi-desync-fake-discord",
+  "--dpi-desync-fake-http",
+  "--dpi-desync-fake-quic",
+  "--dpi-desync-fake-stun",
+  "--dpi-desync-fake-syndata",
+  "--dpi-desync-fake-tcp-mod",
+  "--dpi-desync-fake-tls",
+  "--dpi-desync-fake-tls-mod",
+  "--dpi-desync-fake-unknown",
+  "--dpi-desync-fake-unknown-udp",
+  "--dpi-desync-fake-wireguard",
+  "--dpi-desync-fakedsplit-mod",
+  "--dpi-desync-fakedsplit-pattern",
+  "--dpi-desync-fooling",
+  "--dpi-desync-fwmark",
+  "--dpi-desync-hostfakesplit-midhost",
+  "--dpi-desync-hostfakesplit-mod",
+  "--dpi-desync-ipfrag-pos-tcp",
+  "--dpi-desync-ipfrag-pos-udp",
+  "--dpi-desync-repeats",
+  "--dpi-desync-split-http-req",
+  "--dpi-desync-split-pos",
+  "--dpi-desync-split-seqovl",
+  "--dpi-desync-split-seqovl-pattern",
+  "--dpi-desync-split-tls",
+  "--dpi-desync-start",
+  "--dpi-desync-ts-increment",
+  "--dpi-desync-ttl",
+  "--dpi-desync-ttl6",
+  "--dpi-desync-udplen-increment",
+  "--dpi-desync-udplen-pattern",
+  "--dup",
+  "--dup-badack-increment",
+  "--dup-badseq-increment",
+  "--dup-cutoff",
+  "--dup-fooling",
+  "--dup-ip-id",
+  "--dup-start",
+  "--dup-ts-increment",
+  "--dup-ttl",
+  "--dup-ttl6",
+  "--filter-l3",
+  "--filter-l7",
+  "--filter-tcp",
+  "--filter-udp",
+  "--hostlist",
+  "--hostlist-auto",
+  "--hostlist-auto-debug",
+  "--hostlist-auto-fail-threshold",
+  "--hostlist-auto-fail-time",
+  "--hostlist-auto-retrans-threshold",
+  "--hostlist-domains",
+  "--hostlist-exclude",
+  "--hostlist-exclude-domains",
+  "--hostspell",
+  "--ip-id",
+  "--ipcache-lifetime",
+  "--ipset",
+  "--ipset-exclude",
+  "--ipset-exclude-ip",
+  "--ipset-ip",
+  "--orig-mod-cutoff",
+  "--orig-mod-start",
+  "--orig-ttl",
+  "--orig-ttl6",
+  "--pidfile",
+  "--qnum",
+  "--uid",
+  "--user",
+  "--wsize",
+  "--wssize",
+  "--wssize-cutoff",
+  "--wssize-forced-cutoff",
+]);
+
+function getConfigListValues(section_id, key) {
+  return normalizeOptionValues(uci.get("podkop", section_id, key));
+}
+
+function writeListOption(section_id, key, values) {
+  const normalized = normalizeOptionValues(values);
+
+  if (normalized.length) {
+    uci.set("podkop", section_id, key, normalized);
+  } else {
+    uci.unset("podkop", section_id, key);
+  }
+}
+
+function validateRegex(_section_id, value) {
+  if (!value || !value.length) {
+    return true;
+  }
+
+  try {
+    new RegExp(value);
+    return true;
+  } catch (_error) {
+    return _("Invalid regular expression");
+  }
+}
+
+function validateKeyword(_section_id, value) {
+  if (!value || !value.length) {
+    return true;
+  }
+
+  if (/\s/.test(value)) {
+    return _("Keyword must not contain spaces");
+  }
+
+  return true;
+}
+
+function getDuplicateTextListErrors(values, normalizeValue, duplicateMessage) {
+  const seen = new Set();
+  const duplicates = [];
+
+  values.forEach((item) => {
+    const normalized = normalizeValue ? normalizeValue(item) : item;
+
+    if (seen.has(normalized)) {
+      if (!duplicates.includes(item)) {
+        duplicates.push(item);
+      }
+      return;
+    }
+
+    seen.add(normalized);
+  });
+
+  return duplicates.map((item) => `${item}: ${duplicateMessage}`);
+}
+
+function validateTextList(
+  _section_id,
+  value,
+  validateItem,
+  emptyMessage,
+  options = {},
+) {
+  if (!value || value.length === 0) {
+    return true;
+  }
+
+  const values = main.parseValueList(value);
+
+  if (!values.length) {
+    return emptyMessage;
+  }
+
+  if (!validateItem) {
+    const duplicateErrors = getDuplicateTextListErrors(
+      values,
+      options.normalizeDuplicateValue,
+      options.duplicateMessage || _("Duplicate value"),
+    );
+
+    if (!duplicateErrors.length) {
+      return true;
+    }
+
+    return [_("Validation errors:"), ...duplicateErrors].join("\n");
+  }
+
+  const { valid, results } = main.bulkValidate(values, validateItem);
+
+  const duplicateErrors = getDuplicateTextListErrors(
+    values,
+    options.normalizeDuplicateValue,
+    options.duplicateMessage || _("Duplicate value"),
+  );
+
+  if (valid && !duplicateErrors.length) {
+    return true;
+  }
+
+  const errors = results
+    .filter((item) => !item.valid)
+    .map((item) => `${item.value}: ${item.message}`)
+    .concat(duplicateErrors);
+
+  return [_("Validation errors:"), ...errors].join("\n");
+}
+
+function getValidationHeaderText() {
+  return _("Validation errors:");
+}
+
+function getDuplicateValueText() {
+  return _("Duplicate value");
+}
+
+function escapeHtml(value) {
+  return `${value}`
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#39;");
+}
+
+function ensureAnnotatedTextareaStyles() {
+  if (
+    typeof document === "undefined" ||
+    !document.head ||
+    document.getElementById(ANNOTATED_TEXTAREA_STYLE_ID)
+  ) {
+    return;
+  }
+
+  document.head.insertAdjacentHTML(
+    "beforeend",
+    `<style id="${ANNOTATED_TEXTAREA_STYLE_ID}">
+      .pdk-annotated-textarea {
+        position: relative;
+      }
+
+      .pdk-annotated-textarea > textarea {
+        position: relative;
+        z-index: 1;
+        background: transparent !important;
+      }
+
+      .pdk-annotated-textarea__overlay {
+        position: absolute;
+        inset: 0;
+        z-index: 0;
+        pointer-events: none;
+        overflow: hidden;
+        box-sizing: border-box;
+        color: transparent;
+        white-space: pre-wrap;
+        word-break: break-word;
+        overflow-wrap: break-word;
+      }
+
+      .pdk-annotated-textarea__invalid {
+        color: transparent;
+        text-decoration-line: underline;
+        text-decoration-style: wavy;
+        text-decoration-color: var(--error-color-medium, #d44);
+        text-decoration-thickness: 1.5px;
+        text-underline-offset: 2px;
+        text-decoration-skip-ink: none;
+      }
+    </style>`,
+  );
+}
+
+function applyTextareaInputAttributes(textarea) {
+  textarea.setAttribute("spellcheck", "false");
+  textarea.setAttribute("autocomplete", "off");
+  textarea.setAttribute("autocorrect", "off");
+  textarea.setAttribute("autocapitalize", "off");
+  textarea.setAttribute("data-gramm", "false");
+  textarea.setAttribute("data-gramm_editor", "false");
+  textarea.setAttribute("data-enable-grammarly", "false");
+  textarea.style.resize = "vertical";
+  textarea.style.maxWidth = "100%";
+
+  const applyMinHeight = () => {
+    const storedMinHeight = Number.parseFloat(
+      textarea.getAttribute("data-pdk-default-min-height") || "0",
+    );
+    const nextMinHeight =
+      storedMinHeight > 0 ? storedMinHeight : textarea.offsetHeight;
+
+    if (nextMinHeight > 0) {
+      if (storedMinHeight <= 0) {
+        textarea.setAttribute("data-pdk-default-min-height", `${nextMinHeight}`);
+      }
+
+      textarea.style.minHeight = `${nextMinHeight}px`;
+      return true;
+    }
+
+    return false;
+  };
+
+  if (
+    !applyMinHeight() &&
+    typeof window !== "undefined" &&
+    typeof window.requestAnimationFrame === "function"
+  ) {
+    window.requestAnimationFrame(() => {
+      applyMinHeight();
+    });
+  }
+}
+
+function syncAnnotatedTextareaOverlay(textarea, wrapper, overlay) {
+  if (
+    typeof window === "undefined" ||
+    !textarea ||
+    !wrapper ||
+    !overlay ||
+    typeof window.getComputedStyle !== "function"
+  ) {
+    return;
+  }
+
+  const style = window.getComputedStyle(textarea);
+
+  wrapper.style.backgroundColor = style.backgroundColor;
+  wrapper.style.borderRadius = style.borderRadius;
+
+  overlay.style.font = style.font;
+  overlay.style.lineHeight = style.lineHeight;
+  overlay.style.letterSpacing = style.letterSpacing;
+  overlay.style.paddingTop = style.paddingTop;
+  overlay.style.paddingRight = style.paddingRight;
+  overlay.style.paddingBottom = style.paddingBottom;
+  overlay.style.paddingLeft = style.paddingLeft;
+  overlay.style.borderTopWidth = style.borderTopWidth;
+  overlay.style.borderRightWidth = style.borderRightWidth;
+  overlay.style.borderBottomWidth = style.borderBottomWidth;
+  overlay.style.borderLeftWidth = style.borderLeftWidth;
+  overlay.style.borderStyle = "solid";
+  overlay.style.borderColor = "transparent";
+  overlay.style.textAlign = style.textAlign;
+  overlay.style.direction = style.direction;
+  overlay.style.tabSize = style.tabSize;
+  overlay.style.textIndent = style.textIndent;
+  overlay.style.textTransform = style.textTransform;
+  overlay.style.boxSizing = style.boxSizing;
+  overlay.style.scrollPaddingTop = style.scrollPaddingTop;
+
+  overlay.scrollTop = textarea.scrollTop;
+  overlay.scrollLeft = textarea.scrollLeft;
+}
+
+function createAnnotationKey(annotation) {
+  return `${annotation.start}:${annotation.end}`;
+}
+
+function addAnnotationIssue(annotationMap, annotation, message) {
+  const key = createAnnotationKey(annotation);
+  const existing = annotationMap.get(key);
+  if (existing) {
+    if (!existing.messages.includes(message)) {
+      existing.messages.push(message);
+    }
+    return;
+  }
+
+  annotationMap.set(key, {
+    start: annotation.start,
+    end: annotation.end,
+    messages: [message],
+  });
+}
+
+function finalizeAnnotations(annotationMap) {
+  return Array.from(annotationMap.values())
+    .map((annotation) => ({
+      start: annotation.start,
+      end: annotation.end,
+      message: annotation.messages.join("; "),
+    }))
+    .sort((left, right) => left.start - right.start || left.end - right.end);
+}
+
+function renderAnnotatedTextareaOverlay(value, annotations) {
+  const text = value ? `${value}` : "";
+  const normalizedAnnotations = Array.isArray(annotations) ? annotations : [];
+
+  if (!text.length) {
+    return "&#8203;";
+  }
+
+  if (!normalizedAnnotations.length) {
+    return `${escapeHtml(text)}${text.endsWith("\n") ? "\n " : ""}`;
+  }
+
+  let cursor = 0;
+  let html = "";
+
+  normalizedAnnotations.forEach((annotation) => {
+    if (
+      annotation.start < cursor ||
+      annotation.start >= annotation.end ||
+      annotation.start < 0
+    ) {
+      return;
+    }
+
+    html += escapeHtml(text.slice(cursor, annotation.start));
+    html += `<span class="pdk-annotated-textarea__invalid">${escapeHtml(
+      text.slice(annotation.start, annotation.end),
+    )}</span>`;
+    cursor = annotation.end;
+  });
+
+  html += escapeHtml(text.slice(cursor));
+
+  if (text.endsWith("\n")) {
+    html += "\n ";
+  }
+
+  return html;
+}
+
+function attachAnnotatedTextarea(textarea, analyzer) {
+  if (!textarea || typeof analyzer !== "function") {
+    return;
+  }
+
+  ensureAnnotatedTextareaStyles();
+
+  if (textarea.__podkopAnnotatedTextareaController) {
+    textarea.__podkopAnnotatedTextareaController.analyzer = analyzer;
+    textarea.__podkopAnnotatedTextareaController.update();
+    return;
+  }
+
+  const wrapper = textarea.parentNode;
+  if (!wrapper) {
+    return;
+  }
+
+  wrapper.classList.add("pdk-annotated-textarea");
+
+  const overlay = document.createElement("div");
+  overlay.className = "pdk-annotated-textarea__overlay";
+  overlay.setAttribute("aria-hidden", "true");
+  wrapper.insertBefore(overlay, textarea.nextSibling);
+
+  const controller = {
+    analyzer,
+    textarea,
+    wrapper,
+    overlay,
+    update() {
+      const analysis = this.analyzer(this.textarea.value);
+      this.overlay.innerHTML = renderAnnotatedTextareaOverlay(
+        this.textarea.value,
+        analysis.annotations,
+      );
+      syncAnnotatedTextareaOverlay(this.textarea, this.wrapper, this.overlay);
+    },
+  };
+
+  textarea.__podkopAnnotatedTextareaController = controller;
+
+  const updateAnnotatedTextarea = () => controller.update();
+  textarea.addEventListener("input", updateAnnotatedTextarea);
+  textarea.addEventListener("change", updateAnnotatedTextarea);
+  textarea.addEventListener("scroll", updateAnnotatedTextarea, {
+    passive: true,
+  });
+  textarea.addEventListener("keyup", updateAnnotatedTextarea);
+
+  if (typeof ResizeObserver === "function") {
+    const resizeObserver = new ResizeObserver(() => controller.update());
+    resizeObserver.observe(textarea);
+    controller.resizeObserver = resizeObserver;
+  }
+
+  controller.update();
+}
+
+function refreshAnnotatedTextareaValidation(option, section_id, textarea) {
+  if (option && typeof option.triggerValidation === "function") {
+    option.triggerValidation(section_id);
+  }
+
+  if (
+    textarea &&
+    textarea.__podkopAnnotatedTextareaController &&
+    typeof textarea.__podkopAnnotatedTextareaController.update === "function"
+  ) {
+    textarea.__podkopAnnotatedTextareaController.update();
+  }
+}
+
+function attachNfqwsRemoteValidation(option, section_id, textarea) {
+  if (!textarea || textarea.__podkopNfqwsRemoteValidationAttached) {
+    return;
+  }
+
+  textarea.__podkopNfqwsRemoteValidationAttached = true;
+  textarea.__podkopNfqwsRemoteValidationRequestId = 0;
+  textarea.__podkopNfqwsRemoteValidationTimer = null;
+
+  const runValidation = () => {
+    const value = textarea.value;
+    const localAnalysis = buildNfqwsLocalAnalysis(value);
+    if (!localAnalysis.valid) {
+      refreshAnnotatedTextareaValidation(option, section_id, textarea);
+      return;
+    }
+
+    const requestId =
+      (textarea.__podkopNfqwsRemoteValidationRequestId || 0) + 1;
+    textarea.__podkopNfqwsRemoteValidationRequestId = requestId;
+
+    validateNfqwsStrategyRemotely(value).then(() => {
+      if (textarea.__podkopNfqwsRemoteValidationRequestId !== requestId) {
+        return;
+      }
+
+      refreshAnnotatedTextareaValidation(option, section_id, textarea);
+    });
+  };
+
+  const scheduleValidation = (delay = NFQWS_REMOTE_VALIDATION_DEBOUNCE_MS) => {
+    if (textarea.__podkopNfqwsRemoteValidationTimer) {
+      window.clearTimeout(textarea.__podkopNfqwsRemoteValidationTimer);
+    }
+
+    textarea.__podkopNfqwsRemoteValidationTimer = window.setTimeout(() => {
+      textarea.__podkopNfqwsRemoteValidationTimer = null;
+      runValidation();
+    }, delay);
+  };
+
+  textarea.addEventListener("input", () => scheduleValidation());
+  textarea.addEventListener("change", () => scheduleValidation(0));
+  textarea.addEventListener("blur", () => scheduleValidation(0));
+
+  scheduleValidation(0);
+}
+
+function parseCommentAwareListTokens(value) {
+  const text = value ? `${value}` : "";
+  const tokens = [];
+  const lines = text.split(/\r\n|\r|\n/);
+  const newlines = text.match(/\r\n|\r|\n/g) || [];
+  let offset = 0;
+
+  lines.forEach((line, index) => {
+    const hashIndex = line.indexOf("#");
+    const slashIndex = line.indexOf("//");
+    let commentIndex = -1;
+
+    if (hashIndex >= 0 && slashIndex >= 0) {
+      commentIndex = Math.min(hashIndex, slashIndex);
+    } else if (hashIndex >= 0) {
+      commentIndex = hashIndex;
+    } else if (slashIndex >= 0) {
+      commentIndex = slashIndex;
+    }
+
+    const source = commentIndex >= 0 ? line.slice(0, commentIndex) : line;
+    const matcher = /[^,\s]+/g;
+    let match;
+
+    while ((match = matcher.exec(source)) !== null) {
+      tokens.push({
+        value: match[0],
+        start: offset + match.index,
+        end: offset + match.index + match[0].length,
+      });
+    }
+
+    offset += line.length + (newlines[index] ? newlines[index].length : 0);
+  });
+
+  return tokens;
+}
+
+function analyzeTextListValue(value, validateItem, emptyMessage, options = {}) {
+  const text = value ? `${value}` : "";
+  if (!text.length) {
+    return { valid: true, message: "", annotations: [] };
+  }
+
+  const tokens = parseCommentAwareListTokens(text);
+  if (!tokens.length) {
+    return { valid: false, message: emptyMessage, annotations: [] };
+  }
+
+  const duplicateMessage = options.duplicateMessage || getDuplicateValueText();
+  const annotationMap = new Map();
+  const errors = [];
+  const seen = new Set();
+
+  tokens.forEach((token) => {
+    if (typeof validateItem === "function") {
+      const validation = validateItem(token.value);
+      if (!validation.valid) {
+        errors.push(`${token.value}: ${validation.message}`);
+        addAnnotationIssue(annotationMap, token, validation.message);
+      }
+    }
+
+    const normalized = options.normalizeDuplicateValue
+      ? options.normalizeDuplicateValue(token.value)
+      : token.value;
+
+    if (!normalized) {
+      return;
+    }
+
+    if (seen.has(normalized)) {
+      errors.push(`${token.value}: ${duplicateMessage}`);
+      addAnnotationIssue(annotationMap, token, duplicateMessage);
+      return;
+    }
+
+    seen.add(normalized);
+  });
+
+  if (!errors.length) {
+    return { valid: true, message: "", annotations: [] };
+  }
+
+  return {
+    valid: false,
+    message: [getValidationHeaderText(), ...errors].join("\n"),
+    annotations: finalizeAnnotations(annotationMap),
+  };
+}
+
+function analyzeDomainSuffixText(value) {
+  return analyzeTextListValue(
+    value,
+    (item) => main.validateDomain(item, true),
+    _("At least one valid domain must be specified."),
+    {
+      normalizeDuplicateValue: (item) => `${item}`.toLowerCase(),
+    },
+  );
+}
+
+function analyzeIpCidrText(value) {
+  return analyzeTextListValue(
+    value,
+    (item) => main.validateSubnet(item),
+    _("At least one valid IP or subnet must be specified."),
+    {
+      normalizeDuplicateValue: (item) => `${item}`.trim(),
+    },
+  );
+}
+
+function getNfqwsOptionArgumentMode(option) {
+  if (NFQWS_REQUIRED_ARG_OPTIONS.has(option)) {
+    return "required";
+  }
+
+  if (NFQWS_OPTIONAL_ARG_OPTIONS.has(option)) {
+    return "optional";
+  }
+
+  if (NFQWS_NO_ARG_OPTIONS.has(option)) {
+    return "none";
+  }
+
+  return "unknown";
+}
+
+function normalizeNfqwsStrategyWhitespace(value) {
+  return value ? `${value}`.replace(/\s+/g, " ").trim() : "";
+}
+
+function parseNfqwsRuntimeTokens(value) {
+  const text = value ? `${value}` : "";
+  const tokens = [];
+  const matcher = /\S+/g;
+  let match;
+
+  while ((match = matcher.exec(text)) !== null) {
+    tokens.push({
+      value: match[0],
+      start: match.index,
+      end: match.index + match[0].length,
+    });
+  }
+
+  return tokens;
+}
+function normalizeNfqwsStrategyValue(value) {
+  const normalized = normalizeNfqwsStrategyWhitespace(value);
+  if (!normalized.length) {
+    return "";
+  }
+
+  return normalized === ZAPRET_LEGACY_DEFAULT_NFQWS_OPT
+    ? ZAPRET_DEFAULT_NFQWS_OPT
+    : normalized;
+}
+
+function getCachedNfqwsRemoteValidation(value) {
+  const normalized = normalizeNfqwsStrategyValue(value);
+  return normalized.length
+    ? nfqwsRemoteValidationCache.get(normalized) || null
+    : null;
+}
+
+function cacheNfqwsRemoteValidation(value, result) {
+  const normalized = normalizeNfqwsStrategyValue(value);
+  if (!normalized.length) {
+    return result;
+  }
+
+  const cached = {
+    valid: result && result.valid === true,
+    message: result && result.message ? `${result.message}` : "",
+    needle: result && result.needle ? `${result.needle}` : "",
+    needles:
+      result && Array.isArray(result.needles)
+        ? result.needles.filter(Boolean).map((item) => `${item}`)
+        : result && result.needle
+          ? [`${result.needle}`]
+          : [],
+  };
+
+  nfqwsRemoteValidationCache.set(normalized, cached);
+  return cached;
+}
+
+function buildNfqwsRemoteValidationFallback(error) {
+  const message =
+    error && error.message
+      ? `${error.message}`
+      : _("Unable to validate the NFQWS strategy through the backend parser.");
+
+  return {
+    valid: false,
+    message: _("Backend validation failed: %s").format(message),
+    needle: "",
+    needles: [],
+  };
+}
+
+function validateNfqwsStrategyRemotely(value) {
+  const normalized = normalizeNfqwsStrategyValue(value);
+
+  if (!normalized.length) {
+    return Promise.resolve({
+      valid: true,
+      message: "",
+      needle: "",
+      needles: [],
+    });
+  }
+
+  if (nfqwsRemoteValidationCache.has(normalized)) {
+    return Promise.resolve(nfqwsRemoteValidationCache.get(normalized));
+  }
+
+  if (nfqwsRemoteValidationInflight.has(normalized)) {
+    return nfqwsRemoteValidationInflight.get(normalized);
+  }
+
+  const validationTask = fs
+    .exec(NFQWS_VALIDATION_COMMAND, [
+      "validate_nfqws_strategy_json",
+      normalized,
+    ])
+    .then((result) => {
+      const payload = JSON.parse(
+        (result && result.stdout ? result.stdout : "{}").trim() || "{}",
+      );
+      return cacheNfqwsRemoteValidation(normalized, {
+        valid: payload.valid === true,
+        message: payload.message || "",
+        needle: payload.needle || "",
+        needles: Array.isArray(payload.needles)
+          ? payload.needles.filter(Boolean)
+          : payload.needle
+            ? [payload.needle]
+            : [],
+      });
+    })
+    .catch((error) =>
+      cacheNfqwsRemoteValidation(
+        normalized,
+        buildNfqwsRemoteValidationFallback(error),
+      ),
+    )
+    .finally(() => {
+      nfqwsRemoteValidationInflight.delete(normalized);
+    });
+
+  nfqwsRemoteValidationInflight.set(normalized, validationTask);
+  return validationTask;
+}
+
+function getNfqwsForbiddenTokenInfo(token, index) {
+  const configFileMessage = _(
+    "External nfqws config files bypass Podkop Plus queue management and explicit validation.",
+  );
+  const hostSelectionMessage = _(
+    "Resource selection by hostname inside nfqws is not supported here; sing-box selects resources before NFQUEUE.",
+  );
+  const ipSelectionMessage = _(
+    "Resource selection by IP or CIDR inside nfqws is not supported here; sing-box selects resources before NFQUEUE.",
+  );
+  const placeholderMessage = _(
+    "Zapret hostlist templates are not supported here because Podkop Plus does not expand them for per-rule NFQWS strategies.",
+  );
+  const queueMessage = _(
+    "The NFQUEUE number is assigned by Podkop Plus for each rule and must not be overridden here.",
+  );
+  const fwmarkMessage = _(
+    "The desync fwmark is managed by Podkop Plus for loop prevention and must not be overridden here.",
+  );
+  const daemonMessage = _(
+    "Podkop Plus manages the nfqws process lifecycle itself, so daemon mode is not allowed here.",
+  );
+  const dryRunMessage = _(
+    "This field must start a working nfqws strategy; --dry-run exits immediately and is not allowed here.",
+  );
+  const versionMessage = _(
+    "This field must start a working nfqws strategy; --version exits immediately and is not allowed here.",
+  );
+
+  if (index === 0 && (token.startsWith("@") || token.startsWith("$"))) {
+    return {
+      reason: configFileMessage,
+      captureNextValue: false,
+    };
+  }
+
+  if (token === "<HOSTLIST>" || token === "<HOSTLIST_NOAUTO>") {
+    return {
+      reason: placeholderMessage,
+      captureNextValue: false,
+    };
+  }
+
+  if (
+    token === "--hostlist" ||
+    token.startsWith("--hostlist=") ||
+    token === "--hostlist-domains" ||
+    token.startsWith("--hostlist-domains=") ||
+    token === "--hostlist-exclude" ||
+    token.startsWith("--hostlist-exclude=") ||
+    token === "--hostlist-exclude-domains" ||
+    token.startsWith("--hostlist-exclude-domains=") ||
+    token === "--hostlist-auto" ||
+    token.startsWith("--hostlist-auto=") ||
+    token === "--hostlist-auto-fail-threshold" ||
+    token.startsWith("--hostlist-auto-fail-threshold=") ||
+    token === "--hostlist-auto-fail-time" ||
+    token.startsWith("--hostlist-auto-fail-time=") ||
+    token === "--hostlist-auto-retrans-threshold" ||
+    token.startsWith("--hostlist-auto-retrans-threshold=") ||
+    token === "--hostlist-auto-debug" ||
+    token.startsWith("--hostlist-auto-debug=")
+  ) {
+    return {
+      reason: hostSelectionMessage,
+      captureNextValue: !token.includes("="),
+    };
+  }
+
+  if (
+    token === "--ipset" ||
+    token.startsWith("--ipset=") ||
+    token === "--ipset-ip" ||
+    token.startsWith("--ipset-ip=") ||
+    token === "--ipset-exclude" ||
+    token.startsWith("--ipset-exclude=") ||
+    token === "--ipset-exclude-ip" ||
+    token.startsWith("--ipset-exclude-ip=")
+  ) {
+    return {
+      reason: ipSelectionMessage,
+      captureNextValue: !token.includes("="),
+    };
+  }
+
+  if (token === "--qnum" || token.startsWith("--qnum=")) {
+    return {
+      reason: queueMessage,
+      captureNextValue: !token.includes("="),
+    };
+  }
+
+  if (
+    token === "--dpi-desync-fwmark" ||
+    token.startsWith("--dpi-desync-fwmark=")
+  ) {
+    return {
+      reason: fwmarkMessage,
+      captureNextValue: !token.includes("="),
+    };
+  }
+
+  if (token === "--daemon") {
+    return {
+      reason: daemonMessage,
+      captureNextValue: false,
+    };
+  }
+
+  if (token === "--dry-run") {
+    return {
+      reason: dryRunMessage,
+      captureNextValue: false,
+    };
+  }
+
+  if (token === "--version") {
+    return {
+      reason: versionMessage,
+      captureNextValue: false,
+    };
+  }
+
+  return null;
+}
+
+function buildNfqwsLocalAnalysis(value) {
+  const text = value ? `${value}` : "";
+  if (!text.trim().length) {
+    return {
+      valid: false,
+      message: _("NFQWS strategy cannot be empty"),
+      annotations: [],
+    };
+  }
+
+  if (text.trim() === ZAPRET_LEGACY_DEFAULT_NFQWS_OPT) {
+    return { valid: true, message: "", annotations: [] };
+  }
+
+  const tokens = parseNfqwsRuntimeTokens(text);
+  const annotationMap = new Map();
+  const errors = [];
+
+  for (let index = 0; index < tokens.length; ) {
+    const token = tokens[index];
+    const bareToken = token.value.includes("=")
+      ? token.value.slice(0, token.value.indexOf("="))
+      : token.value;
+    const nextToken = tokens[index + 1] || null;
+
+    const forbidden = getNfqwsForbiddenTokenInfo(token.value, index);
+    if (forbidden) {
+      addAnnotationIssue(annotationMap, token, forbidden.reason);
+
+      let displayToken = token.value;
+
+      if (
+        forbidden.captureNextValue &&
+        nextToken &&
+        !nextToken.value.startsWith("--")
+      ) {
+        addAnnotationIssue(annotationMap, nextToken, forbidden.reason);
+        displayToken = `${displayToken} ${nextToken.value}`;
+        index += 2;
+      } else {
+        index += 1;
+      }
+
+      errors.push(`${displayToken}: ${forbidden.reason}`);
+      continue;
+    }
+
+    if (!token.value.startsWith("--")) {
+      const reason = _(
+        "Unexpected standalone token. Use explicit flags such as --name or --name=value.",
+      );
+      addAnnotationIssue(annotationMap, token, reason);
+      errors.push(`${token.value}: ${reason}`);
+      index += 1;
+      continue;
+    }
+
+    const mode = getNfqwsOptionArgumentMode(bareToken);
+    if (mode === "unknown") {
+      const reason = _("Unknown NFQWS flag.");
+      addAnnotationIssue(annotationMap, token, reason);
+      errors.push(`${token.value}: ${reason}`);
+      index += 1;
+      continue;
+    }
+
+    if (mode === "none") {
+      if (token.value.includes("=")) {
+        const reason = _("This flag does not accept a value.");
+        addAnnotationIssue(annotationMap, token, reason);
+        errors.push(`${token.value}: ${reason}`);
+      }
+
+      index += 1;
+      continue;
+    }
+
+    if (mode === "optional") {
+      if (
+        nextToken &&
+        !token.value.includes("=") &&
+        !nextToken.value.startsWith("--")
+      ) {
+        const reason = _(
+          "Optional values must be attached with '=' here; a separate token would be ignored by nfqws.",
+        );
+        addAnnotationIssue(annotationMap, token, reason);
+        addAnnotationIssue(annotationMap, nextToken, reason);
+        errors.push(`${token.value} ${nextToken.value}: ${reason}`);
+        index += 2;
+      } else {
+        index += 1;
+      }
+
+      continue;
+    }
+
+    if (!token.value.includes("=")) {
+      if (!nextToken || nextToken.value.startsWith("--")) {
+        const reason = _("This option requires a value.");
+        addAnnotationIssue(annotationMap, token, reason);
+        errors.push(`${token.value}: ${reason}`);
+        index += 1;
+        continue;
+      }
+
+      index += 2;
+      continue;
+    }
+
+    index += 1;
+  }
+
+  if (!errors.length) {
+    return { valid: true, message: "", annotations: [] };
+  }
+
+  return {
+    valid: false,
+    message: [getValidationHeaderText(), ...errors].join("\n"),
+    annotations: finalizeAnnotations(annotationMap),
+  };
+}
+
+function addNfqwsRemoteValidationNeedleAnnotations(
+  annotationMap,
+  tokens,
+  remoteValidation,
+  needle,
+) {
+  if (!needle.length) {
+    return;
+  }
+
+  let matched = false;
+
+  tokens.forEach((token) => {
+    const tokenValue = token.value || "";
+    const optionMatch =
+      needle.startsWith("--") &&
+      (tokenValue === needle || tokenValue.startsWith(`${needle}=`));
+    const valueMatch =
+      tokenValue === needle ||
+      tokenValue.endsWith(`=${needle}`) ||
+      (!needle.startsWith("--") && tokenValue.includes(`=${needle},`)) ||
+      (!needle.startsWith("--") && tokenValue.endsWith(`=${needle}`));
+
+    if (optionMatch || valueMatch) {
+      addAnnotationIssue(annotationMap, token, remoteValidation.message);
+      matched = true;
+    }
+  });
+
+  if (matched) {
+    return;
+  }
+
+  if (needle.startsWith("--")) {
+    tokens
+      .filter((token) => token.value && token.value.startsWith(needle))
+      .forEach((token) =>
+        addAnnotationIssue(annotationMap, token, remoteValidation.message),
+      );
+  }
+}
+
+function addNfqwsRemoteValidationAnnotations(
+  annotationMap,
+  tokens,
+  remoteValidation,
+) {
+  const needles =
+    remoteValidation &&
+    Array.isArray(remoteValidation.needles) &&
+    remoteValidation.needles.length
+      ? remoteValidation.needles.map((needle) => `${needle}`)
+      : remoteValidation && remoteValidation.needle
+        ? [`${remoteValidation.needle}`]
+        : [];
+
+  needles.forEach((needle) =>
+    addNfqwsRemoteValidationNeedleAnnotations(
+      annotationMap,
+      tokens,
+      remoteValidation,
+      needle,
+    ),
+  );
+}
+
+function analyzeNfqwsStrategy(value) {
+  const localAnalysis = buildNfqwsLocalAnalysis(value);
+  if (!localAnalysis.valid) {
+    return localAnalysis;
+  }
+
+  const remoteValidation = getCachedNfqwsRemoteValidation(value);
+  if (!remoteValidation || remoteValidation.valid) {
+    return localAnalysis;
+  }
+
+  const text = value ? `${value}` : "";
+  const tokens = parseNfqwsRuntimeTokens(text);
+  const annotationMap = new Map();
+
+  localAnalysis.annotations.forEach((annotation) =>
+    addAnnotationIssue(annotationMap, annotation, annotation.message),
+  );
+  addNfqwsRemoteValidationAnnotations(annotationMap, tokens, remoteValidation);
+
+  return {
+    valid: false,
+    message: [getValidationHeaderText(), remoteValidation.message].join("\n"),
+    annotations: finalizeAnnotations(annotationMap),
+  };
+}
+
+function configureTextareaOption(option, analyzer) {
+  const originalRenderWidget = option.renderWidget;
+
+  option.renderWidget = function (section_id, option_index, cfgvalue) {
+    const node = originalRenderWidget.call(
+      this,
+      section_id,
+      option_index,
+      cfgvalue,
+    );
+    const textarea =
+      node && typeof node.querySelector === "function"
+        ? node.querySelector("textarea")
+        : node;
+
+    if (textarea) {
+      applyTextareaInputAttributes(textarea);
+      if (typeof analyzer === "function") {
+        attachAnnotatedTextarea(textarea, analyzer);
+      }
+    }
+
+    return node;
+  };
+}
+
+function addDynamicConditionField(section, config) {
+  const o = section.taboption(
+    "conditions",
+    form.DynamicList,
+    config.key,
+    config.label,
+    config.description,
+  );
+
+  o.modalonly = true;
+  if (config.dynamicValidate) {
+    o.validate = config.dynamicValidate;
+  }
+
+  o.load = function (section_id) {
+    const values = getConfigListValues(section_id, config.key);
+    if (values.length) {
+      return values;
+    }
+
+    const legacyText = uci.get("podkop", section_id, `${config.key}_text`);
+    return legacyText ? main.parseValueList(legacyText) : [];
+  };
+
+  o.write = function (section_id, value) {
+    writeListOption(section_id, config.key, value);
+    uci.unset("podkop", section_id, `${config.key}_text`);
+    uci.unset("podkop", section_id, `${config.key}_text_mode`);
+  };
+}
+
+function addTextConditionField(section, config) {
+  const o = section.taboption(
+    "conditions",
+    form.TextValue,
+    `${config.key}_text`,
+    config.label,
+    config.description,
+  );
+
+  o.rows = 8;
+  o.wrap = "soft";
+  o.textarea = true;
+  o.modalonly = true;
+  if (config.textAnalyze) {
+    o.validate = function (_section_id, value) {
+      const analysis = config.textAnalyze(value);
+      return analysis.valid ? true : analysis.message;
+    };
+  } else if (config.textValidate) {
+    o.validate = config.textValidate;
+  }
+  configureTextareaOption(o, config.textAnalyze);
+
+  o.load = function (section_id) {
+    const textValue = uci.get("podkop", section_id, `${config.key}_text`);
+    if (textValue) {
+      return textValue;
+    }
+
+    return valuesToText(uci.get("podkop", section_id, config.key));
+  };
+
+  o.write = function (section_id, value) {
+    const normalized = value ? `${value}`.trim() : "";
+
+    if (normalized.length) {
+      uci.set("podkop", section_id, `${config.key}_text`, normalized);
+    } else {
+      uci.unset("podkop", section_id, `${config.key}_text`);
+    }
+
+    uci.unset("podkop", section_id, config.key);
+    uci.unset("podkop", section_id, `${config.key}_text_mode`);
+  };
+}
+
+function loadRulesetValues(option) {
+  delete option.keylist;
+  delete option.vallist;
+
+  Object.entries(main.DOMAIN_LIST_OPTIONS).forEach(([key, label]) => {
+    option.value(key, _(label));
+  });
+}
+
+function isBuiltinRulesetValue(value) {
+  return Object.prototype.hasOwnProperty.call(main.DOMAIN_LIST_OPTIONS, value);
+}
+
+function validateCustomRulesetReference(value) {
+  if (!value || value.length === 0) {
+    return true;
+  }
+
+  if (value.startsWith("http://") || value.startsWith("https://")) {
+    const validation = main.validateUrl(value);
+    if (validation.valid && value.endsWith(".srs")) {
+      return true;
+    }
+
+    return _("Rule set must be a direct .srs URL or a local .srs path");
+  }
+
+  if (value.startsWith("/")) {
+    const validation = main.validatePath(value);
+    if (validation.valid && value.endsWith(".srs")) {
+      return true;
+    }
+
+    return _("Rule set must be a direct .srs URL or a local .srs path");
+  }
+
+  return _("Rule set must be a direct .srs URL or a local .srs path");
+}
+
+function getRulesetReferences(section_id) {
+  return getConfigListValues(section_id, "rule_set");
+}
+
+function getBuiltInRulesetReferences(section_id) {
+  const communityValues = getConfigListValues(
+    section_id,
+    "community_lists",
+  ).filter((value) => isBuiltinRulesetValue(value));
+  const legacyBuiltIns = getRulesetReferences(section_id).filter((value) =>
+    isBuiltinRulesetValue(value),
+  );
+
+  const values = communityValues.length > 0 ? communityValues : legacyBuiltIns;
+
+  return values.filter(
+    (value, index, values) =>
+      isBuiltinRulesetValue(value) && values.indexOf(value) === index,
+  );
+}
+
+function getCustomRulesetReferences(section_id) {
+  return getRulesetReferences(section_id).filter(
+    (value) => !isBuiltinRulesetValue(value),
+  );
+}
+
+function getRuleActionDisplayValue(section_id) {
+  const action = uci.get("podkop", section_id, "action");
+  if (action) {
+    switch (`${action}`) {
+      case "block":
+        return "Block";
+      case "direct":
+        return "Direct";
+      case "zapret":
+        return "Zapret";
+      case "proxy":
+      default:
+        return "Proxy";
+    }
+  }
+
+  const connectionType = uci.get("podkop", section_id, "connection_type");
+  switch (connectionType) {
+    case "proxy":
+    case "vpn":
+      return "Proxy";
+    case "block":
+      return "Block";
+    case "exclusion":
+      return "Direct";
+    default:
+      return "Proxy";
+  }
+}
+
+function createSectionContent(section) {
+  let o;
+
+  section.tab("settings", _("Settings"));
+  section.tab("conditions", _("Conditions"));
+
+  o = section.taboption("settings", form.Flag, "enabled", _("Enable"));
+  o.default = "1";
+  o.rmempty = false;
+  o.editable = true;
+  o.width = "6rem";
+
+  o = section.taboption(
+    "settings",
+    form.DummyValue,
+    "_action_display",
+    _("Action"),
+  );
+  o.modalonly = false;
+  o.textvalue = function (section_id) {
+    return getRuleActionDisplayValue(section_id);
+  };
+  o.width = "7rem";
+
+  o = section.taboption(
+    "settings",
+    form.Value,
+    "label",
+    _("Section name"),
+    _("Visible name of this section"),
+  );
+  o.rmempty = false;
+  o.modalonly = true;
+  o.load = function (section_id) {
+    return uci.get("podkop", section_id, "label") || section_id;
+  };
+
+  o = section.taboption(
+    "settings",
+    form.ListValue,
+    "action",
+    _("Action"),
+    _("What Podkop Plus should do when this section matches"),
+  );
+  o.value("proxy", "Proxy");
+  o.value("direct", "Direct");
+  o.value("block", "Block");
+  o.value("zapret", "Zapret");
+  o.default = "proxy";
+  o.rmempty = false;
+  o.modalonly = true;
+
+  o = section.taboption(
+    "settings",
+    form.TextValue,
+    "nfqws_opt",
+    _("NFQWS Strategy"),
+  );
+  o.depends("action", "zapret");
+  o.rows = 6;
+  o.wrap = "soft";
+  o.textarea = true;
+  o.modalonly = true;
+  o.load = function (section_id) {
+    const value = uci.get("podkop", section_id, "nfqws_opt");
+    if (!value || value === ZAPRET_LEGACY_DEFAULT_NFQWS_OPT) {
+      return ZAPRET_DEFAULT_NFQWS_OPT;
+    }
+
+    return value;
+  };
+  o.write = function (section_id, value) {
+    const normalized = normalizeNfqwsStrategyValue(value);
+    const nextValue =
+      !normalized.length || normalized === ZAPRET_LEGACY_DEFAULT_NFQWS_OPT
+        ? ZAPRET_DEFAULT_NFQWS_OPT
+        : normalized;
+
+    uci.set("podkop", section_id, "nfqws_opt", nextValue);
+  };
+  o.validate = function (_section_id, value) {
+    const analysis = analyzeNfqwsStrategy(value);
+    return analysis.valid ? true : analysis.message;
+  };
+  configureTextareaOption(o, analyzeNfqwsStrategy);
+
+  o = section.taboption(
+    "settings",
+    form.ListValue,
+    "proxy_config_type",
+    _("Connection Type"),
+    _("How to configure the proxy connection for this section"),
+  );
+  o.value("url", _("Connection URL"));
+  o.value("selector", _("Selector"));
+  o.value("urltest", _("URLTest"));
+  o.value("outbound", _("Outbound JSON"));
+  o.value("interface", _("Interface"));
+  o.default = "url";
+  o.rmempty = false;
+  o.depends("action", "proxy");
+  o.modalonly = true;
+
+  o = section.taboption(
+    "settings",
+    form.TextValue,
+    "proxy_string",
+    _("Connection"),
+    _("vless://, ss://, trojan://, socks4/5://, hy2/hysteria2:// links"),
+  );
+  o.depends({ action: "proxy", proxy_config_type: "url" });
+  o.rows = 5;
+  o.wrap = "soft";
+  o.textarea = true;
+  o.modalonly = true;
+  o.validate = function (_section_id, value) {
+    if (!value || value.length === 0) {
+      return true;
+    }
+
+    const validation = main.validateProxyUrl(value);
+    return validation.valid ? true : validation.message;
+  };
+  configureTextareaOption(o);
+
+  o = section.taboption(
+    "settings",
+    form.TextValue,
+    "outbound_json",
+    _("Outbound JSON"),
+    _("Enter a complete sing-box outbound object"),
+  );
+  o.depends({ action: "proxy", proxy_config_type: "outbound" });
+  o.rows = 10;
+  o.wrap = "soft";
+  o.textarea = true;
+  o.modalonly = true;
+  o.validate = function (_section_id, value) {
+    if (!value || value.length === 0) {
+      return true;
+    }
+
+    const validation = main.validateOutboundJson(value);
+    return validation.valid ? true : validation.message;
+  };
+  configureTextareaOption(o);
+
+  o = section.taboption(
+    "settings",
+    form.DynamicList,
+    "selector_proxy_links",
+    _("Selector connections"),
+    _("A manual group of proxy URLs for this section"),
+  );
+  o.depends({ action: "proxy", proxy_config_type: "selector" });
+  o.modalonly = true;
+  o.validate = function (_section_id, value) {
+    if (!value || value.length === 0) {
+      return true;
+    }
+
+    const validation = main.validateProxyUrl(value);
+    return validation.valid ? true : validation.message;
+  };
+
+  o = section.taboption(
+    "settings",
+    form.DynamicList,
+    "urltest_proxy_links",
+    _("URLTest connections"),
+    _("A latency-tested group of proxy URLs for this section"),
+  );
+  o.depends({ action: "proxy", proxy_config_type: "urltest" });
+  o.modalonly = true;
+  o.validate = function (_section_id, value) {
+    if (!value || value.length === 0) {
+      return true;
+    }
+
+    const validation = main.validateProxyUrl(value);
+    return validation.valid ? true : validation.message;
+  };
+
+  o = section.taboption(
+    "settings",
+    form.ListValue,
+    "urltest_check_interval",
+    _("URLTest interval"),
+  );
+  o.value("30s", _("Every 30 seconds"));
+  o.value("1m", _("Every minute"));
+  o.value("3m", _("Every 3 minutes"));
+  o.value("5m", _("Every 5 minutes"));
+  o.default = "3m";
+  o.rmempty = false;
+  o.depends({ action: "proxy", proxy_config_type: "urltest" });
+  o.modalonly = true;
+
+  o = section.taboption(
+    "settings",
+    form.Value,
+    "urltest_tolerance",
+    _("URLTest tolerance"),
+    _("Maximum response time delta in milliseconds"),
+  );
+  o.default = "50";
+  o.rmempty = false;
+  o.depends({ action: "proxy", proxy_config_type: "urltest" });
+  o.modalonly = true;
+  o.validate = function (_section_id, value) {
+    if (!value || value.length === 0) {
+      return true;
+    }
+
+    const parsed = parseFloat(value);
+    if (
+      /^[0-9]+$/.test(value) &&
+      !isNaN(parsed) &&
+      isFinite(parsed) &&
+      parsed >= 50 &&
+      parsed <= 1000
+    ) {
+      return true;
+    }
+
+    return _("Must be a number in the range of 50 - 1000");
+  };
+
+  o = section.taboption(
+    "settings",
+    form.Value,
+    "urltest_testing_url",
+    _("URLTest URL"),
+  );
+  o.value(
+    "https://www.gstatic.com/generate_204",
+    "https://www.gstatic.com/generate_204 (Google)",
+  );
+  o.value(
+    "https://cp.cloudflare.com/generate_204",
+    "https://cp.cloudflare.com/generate_204 (Cloudflare)",
+  );
+  o.value("https://captive.apple.com", "https://captive.apple.com (Apple)");
+  o.value(
+    "https://connectivity-check.ubuntu.com",
+    "https://connectivity-check.ubuntu.com (Ubuntu)",
+  );
+  o.default = "https://www.gstatic.com/generate_204";
+  o.rmempty = false;
+  o.depends({ action: "proxy", proxy_config_type: "urltest" });
+  o.modalonly = true;
+  o.validate = function (_section_id, value) {
+    if (!value || value.length === 0) {
+      return true;
+    }
+
+    const validation = main.validateUrl(value);
+    return validation.valid ? true : validation.message;
+  };
+
+  o = section.taboption(
+    "settings",
+    form.Flag,
+    "enable_udp_over_tcp",
+    _("UDP over TCP"),
+    _("Applicable for SOCKS and Shadowsocks links"),
+  );
+  o.default = "0";
+  o.rmempty = false;
+  o.depends("action", "proxy");
+  o.modalonly = true;
+
+  o = section.taboption(
+    "settings",
+    widgets.DeviceSelect,
+    "interface",
+    _("Interface"),
+    _("Use a network interface as the outbound for this section"),
+  );
+  o.noaliases = true;
+  o.nobridges = false;
+  o.noinactive = false;
+  o.depends({ action: "proxy", proxy_config_type: "interface" });
+  o.modalonly = true;
+  o.filter = function (_section_id, value) {
+    const blockedInterfaces = [
+      "br-lan",
+      "eth0",
+      "eth1",
+      "wan",
+      "phy0-ap0",
+      "phy1-ap0",
+      "pppoe-wan",
+      "lan",
+    ];
+
+    if (blockedInterfaces.includes(value)) {
+      return false;
+    }
+
+    const device = this.devices.find((dev) => dev.getName() === value);
+    if (!device) {
+      return true;
+    }
+
+    const type = device.getType();
+    const isWireless =
+      type === "wifi" || type === "wireless" || type.indexOf("wlan") >= 0;
+
+    return !isWireless;
+  };
+
+  o = section.taboption(
+    "settings",
+    form.Flag,
+    "domain_resolver_enabled",
+    _("Resolver for interface outbound"),
+    _("Enable a dedicated DNS resolver when this section uses an interface"),
+  );
+  o.default = "0";
+  o.rmempty = false;
+  o.depends({ action: "proxy", proxy_config_type: "interface" });
+  o.modalonly = true;
+
+  o = section.taboption(
+    "settings",
+    form.ListValue,
+    "domain_resolver_dns_type",
+    _("DNS protocol"),
+  );
+  o.value("doh", _("DNS over HTTPS (DoH)"));
+  o.value("dot", _("DNS over TLS (DoT)"));
+  o.value("udp", _("UDP"));
+  o.default = "udp";
+  o.rmempty = false;
+  o.depends({
+    action: "proxy",
+    proxy_config_type: "interface",
+    domain_resolver_enabled: "1",
+  });
+  o.modalonly = true;
+
+  o = section.taboption(
+    "settings",
+    form.Value,
+    "domain_resolver_dns_server",
+    _("DNS server"),
+  );
+  Object.entries(main.DNS_SERVER_OPTIONS).forEach(([key, label]) => {
+    o.value(key, _(label));
+  });
+  o.default = "8.8.8.8";
+  o.rmempty = false;
+  o.depends({
+    action: "proxy",
+    proxy_config_type: "interface",
+    domain_resolver_enabled: "1",
+  });
+  o.modalonly = true;
+  o.validate = function (_section_id, value) {
+    const validation = main.validateDNS(value);
+    return validation.valid ? true : validation.message;
+  };
+
+  o = section.taboption(
+    "settings",
+    form.Flag,
+    "mixed_proxy_enabled",
+    _("Enable Mixed Proxy"),
+    _("Expose this section as a local HTTP+SOCKS proxy"),
+  );
+  o.default = "0";
+  o.rmempty = false;
+  o.depends("action", "proxy");
+  o.modalonly = true;
+
+  o = section.taboption(
+    "settings",
+    form.Value,
+    "mixed_proxy_port",
+    _("Mixed Proxy Port"),
+    _("Port for the local mixed proxy of this section"),
+  );
+  o.rmempty = false;
+  o.depends({ action: "proxy", mixed_proxy_enabled: "1" });
+  o.modalonly = true;
+  o.validate = function (_section_id, value) {
+    if (!value || value.length === 0) {
+      return _("Port cannot be empty");
+    }
+
+    const parsed = parseInt(value, 10);
+    if (!isNaN(parsed) && parsed >= 1 && parsed <= 65535) {
+      return true;
+    }
+
+    return _("Invalid port number. Must be between 1 and 65535");
+  };
+
+  addTextConditionField(section, {
+    key: "domain_suffix",
+    label: _("Domains"),
+    description: _("Match domains including all subdomains"),
+    textAnalyze: analyzeDomainSuffixText,
+  });
+
+  addTextConditionField(section, {
+    key: "ip_cidr",
+    label: _("IPs"),
+    description: _("Match destination IPs or subnets"),
+    textAnalyze: analyzeIpCidrText,
+  });
+
+  addDynamicConditionField(section, {
+    key: "domain",
+    label: _("Exact full domain"),
+    description: _("Match only one exact full domain name"),
+    dynamicValidate: function (_section_id, value) {
+      if (!value || value.length === 0) {
+        return true;
+      }
+
+      const validation = main.validateDomain(value);
+      return validation.valid ? true : validation.message;
+    },
+  });
+
+  addDynamicConditionField(section, {
+    key: "domain_keyword",
+    label: _("Domain keyword"),
+    description: _("Match domains containing a substring"),
+    dynamicValidate: validateKeyword,
+  });
+
+  addDynamicConditionField(section, {
+    key: "domain_regex",
+    label: _("Domain regex"),
+    description: _("Match domains using a regular expression"),
+    dynamicValidate: validateRegex,
+  });
+
+  addDynamicConditionField(section, {
+    key: "source_ip_cidr",
+    label: _("Source IPs"),
+    description: _("Match source IPs or subnets"),
+    dynamicValidate: function (_section_id, value) {
+      if (!value || value.length === 0) {
+        return true;
+      }
+
+      const validation = main.validateSubnet(value);
+      return validation.valid ? true : validation.message;
+    },
+  });
+
+  const builtInRulesetOption = section.taboption(
+    "conditions",
+    form.DynamicList,
+    "community_lists",
+    _("Built-in rule sets"),
+    _("Select a predefined list for routing"),
+  );
+  builtInRulesetOption.modalonly = true;
+  builtInRulesetOption.placeholder = _("Service list");
+  builtInRulesetOption.load = function (section_id) {
+    loadRulesetValues(this);
+    return getBuiltInRulesetReferences(section_id);
+  };
+  let isProcessingBuiltIns = false;
+  builtInRulesetOption.onchange = function (_ev, section_id, value) {
+    if (isProcessingBuiltIns) {
+      return;
+    }
+
+    isProcessingBuiltIns = true;
+
+    try {
+      const values = Array.isArray(value)
+        ? value.filter(Boolean)
+        : value
+          ? [value]
+          : [];
+      let newValues = [...values];
+      const notifications = [];
+
+      const selectedRegionalOptions = main.REGIONAL_OPTIONS.filter((opt) =>
+        newValues.includes(opt),
+      );
+
+      if (selectedRegionalOptions.length > 1) {
+        const lastSelected =
+          selectedRegionalOptions[selectedRegionalOptions.length - 1];
+        const removedRegions = selectedRegionalOptions.slice(0, -1);
+        newValues = newValues.filter(
+          (v) => v === lastSelected || !main.REGIONAL_OPTIONS.includes(v),
+        );
+        notifications.push(
+          E("p", {}, [
+            E("strong", {}, _("Regional options cannot be used together")),
+            E("br"),
+            _(
+              "Warning: %s cannot be used together with %s. Previous selections have been removed.",
+            ).format(removedRegions.join(", "), lastSelected),
+          ]),
+        );
+      }
+
+      if (newValues.includes("russia_inside")) {
+        const removedServices = newValues.filter(
+          (v) => !main.ALLOWED_WITH_RUSSIA_INSIDE.includes(v),
+        );
+        if (removedServices.length > 0) {
+          newValues = newValues.filter((v) =>
+            main.ALLOWED_WITH_RUSSIA_INSIDE.includes(v),
+          );
+          notifications.push(
+            E("p", { class: "alert-message warning" }, [
+              E("strong", {}, _("Russia inside restrictions")),
+              E("br"),
+              _(
+                "Warning: Russia inside can only be used with %s. %s already in Russia inside and have been removed from selection.",
+              ).format(
+                main.ALLOWED_WITH_RUSSIA_INSIDE.map(
+                  (key) => main.DOMAIN_LIST_OPTIONS[key],
+                )
+                  .filter((label) => label !== "Russia inside")
+                  .join(", "),
+                removedServices.join(", "),
+              ),
+            ]),
+          );
+        }
+      }
+
+      if (
+        JSON.stringify(newValues.slice().sort()) !==
+        JSON.stringify(values.slice().sort())
+      ) {
+        this.getUIElement(section_id).setValue(newValues);
+      }
+
+      notifications.forEach((notification) =>
+        ui.addNotification(null, notification),
+      );
+    } finally {
+      isProcessingBuiltIns = false;
+    }
+  };
+
+  const ruleSetOption = section.taboption(
+    "conditions",
+    form.DynamicList,
+    "rule_set",
+    _("Rule sets"),
+    _("Add URLs or local paths to .srs lists"),
+  );
+  ruleSetOption.modalonly = true;
+  ruleSetOption.load = function (section_id) {
+    return getCustomRulesetReferences(section_id);
+  };
+  ruleSetOption.validate = function (_section_id, value) {
+    return validateCustomRulesetReference(value);
+  };
+}
+
+const EntryPoint = {
+  createSectionContent,
+};
+
+return baseclass.extend(EntryPoint);

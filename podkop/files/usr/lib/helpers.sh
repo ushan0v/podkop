@@ -299,7 +299,7 @@ parse_domain_or_subnet_string_to_commas_string() {
     local type="$2"
 
     tmpfile=$(mktemp)
-    printf "%s\n" "$string" | sed 's/\/\/.*//' | tr ', ' '\n' | grep -v '^$' > "$tmpfile"
+    printf "%s\n" "$string" | sed -e 's/[[:space:]]*\/\/.*$//' -e 's/[[:space:]]*#.*$//' | tr ', ' '\n' | grep -v '^$' > "$tmpfile"
 
     result="$(parse_domain_or_subnet_file_to_comma_string "$tmpfile" "$type")"
     rm -f "$tmpfile"
@@ -322,6 +322,7 @@ parse_domain_or_subnet_file_to_comma_string() {
 
     local result
     while IFS= read -r line; do
+        line=$(printf "%s\n" "$line" | sed -e 's/[[:space:]]*\/\/.*$//' -e 's/[[:space:]]*#.*$//')
         line=$(echo "$line" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')
 
         [ -z "$line" ] && continue

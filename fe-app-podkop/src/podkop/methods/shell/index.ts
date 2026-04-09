@@ -14,6 +14,10 @@ export const PodkopShellMethods = {
     callBaseMethod<Podkop.NftRulesCheckResult>(
       Podkop.AvailableMethods.CHECK_NFT_RULES,
     ),
+  checkZapretRuntime: async () =>
+    callBaseMethod<Podkop.ZapretCheckResult>(
+      Podkop.AvailableMethods.CHECK_ZAPRET_RUNTIME,
+    ),
   getStatus: async () =>
     callBaseMethod<Podkop.GetStatus>(Podkop.AvailableMethods.GET_STATUS),
   checkSingBox: async () =>
@@ -23,6 +27,10 @@ export const PodkopShellMethods = {
   getSingBoxStatus: async () =>
     callBaseMethod<Podkop.GetSingBoxStatus>(
       Podkop.AvailableMethods.GET_SING_BOX_STATUS,
+    ),
+  getZapretStatus: async () =>
+    callBaseMethod<Podkop.GetZapretStatus>(
+      Podkop.AvailableMethods.GET_ZAPRET_STATUS,
     ),
   getClashApiProxies: async () =>
     callBaseMethod<ClashAPI.Proxies>(Podkop.AvailableMethods.CLASH_API, [
@@ -48,31 +56,31 @@ export const PodkopShellMethods = {
     callBaseMethod<unknown>(
       Podkop.AvailableMethods.RESTART,
       [],
-      '/etc/init.d/podkop',
+      '/etc/init.d/podkop-plus',
     ),
   start: async () =>
     callBaseMethod<unknown>(
       Podkop.AvailableMethods.START,
       [],
-      '/etc/init.d/podkop',
+      '/etc/init.d/podkop-plus',
     ),
   stop: async () =>
     callBaseMethod<unknown>(
       Podkop.AvailableMethods.STOP,
       [],
-      '/etc/init.d/podkop',
+      '/etc/init.d/podkop-plus',
     ),
   enable: async () =>
     callBaseMethod<unknown>(
       Podkop.AvailableMethods.ENABLE,
       [],
-      '/etc/init.d/podkop',
+      '/etc/init.d/podkop-plus',
     ),
   disable: async () =>
     callBaseMethod<unknown>(
       Podkop.AvailableMethods.DISABLE,
       [],
-      '/etc/init.d/podkop',
+      '/etc/init.d/podkop-plus',
     ),
   globalCheck: async () =>
     callBaseMethod<unknown>(Podkop.AvailableMethods.GLOBAL_CHECK),
@@ -80,6 +88,8 @@ export const PodkopShellMethods = {
     callBaseMethod<unknown>(Podkop.AvailableMethods.SHOW_SING_BOX_CONFIG),
   checkLogs: async () =>
     callBaseMethod<unknown>(Podkop.AvailableMethods.CHECK_LOGS),
+  checkSingBoxLogs: async () =>
+    callBaseMethod<unknown>(Podkop.AvailableMethods.CHECK_SING_BOX_LOGS),
   getSystemInfo: async () =>
     callBaseMethod<Podkop.GetSystemInfo>(
       Podkop.AvailableMethods.GET_SYSTEM_INFO,

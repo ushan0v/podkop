@@ -3,6 +3,7 @@ import { runDnsCheck } from './checks/runDnsCheck';
 import { runSingBoxCheck } from './checks/runSingBoxCheck';
 import { runNftCheck } from './checks/runNftCheck';
 import { runFakeIPCheck } from './checks/runFakeIPCheck';
+import { runZapretCheck } from './checks/runZapretCheck';
 import { loadingDiagnosticsChecksStore } from './diagnostic.store';
 import { logger, store, StoreType } from '../../services';
 import {
@@ -21,26 +22,48 @@ import { showToast } from '../../../helpers/showToast';
 import { renderWikiDisclaimer } from './partials/renderWikiDisclaimer';
 import { runSectionsCheck } from './checks/runSectionsCheck';
 
-async function fetchSystemInfo() {
-  const systemInfo = await PodkopShellMethods.getSystemInfo();
+const UNKNOWN_DIAGNOSTICS_SYSTEM_INFO = {
+  podkop_version: _('unknown'),
+  podkop_latest_version: _('unknown'),
+  luci_app_version: _('unknown'),
+  sing_box_version: _('unknown'),
+  zapret_version: _('unknown'),
+  openwrt_version: _('unknown'),
+  device_model: _('unknown'),
+};
 
-  if (systemInfo.success) {
+let latestSystemInfoRequestId = 0;
+let diagnosticLifecycleRegistered = false;
+let diagnosticControllerInitialized = false;
+
+async function fetchSystemInfo() {
+  const requestId = ++latestSystemInfoRequestId;
+
+  try {
+    const systemInfo = await PodkopShellMethods.getSystemInfo();
+
+    if (requestId !== latestSystemInfoRequestId) {
+      return;
+    }
+
+    if (systemInfo.success) {
+      store.set({
+        diagnosticsSystemInfo: {
+          loading: false,
+          ...systemInfo.data,
+        },
+      });
+      return;
+    }
+  } catch (error) {
+    logger.error('[DIAGNOSTIC]', 'fetchSystemInfo failed', error);
+  }
+
+  if (requestId === latestSystemInfoRequestId) {
     store.set({
       diagnosticsSystemInfo: {
         loading: false,
-        ...systemInfo.data,
-      },
-    });
-  } else {
-    store.set({
-      diagnosticsSystemInfo: {
-        loading: false,
-        podkop_version: _('unknown'),
-        podkop_latest_version: _('unknown'),
-        luci_app_version: _('unknown'),
-        sing_box_version: _('unknown'),
-        openwrt_version: _('unknown'),
-        device_model: _('unknown'),
+        ...UNKNOWN_DIAGNOSTICS_SYSTEM_INFO,
       },
     });
   }
@@ -252,9 +275,25 @@ async function handleViewLogs() {
     const viewLogs = await PodkopShellMethods.checkLogs();
 
     if (viewLogs.success) {
+      const getLatestLogs = async () => {
+        const latestLogs = await PodkopShellMethods.checkLogs();
+
+        if (!latestLogs.success) {
+          throw latestLogs;
+        }
+
+        return (latestLogs.data as string) ?? '';
+      };
+
       ui.showModal(
         _('View logs'),
-        renderModal(viewLogs.data as string, 'view_logs'),
+        renderModal(viewLogs.data as string, 'view_logs', {
+          getText: getLatestLogs,
+          refreshMs: 250,
+          initialAutoRefresh: true,
+          showAutoRefreshToggle: true,
+          startAtEnd: true,
+        }),
       );
     } else {
       logger.error('[DIAGNOSTIC]', 'handleViewLogs - e', viewLogs);
@@ -343,13 +382,17 @@ function renderDiagnosticAvailableActionsWidget() {
   const servicesInfoWidget = store.get().servicesInfoWidget;
   logger.debug('[DIAGNOSTIC]', 'renderDiagnosticAvailableActionsWidget');
 
-  const podkopEnabled = Boolean(servicesInfoWidget.data.podkop);
+  const podkopEnabled = Boolean(servicesInfoWidget.data.podkopEnabled);
   const singBoxRunning = Boolean(servicesInfoWidget.data.singbox);
-  const atLeastOneServiceCommandLoading =
-    servicesInfoWidget.loading ||
+  const atLeastOneMutatingActionLoading =
     diagnosticsActions.restart.loading ||
     diagnosticsActions.start.loading ||
-    diagnosticsActions.stop.loading;
+    diagnosticsActions.stop.loading ||
+    diagnosticsActions.enable.loading ||
+    diagnosticsActions.disable.loading;
+  const serviceControlsDisabled =
+    servicesInfoWidget.loading || atLeastOneMutatingActionLoading;
+  const utilityActionsDisabled = atLeastOneMutatingActionLoading;
 
   const container = document.getElementById('pdk_diagnostic-page-actions');
 
@@ -358,49 +401,49 @@ function renderDiagnosticAvailableActionsWidget() {
       loading: diagnosticsActions.restart.loading,
       visible: true,
       onClick: handleRestart,
-      disabled: atLeastOneServiceCommandLoading,
+      disabled: serviceControlsDisabled,
     },
     start: {
       loading: diagnosticsActions.start.loading,
       visible: !singBoxRunning,
       onClick: handleStart,
-      disabled: atLeastOneServiceCommandLoading,
+      disabled: serviceControlsDisabled,
     },
     stop: {
       loading: diagnosticsActions.stop.loading,
       visible: singBoxRunning,
       onClick: handleStop,
-      disabled: atLeastOneServiceCommandLoading,
+      disabled: serviceControlsDisabled,
     },
     enable: {
       loading: diagnosticsActions.enable.loading,
       visible: !podkopEnabled,
       onClick: handleEnable,
-      disabled: atLeastOneServiceCommandLoading,
+      disabled: serviceControlsDisabled,
     },
     disable: {
       loading: diagnosticsActions.disable.loading,
       visible: podkopEnabled,
       onClick: handleDisable,
-      disabled: atLeastOneServiceCommandLoading,
+      disabled: serviceControlsDisabled,
     },
     globalCheck: {
       loading: diagnosticsActions.globalCheck.loading,
       visible: true,
       onClick: handleShowGlobalCheck,
-      disabled: atLeastOneServiceCommandLoading,
+      disabled: utilityActionsDisabled,
     },
     viewLogs: {
       loading: diagnosticsActions.viewLogs.loading,
       visible: true,
       onClick: handleViewLogs,
-      disabled: atLeastOneServiceCommandLoading,
+      disabled: false,
     },
     showSingBoxConfig: {
       loading: diagnosticsActions.showSingBoxConfig.loading,
       visible: true,
       onClick: handleShowSingBoxConfig,
-      disabled: atLeastOneServiceCommandLoading,
+      disabled: utilityActionsDisabled,
     },
   });
 
@@ -424,23 +467,25 @@ function renderDiagnosticSystemInfoWidget() {
     const version = normalizeCompiledVersion(
       diagnosticsSystemInfo.podkop_version,
     );
+    const latestVersion =
+      `${diagnosticsSystemInfo.podkop_latest_version || ''}`.replace(/^v/, '');
     const isDevVersion = version === 'dev';
 
     if (loading || unknown || !hasActualVersion || isDevVersion) {
       return {
-        key: 'Podkop',
+        key: 'Podkop Plus',
         value: version,
       };
     }
 
-    if (version !== `v${diagnosticsSystemInfo.podkop_latest_version}`) {
+    if (`${version}`.replace(/^v/, '') !== latestVersion) {
       logger.debug(
         '[DIAGNOSTIC]',
         'diagnosticsSystemInfo',
         diagnosticsSystemInfo,
       );
       return {
-        key: 'Podkop',
+        key: 'Podkop Plus',
         value: version,
         tag: {
           label: _('Outdated'),
@@ -450,7 +495,7 @@ function renderDiagnosticSystemInfoWidget() {
     }
 
     return {
-      key: 'Podkop',
+      key: 'Podkop Plus',
       value: version,
       tag: {
         label: _('Latest'),
@@ -469,6 +514,10 @@ function renderDiagnosticSystemInfoWidget() {
       {
         key: 'Sing-box',
         value: diagnosticsSystemInfo.sing_box_version,
+      },
+      {
+        key: 'Zapret',
+        value: diagnosticsSystemInfo.zapret_version,
       },
       {
         key: 'OS',
@@ -510,25 +559,42 @@ async function onStoreUpdate(
 }
 
 async function runChecks() {
+  const runners = [
+    runDnsCheck,
+    runSingBoxCheck,
+    runNftCheck,
+    runZapretCheck,
+    runSectionsCheck,
+    runFakeIPCheck,
+  ];
+
   try {
     store.set({
       diagnosticsRunAction: { loading: true },
       diagnosticsChecks: loadingDiagnosticsChecksStore.diagnosticsChecks,
     });
 
-    await runDnsCheck();
-
-    await runSingBoxCheck();
-
-    await runNftCheck();
-
-    await runSectionsCheck();
-
-    await runFakeIPCheck();
+    for (const runner of runners) {
+      try {
+        await runner();
+      } catch (e) {
+        logger.error('[DIAGNOSTIC]', `runChecks - ${runner.name} failed`, e);
+      }
+    }
   } catch (e) {
     logger.error('[DIAGNOSTIC]', 'runChecks - e', e);
   } finally {
     store.set({ diagnosticsRunAction: { loading: false } });
+  }
+}
+
+async function loadInitialDiagnosticData() {
+  await fetchServicesInfo();
+
+  const diagnosticStatus = document.getElementById('diagnostic-status');
+
+  if (diagnosticStatus?.isConnected && diagnosticStatus.offsetParent !== null) {
+    await fetchSystemInfo();
   }
 }
 
@@ -554,11 +620,7 @@ function onPageMount() {
   // Initial Wiki disclaimer render
   renderWikiDisclaimerWidget();
 
-  // Initial services info fetch
-  fetchServicesInfo();
-
-  // Initial system info fetch
-  fetchSystemInfo();
+  void loadInitialDiagnosticData();
 }
 
 function onPageUnmount() {
@@ -575,6 +637,12 @@ function onPageUnmount() {
 }
 
 function registerLifecycleListeners() {
+  if (diagnosticLifecycleRegistered) {
+    return;
+  }
+
+  diagnosticLifecycleRegistered = true;
+
   store.subscribe((next, prev, diff) => {
     if (
       diff.tabService &&
@@ -609,6 +677,12 @@ function registerLifecycleListeners() {
 }
 
 export async function initController(): Promise<void> {
+  if (diagnosticControllerInitialized) {
+    return;
+  }
+
+  diagnosticControllerInitialized = true;
+
   onMount('diagnostic-status').then(() => {
     logger.debug('[DIAGNOSTIC]', 'initController', 'onMount');
     onPageMount();

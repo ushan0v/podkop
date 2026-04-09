@@ -28,6 +28,7 @@ export namespace Podkop {
   // restart                 Restart podkop service
   // enable                  Enable podkop autostart
   // disable                 Disable podkop autostart
+  // uninstall               Remove podkop files installed outside opkg/apk
   // main                    Run main podkop process
   // list_update             Update domain lists
   // check_proxy             Check proxy connectivity
@@ -52,9 +53,11 @@ export namespace Podkop {
     CHECK_DNS_AVAILABLE = 'check_dns_available',
     CHECK_FAKEIP = 'check_fakeip',
     CHECK_NFT_RULES = 'check_nft_rules',
+    CHECK_ZAPRET_RUNTIME = 'check_zapret_runtime',
     GET_STATUS = 'get_status',
     CHECK_SING_BOX = 'check_sing_box',
     GET_SING_BOX_STATUS = 'get_sing_box_status',
+    GET_ZAPRET_STATUS = 'get_zapret_status',
     CLASH_API = 'clash_api',
     RESTART = 'restart',
     START = 'start',
@@ -64,6 +67,7 @@ export namespace Podkop {
     GLOBAL_CHECK = 'global_check',
     SHOW_SING_BOX_CONFIG = 'show_sing_box_config',
     CHECK_LOGS = 'check_logs',
+    CHECK_SING_BOX_LOGS = 'check_sing_box_logs',
     GET_SYSTEM_INFO = 'get_system_info',
   }
 
@@ -89,52 +93,32 @@ export namespace Podkop {
     outbounds: Outbound[];
   }
 
-  export interface ConfigProxyUrlTestSection {
-    connection_type: 'proxy';
-    proxy_config_type: 'urltest';
-    urltest_proxy_links: string[];
-  }
+  export type RuleAction = 'proxy' | 'direct' | 'block' | 'zapret';
+  export type LegacyConnectionType = 'proxy' | 'vpn' | 'block' | 'exclusion';
+  export type ProxyConfigType =
+    | 'urltest'
+    | 'selector'
+    | 'url'
+    | 'outbound'
+    | 'interface';
 
-  export interface ConfigProxySelectorSection {
-    connection_type: 'proxy';
-    proxy_config_type: 'selector';
-    selector_proxy_links: string[];
-  }
-
-  export interface ConfigProxyUrlSection {
-    connection_type: 'proxy';
-    proxy_config_type: 'url';
-    proxy_string: string;
-  }
-
-  export interface ConfigProxyOutboundSection {
-    connection_type: 'proxy';
-    proxy_config_type: 'outbound';
-    outbound_json: string;
-  }
-
-  export interface ConfigVpnSection {
-    connection_type: 'vpn';
-    interface: string;
-  }
-
-  export interface ConfigBlockSection {
-    connection_type: 'block';
-  }
-
-  export type ConfigBaseSection =
-    | ConfigProxyUrlTestSection
-    | ConfigProxySelectorSection
-    | ConfigProxyUrlSection
-    | ConfigProxyOutboundSection
-    | ConfigVpnSection
-    | ConfigBlockSection;
-
-  export type ConfigSection = ConfigBaseSection & {
+  export interface ConfigSection {
     '.name': string;
-    '.type': 'settings' | 'section';
+    '.type': 'settings' | 'rule' | 'node' | 'ruleset' | 'section';
+    enabled?: string;
+    action?: RuleAction;
+    connection_type?: LegacyConnectionType;
+    proxy_config_type?: ProxyConfigType;
+    node?: string;
+    rule_set?: string[];
+    proxy_string?: string;
+    nfqws_opt?: string;
+    selector_proxy_links?: string[];
+    urltest_proxy_links?: string[];
+    outbound_json?: string;
+    interface?: string;
     yacd_secret_key?: string;
-  };
+  }
 
   export interface MethodSuccessResponse<T> {
     success: true;
@@ -186,6 +170,7 @@ export namespace Podkop {
   }
 
   export interface GetStatus {
+    running: number;
     enabled: number;
     status: string;
   }
@@ -201,8 +186,26 @@ export namespace Podkop {
     podkop_latest_version: string;
     luci_app_version: string;
     sing_box_version: string;
+    zapret_version: string;
     openwrt_version: string;
     device_model: string;
+  }
+
+  export interface GetZapretStatus {
+    installed: 0 | 1;
+    version: string;
+    configured: 0 | 1;
+    enabled_rule_count: number;
+    expected_process_count: number;
+    running_process_count: number;
+    standalone_service_enabled: 0 | 1;
+    standalone_service_running: 0 | 1;
+    ready: 0 | 1;
+    conflict: 0 | 1;
+  }
+
+  export interface ZapretCheckResult {
+    zapret_installed: 0 | 1;
   }
 
   export interface GetClashApiProxyLatency {

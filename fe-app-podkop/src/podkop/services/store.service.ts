@@ -159,7 +159,12 @@ export interface StoreType {
   servicesInfoWidget: {
     loading: boolean;
     failed: boolean;
-    data: { singbox: number; podkop: number };
+    data: {
+      singbox: number;
+      podkopRunning: number;
+      podkopEnabled: number;
+      zapret: number;
+    };
   };
   sectionsWidget: {
     loading: boolean;
@@ -187,6 +192,7 @@ export interface StoreType {
     podkop_latest_version: string;
     luci_app_version: string;
     sing_box_version: string;
+    zapret_version: string;
     openwrt_version: string;
     device_model: string;
   };
@@ -215,7 +221,7 @@ const initialStore: StoreType = {
   servicesInfoWidget: {
     loading: true,
     failed: false,
-    data: { singbox: 0, podkop: 0 },
+    data: { singbox: 0, podkopRunning: 0, podkopEnabled: 0, zapret: 0 },
   },
   sectionsWidget: {
     loading: true,

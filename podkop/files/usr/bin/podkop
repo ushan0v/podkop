@@ -9,13 +9,14 @@ check_required_file() {
     fi
 }
 
-PODKOP_LIB="/usr/lib/podkop"
+PODKOP_LIB="/usr/lib/podkop-plus"
 check_required_file /lib/functions.sh
 check_required_file /lib/config/uci.sh
 check_required_file /lib/functions/network.sh
 check_required_file "$PODKOP_LIB/constants.sh"
 check_required_file "$PODKOP_LIB/nft.sh"
 check_required_file "$PODKOP_LIB/helpers.sh"
+check_required_file "$PODKOP_LIB/zapret.sh"
 check_required_file "$PODKOP_LIB/sing_box_config_manager.sh"
 check_required_file "$PODKOP_LIB/sing_box_config_facade.sh"
 check_required_file "$PODKOP_LIB/logging.sh"
@@ -26,12 +27,617 @@ check_required_file "$PODKOP_LIB/rulesets.sh"
 . "$PODKOP_LIB/constants.sh"
 . "$PODKOP_LIB/nft.sh"
 . "$PODKOP_LIB/helpers.sh"
+. "$PODKOP_LIB/zapret.sh"
 . "$PODKOP_LIB/sing_box_config_manager.sh"
 . "$PODKOP_LIB/sing_box_config_facade.sh"
 . "$PODKOP_LIB/logging.sh"
 . "$PODKOP_LIB/rulesets.sh"
 
+PODKOP_INTERNAL_CONFIG_TRIGGER_GUARD="/var/run/podkop-plus.internal-config-change"
+PODKOP_RUNTIME_STATE_DIR="/var/run/podkop-plus"
+PODKOP_RELOAD_STATE_FILE="$PODKOP_RUNTIME_STATE_DIR/reload-state"
+PODKOP_RELOAD_STATE_FORMAT=1
+PODKOP_NFT_POPULATE_ENABLED=1
+
 config_load "$PODKOP_CONFIG"
+
+ensure_runtime_dirs() {
+    mkdir -p "$TMP_SING_BOX_FOLDER"
+    mkdir -p "$TMP_RULESET_FOLDER"
+    mkdir -p "$PODKOP_RUNTIME_STATE_DIR"
+}
+
+podkop_is_running() {
+    pgrep -f "sing-box" > /dev/null 2>&1 &&
+        nft list table inet "$NFT_TABLE_NAME" > /dev/null 2>&1 &&
+        ip rule list | grep -q "lookup $RT_TABLE_NAME" &&
+        ip route list table "$RT_TABLE_NAME" 2> /dev/null | grep -q "local default dev lo scope host"
+}
+
+clear_reload_state() {
+    rm -f "$PODKOP_RELOAD_STATE_FILE"
+}
+
+read_reload_state_value() {
+    local key="$1"
+
+    [ -f "$PODKOP_RELOAD_STATE_FILE" ] || return 1
+
+    awk -F= -v key="$key" '$1 == key { print substr($0, index($0, "=") + 1); exit }' "$PODKOP_RELOAD_STATE_FILE"
+}
+
+reload_state_is_compatible() {
+    [ "$(read_reload_state_value "format")" = "$PODKOP_RELOAD_STATE_FORMAT" ]
+}
+
+signature_begin() {
+    RELOAD_SIGNATURE_TMPFILE="$(mktemp)"
+}
+
+signature_add() {
+    local key="$1"
+    local value="$2"
+
+    printf '[%s]\n%s\n' "$key" "$value" >> "$RELOAD_SIGNATURE_TMPFILE"
+}
+
+signature_finish() {
+    local hash
+
+    hash="$(md5sum "$RELOAD_SIGNATURE_TMPFILE" | awk '{print $1}')"
+    rm -f "$RELOAD_SIGNATURE_TMPFILE"
+    echo "$hash"
+}
+
+build_restart_signature() {
+    local enable_badwan_interface_monitoring badwan_monitored_interfaces badwan_reload_delay
+
+    signature_begin
+    config_get_bool enable_badwan_interface_monitoring "settings" "enable_badwan_interface_monitoring" 0
+    signature_add "settings.enable_badwan_interface_monitoring" "$enable_badwan_interface_monitoring"
+
+    if [ "$enable_badwan_interface_monitoring" -eq 1 ]; then
+        config_get badwan_monitored_interfaces "settings" "badwan_monitored_interfaces"
+        config_get badwan_reload_delay "settings" "badwan_reload_delay" "2000"
+        signature_add "settings.badwan_monitored_interfaces" "$badwan_monitored_interfaces"
+        signature_add "settings.badwan_reload_delay" "$badwan_reload_delay"
+    fi
+
+    signature_finish
+}
+
+build_dnsmasq_signature() {
+    local dont_touch_dhcp
+
+    signature_begin
+    config_get_bool dont_touch_dhcp "settings" "dont_touch_dhcp" 0
+    signature_add "settings.dont_touch_dhcp" "$dont_touch_dhcp"
+    signature_finish
+}
+
+append_sing_box_rule_signature() {
+    local section="$1"
+    local action proxy_config_type domain domain_suffix domain_keyword domain_regex ip_cidr source_ip_cidr \
+        community_lists rule_set mixed_proxy_enabled mixed_proxy_port
+
+    rule_is_enabled "$section" || return 0
+
+    action="$(get_rule_action "$section")"
+    [ -n "$action" ] || return 0
+
+    signature_add "rule.$section.action" "$action"
+
+    case "$action" in
+    proxy)
+        proxy_config_type="$(get_proxy_config_type "$section")"
+        signature_add "rule.$section.proxy_config_type" "$proxy_config_type"
+        case "$proxy_config_type" in
+        url)
+            local proxy_string udp_over_tcp
+            config_get proxy_string "$section" "proxy_string"
+            config_get_bool udp_over_tcp "$section" "enable_udp_over_tcp" 0
+            signature_add "rule.$section.proxy_string" "$proxy_string"
+            signature_add "rule.$section.enable_udp_over_tcp" "$udp_over_tcp"
+            ;;
+        outbound)
+            local outbound_json
+            config_get outbound_json "$section" "outbound_json"
+            signature_add "rule.$section.outbound_json" "$outbound_json"
+            ;;
+        selector)
+            local selector_proxy_links udp_over_tcp
+            config_get selector_proxy_links "$section" "selector_proxy_links"
+            config_get_bool udp_over_tcp "$section" "enable_udp_over_tcp" 0
+            signature_add "rule.$section.selector_proxy_links" "$selector_proxy_links"
+            signature_add "rule.$section.enable_udp_over_tcp" "$udp_over_tcp"
+            ;;
+        urltest)
+            local urltest_proxy_links udp_over_tcp urltest_check_interval urltest_tolerance urltest_testing_url
+            config_get urltest_proxy_links "$section" "urltest_proxy_links"
+            config_get_bool udp_over_tcp "$section" "enable_udp_over_tcp" 0
+            config_get urltest_check_interval "$section" "urltest_check_interval" "3m"
+            config_get urltest_tolerance "$section" "urltest_tolerance" 50
+            config_get urltest_testing_url "$section" "urltest_testing_url" "https://www.gstatic.com/generate_204"
+            signature_add "rule.$section.urltest_proxy_links" "$urltest_proxy_links"
+            signature_add "rule.$section.enable_udp_over_tcp" "$udp_over_tcp"
+            signature_add "rule.$section.urltest_check_interval" "$urltest_check_interval"
+            signature_add "rule.$section.urltest_tolerance" "$urltest_tolerance"
+            signature_add "rule.$section.urltest_testing_url" "$urltest_testing_url"
+            ;;
+        interface)
+            local interface_name domain_resolver_enabled domain_resolver_dns_type domain_resolver_dns_server
+            config_get interface_name "$section" "interface"
+            config_get_bool domain_resolver_enabled "$section" "domain_resolver_enabled" 0
+            signature_add "rule.$section.interface" "$interface_name"
+            signature_add "rule.$section.domain_resolver_enabled" "$domain_resolver_enabled"
+            if [ "$domain_resolver_enabled" -eq 1 ]; then
+                config_get domain_resolver_dns_type "$section" "domain_resolver_dns_type"
+                config_get domain_resolver_dns_server "$section" "domain_resolver_dns_server"
+                signature_add "rule.$section.domain_resolver_dns_type" "$domain_resolver_dns_type"
+                signature_add "rule.$section.domain_resolver_dns_server" "$domain_resolver_dns_server"
+            fi
+            ;;
+        esac
+
+        config_get_bool mixed_proxy_enabled "$section" "mixed_proxy_enabled" 0
+        signature_add "rule.$section.mixed_proxy_enabled" "$mixed_proxy_enabled"
+        if [ "$mixed_proxy_enabled" -eq 1 ]; then
+            config_get mixed_proxy_port "$section" "mixed_proxy_port"
+            signature_add "rule.$section.mixed_proxy_port" "$mixed_proxy_port"
+        fi
+        ;;
+    esac
+
+    domain="$(get_rule_condition_commas_string "$section" "domain" "domains")"
+    domain_suffix="$(get_rule_condition_commas_string "$section" "domain_suffix" "domains")"
+    domain_keyword="$(get_rule_condition_commas_string "$section" "domain_keyword" "generic")"
+    domain_regex="$(get_rule_condition_commas_string "$section" "domain_regex" "generic")"
+    ip_cidr="$(get_rule_condition_commas_string "$section" "ip_cidr" "subnets")"
+    source_ip_cidr="$(get_rule_condition_commas_string "$section" "source_ip_cidr" "subnets")"
+    config_get community_lists "$section" "community_lists"
+    config_get rule_set "$section" "rule_set"
+
+    signature_add "rule.$section.domain" "$domain"
+    signature_add "rule.$section.domain_suffix" "$domain_suffix"
+    signature_add "rule.$section.domain_keyword" "$domain_keyword"
+    signature_add "rule.$section.domain_regex" "$domain_regex"
+    signature_add "rule.$section.ip_cidr" "$ip_cidr"
+    signature_add "rule.$section.source_ip_cidr" "$source_ip_cidr"
+    signature_add "rule.$section.community_lists" "$community_lists"
+    signature_add "rule.$section.rule_set" "$rule_set"
+}
+
+build_sing_box_signature() {
+    local dns_type dns_server bootstrap_dns_server rewrite_ttl output_network_interface disable_quic routing_excluded_ips \
+        update_interval cache_path config_path log_level enable_yacd enable_yacd_wan_access yacd_secret_key \
+        download_lists_via_proxy download_lists_via_proxy_section service_listen_address
+
+    signature_begin
+
+    config_get dns_type "settings" "dns_type" "doh"
+    config_get dns_server "settings" "dns_server" "1.1.1.1"
+    config_get bootstrap_dns_server "settings" "bootstrap_dns_server" "77.88.8.8"
+    config_get rewrite_ttl "settings" "dns_rewrite_ttl" "60"
+    config_get output_network_interface "settings" "output_network_interface"
+    config_get_bool disable_quic "settings" "disable_quic" 0
+    config_get routing_excluded_ips "settings" "routing_excluded_ips"
+    config_get update_interval "settings" "update_interval" "1d"
+    config_get cache_path "settings" "cache_path" "/tmp/sing-box/cache.db"
+    config_get config_path "settings" "config_path"
+    config_get log_level "settings" "log_level" "warn"
+    config_get service_listen_address "settings" "service_listen_address"
+    config_get_bool enable_yacd "settings" "enable_yacd" 0
+    config_get_bool enable_yacd_wan_access "settings" "enable_yacd_wan_access" 0
+    config_get_bool download_lists_via_proxy "settings" "download_lists_via_proxy" 0
+
+    signature_add "settings.dns_type" "$dns_type"
+    signature_add "settings.dns_server" "$dns_server"
+    signature_add "settings.bootstrap_dns_server" "$bootstrap_dns_server"
+    signature_add "settings.dns_rewrite_ttl" "$rewrite_ttl"
+    signature_add "settings.output_network_interface" "$output_network_interface"
+    signature_add "settings.disable_quic" "$disable_quic"
+    signature_add "settings.routing_excluded_ips" "$routing_excluded_ips"
+    signature_add "settings.update_interval" "$update_interval"
+    signature_add "settings.cache_path" "$cache_path"
+    signature_add "settings.config_path" "$config_path"
+    signature_add "settings.log_level" "$log_level"
+    signature_add "settings.service_listen_address" "$service_listen_address"
+    signature_add "settings.enable_yacd" "$enable_yacd"
+    if [ "$enable_yacd" -eq 1 ]; then
+        signature_add "settings.enable_yacd_wan_access" "$enable_yacd_wan_access"
+        config_get yacd_secret_key "settings" "yacd_secret_key"
+        signature_add "settings.yacd_secret_key" "$yacd_secret_key"
+    fi
+
+    signature_add "settings.download_lists_via_proxy" "$download_lists_via_proxy"
+    if [ "$download_lists_via_proxy" -eq 1 ]; then
+        config_get download_lists_via_proxy_section "settings" "download_lists_via_proxy_section"
+        signature_add "settings.download_lists_via_proxy_section" "$download_lists_via_proxy_section"
+    fi
+
+    config_foreach append_sing_box_rule_signature "rule"
+    signature_finish
+}
+
+append_nft_rule_signature() {
+    local section="$1"
+    local ip_cidr community_lists remote_subnet_lists
+
+    rule_is_enabled "$section" || return 0
+
+    ip_cidr="$(get_rule_condition_commas_string "$section" "ip_cidr" "subnets")"
+    config_get community_lists "$section" "community_lists"
+    config_get remote_subnet_lists "$section" "remote_subnet_lists"
+
+    signature_add "rule.$section.ip_cidr" "$ip_cidr"
+    signature_add "rule.$section.community_lists" "$community_lists"
+    signature_add "rule.$section.remote_subnet_lists" "$remote_subnet_lists"
+}
+
+build_nft_signature() {
+    local source_network_interfaces exclude_ntp
+
+    signature_begin
+    config_get source_network_interfaces "settings" "source_network_interfaces" "br-lan"
+    config_get_bool exclude_ntp "settings" "exclude_ntp" 0
+    signature_add "settings.source_network_interfaces" "$source_network_interfaces"
+    signature_add "settings.exclude_ntp" "$exclude_ntp"
+    config_foreach append_nft_rule_signature "rule"
+    signature_finish
+}
+
+append_zapret_queue_signature() {
+    local section="$1"
+
+    rule_is_enabled "$section" || return 0
+    [ "$(get_rule_action "$section")" = "zapret" ] || return 0
+
+    signature_add "zapret_queue.section" "$section"
+}
+
+build_zapret_queue_signature() {
+    signature_begin
+    config_foreach append_zapret_queue_signature "rule"
+    signature_finish
+}
+
+append_zapret_runtime_signature() {
+    local section="$1"
+    local domain domain_suffix community_lists rule_set user_domain_list_type items
+
+    rule_is_enabled "$section" || return 0
+    [ "$(get_rule_action "$section")" = "zapret" ] || return 0
+
+    domain="$(get_rule_condition_commas_string "$section" "domain" "domains")"
+    domain_suffix="$(get_rule_condition_commas_string "$section" "domain_suffix" "domains")"
+    config_get community_lists "$section" "community_lists"
+    config_get rule_set "$section" "rule_set"
+    config_get user_domain_list_type "$section" "user_domain_list_type" "disabled"
+
+    signature_add "zapret.$section.nfqws_opt" "$(get_rule_nfqws_opt "$section")"
+    signature_add "zapret.$section.domain" "$domain"
+    signature_add "zapret.$section.domain_suffix" "$domain_suffix"
+    signature_add "zapret.$section.community_lists" "$community_lists"
+    signature_add "zapret.$section.rule_set" "$rule_set"
+    signature_add "zapret.$section.user_domain_list_type" "$user_domain_list_type"
+    config_get items "$section" "local_domain_lists"
+    signature_add "zapret.$section.local_domain_lists" "$items"
+    config_get items "$section" "remote_domain_lists"
+    signature_add "zapret.$section.remote_domain_lists" "$items"
+
+    case "$user_domain_list_type" in
+    dynamic) config_get items "$section" "user_domains" ;;
+    text) config_get items "$section" "user_domains_text" ;;
+    *) items="" ;;
+    esac
+    signature_add "zapret.$section.user_domains" "$items"
+}
+
+build_zapret_runtime_signature() {
+    signature_begin
+    config_foreach append_zapret_runtime_signature "rule"
+    signature_finish
+}
+
+append_list_update_signature() {
+    local section="$1"
+    local community_lists remote_domain_lists remote_subnet_lists
+
+    rule_is_enabled "$section" || return 0
+
+    config_get community_lists "$section" "community_lists"
+    config_get remote_domain_lists "$section" "remote_domain_lists"
+    config_get remote_subnet_lists "$section" "remote_subnet_lists"
+
+    signature_add "lists.$section.community_lists" "$community_lists"
+    signature_add "lists.$section.remote_domain_lists" "$remote_domain_lists"
+    signature_add "lists.$section.remote_subnet_lists" "$remote_subnet_lists"
+}
+
+build_list_update_signature() {
+    signature_begin
+    config_foreach append_list_update_signature "rule"
+    signature_finish
+}
+
+build_cron_signature() {
+    local update_interval
+
+    signature_begin
+    config_get update_interval "settings" "update_interval" "1d"
+    signature_add "settings.update_interval" "$update_interval"
+    config_foreach append_list_update_signature "rule"
+    signature_finish
+}
+
+capture_reload_state() {
+    config_load "$PODKOP_CONFIG"
+    RELOAD_STATE_RESTART_SIGNATURE="$(build_restart_signature)"
+    RELOAD_STATE_DNSMASQ_SIGNATURE="$(build_dnsmasq_signature)"
+    RELOAD_STATE_SING_BOX_SIGNATURE="$(build_sing_box_signature)"
+    RELOAD_STATE_NFT_SIGNATURE="$(build_nft_signature)"
+    RELOAD_STATE_ZAPRET_QUEUE_SIGNATURE="$(build_zapret_queue_signature)"
+    RELOAD_STATE_ZAPRET_RUNTIME_SIGNATURE="$(build_zapret_runtime_signature)"
+    RELOAD_STATE_LIST_SIGNATURE="$(build_list_update_signature)"
+    RELOAD_STATE_CRON_SIGNATURE="$(build_cron_signature)"
+    config_get_bool RELOAD_STATE_DONT_TOUCH_DHCP "settings" "dont_touch_dhcp" 0
+}
+
+write_reload_state() {
+    mkdir -p "$PODKOP_RUNTIME_STATE_DIR"
+    cat > "$PODKOP_RELOAD_STATE_FILE" <<EOF
+format=$PODKOP_RELOAD_STATE_FORMAT
+restart_signature=$RELOAD_STATE_RESTART_SIGNATURE
+dnsmasq_signature=$RELOAD_STATE_DNSMASQ_SIGNATURE
+sing_box_signature=$RELOAD_STATE_SING_BOX_SIGNATURE
+nft_signature=$RELOAD_STATE_NFT_SIGNATURE
+zapret_queue_signature=$RELOAD_STATE_ZAPRET_QUEUE_SIGNATURE
+zapret_runtime_signature=$RELOAD_STATE_ZAPRET_RUNTIME_SIGNATURE
+list_signature=$RELOAD_STATE_LIST_SIGNATURE
+cron_signature=$RELOAD_STATE_CRON_SIGNATURE
+dont_touch_dhcp=$RELOAD_STATE_DONT_TOUCH_DHCP
+EOF
+}
+
+enabled_rule_has_list_sources() {
+    local section="$1"
+    local community_lists remote_domain_lists remote_subnet_lists
+
+    rule_is_enabled "$section" || return 0
+    config_get community_lists "$section" "community_lists"
+    config_get remote_domain_lists "$section" "remote_domain_lists"
+    config_get remote_subnet_lists "$section" "remote_subnet_lists"
+
+    if [ -n "$community_lists" ] || [ -n "$remote_domain_lists" ] || [ -n "$remote_subnet_lists" ]; then
+        RELOAD_LIST_SOURCES_PRESENT=1
+    fi
+}
+
+has_list_update_sources() {
+    RELOAD_LIST_SOURCES_PRESENT=0
+    config_foreach enabled_rule_has_list_sources "rule"
+    [ "$RELOAD_LIST_SOURCES_PRESENT" -eq 1 ]
+}
+
+enabled_rule_has_nft_list_sources() {
+    local section="$1"
+    local community_lists remote_subnet_lists
+
+    rule_is_enabled "$section" || return 0
+    config_get community_lists "$section" "community_lists"
+    config_get remote_subnet_lists "$section" "remote_subnet_lists"
+
+    if [ -n "$community_lists" ] || [ -n "$remote_subnet_lists" ]; then
+        RELOAD_NFT_LIST_SOURCES_PRESENT=1
+    fi
+}
+
+has_nft_list_update_sources() {
+    RELOAD_NFT_LIST_SOURCES_PRESENT=0
+    config_foreach enabled_rule_has_nft_list_sources "rule"
+    [ "$RELOAD_NFT_LIST_SOURCES_PRESENT" -eq 1 ]
+}
+
+populate_nft_runtime_sets_from_rule() {
+    local section="$1"
+    local ip_values
+
+    rule_is_enabled "$section" || return 0
+
+    ip_values="$(get_rule_condition_commas_string "$section" "ip_cidr" "subnets")"
+    [ -n "$ip_values" ] && nft_add_set_elements "$NFT_TABLE_NAME" "$NFT_COMMON_SET_NAME" "$ip_values"
+}
+
+populate_nft_runtime_sets() {
+    config_foreach populate_nft_runtime_sets_from_rule "rule"
+}
+
+rebuild_nft_runtime() {
+    log "Rebuilding nft runtime"
+
+    if nft list table inet "$NFT_TABLE_NAME" > /dev/null 2>&1; then
+        nft delete table inet "$NFT_TABLE_NAME"
+    fi
+
+    route_table_rule_mark
+    create_nft_rules
+}
+
+refresh_list_update_cron() {
+    local cron_job
+
+    remove_cron_job
+
+    if ! has_list_update_sources; then
+        return 0
+    fi
+
+    cron_job="$(build_list_update_cron_job)" || return 1
+    crontab -l | {
+        cat
+        echo "$cron_job"
+    } | crontab -
+    log "The cron job has been created: $cron_job"
+}
+
+reload_sing_box_runtime() {
+    log "Reloading sing-box runtime"
+
+    if ! /etc/init.d/sing-box reload; then
+        log "Failed to reload sing-box. Aborted." "fatal"
+        exit 1
+    fi
+}
+
+get_rule_action() {
+    local section="$1"
+    local action connection_type section_type
+
+    config_get action "$section" "action"
+    if [ -n "$action" ]; then
+        echo "$action"
+        return 0
+    fi
+
+    config_get connection_type "$section" "connection_type"
+    case "$connection_type" in
+    proxy | vpn) echo "proxy" ;;
+    block) echo "block" ;;
+    exclusion) echo "direct" ;;
+    *) echo "" ;;
+    esac
+}
+
+get_proxy_config_type() {
+    local section="$1"
+    local proxy_config_type connection_type
+
+    config_get proxy_config_type "$section" "proxy_config_type"
+    if [ -n "$proxy_config_type" ]; then
+        echo "$proxy_config_type"
+        return 0
+    fi
+
+    config_get connection_type "$section" "connection_type"
+    if [ "$connection_type" = "vpn" ]; then
+        echo "interface"
+    fi
+}
+
+rule_is_enabled() {
+    local section="$1"
+    local enabled
+
+    config_get_bool enabled "$section" "enabled" 1
+    [ "$enabled" -eq 1 ]
+}
+
+commit_podkop_config() {
+    # Podkop updates a small runtime flag in its own UCI config while starting
+    # and stopping. Mark these commits so the init trigger can ignore the
+    # self-induced config.change event instead of scheduling another reload.
+    : > "$PODKOP_INTERNAL_CONFIG_TRIGGER_GUARD"
+    uci commit "podkop" && config_load "$PODKOP_CONFIG"
+}
+
+migrate_legacy_section_to_rule() {
+    local section="$1"
+    local action label proxy_config_type
+
+    action="$(get_rule_action "$section")"
+    proxy_config_type="$(get_proxy_config_type "$section")"
+    config_get label "$section" "label"
+
+    [ -z "$label" ] && label="$section"
+
+    uci set "podkop.$section=rule"
+    uci set "podkop.$section.label=$label"
+    uci set "podkop.$section.enabled=1"
+
+    if [ -n "$action" ]; then
+        uci set "podkop.$section.action=$action"
+    fi
+
+    if [ -n "$proxy_config_type" ]; then
+        uci set "podkop.$section.proxy_config_type=$proxy_config_type"
+    fi
+
+    legacy_migration_changed=1
+}
+
+append_unique_space_item() {
+    local current="$1"
+    local item="$2"
+
+    if [ -z "$item" ]; then
+        echo "$current"
+        return 0
+    fi
+
+    if printf '%s\n' "$current" | tr ' ' '\n' | grep -Fxq "$item"; then
+        echo "$current"
+        return 0
+    fi
+
+    if [ -z "$current" ]; then
+        echo "$item"
+    else
+        echo "$current $item"
+    fi
+}
+
+migrate_builtin_rulesets_to_community_lists() {
+    local section="$1"
+    local rule_set community_lists next_rule_set next_community_lists reference moved
+
+    config_get rule_set "$section" "rule_set"
+    [ -n "$rule_set" ] || return 0
+
+    config_get community_lists "$section" "community_lists"
+    next_community_lists="$community_lists"
+    moved=0
+
+    for reference in $rule_set; do
+        if printf '%s\n' "$COMMUNITY_SERVICES" | tr ' ' '\n' | grep -Fxq "$reference"; then
+            next_community_lists="$(append_unique_space_item "$next_community_lists" "$reference")"
+            moved=1
+        else
+            next_rule_set="$(append_unique_space_item "$next_rule_set" "$reference")"
+        fi
+    done
+
+    [ "$moved" -eq 1 ] || return 0
+
+    log "Migrating built-in rule sets from rule_set to community_lists for '$section'"
+    uci -q delete "podkop.$section.rule_set"
+    uci -q delete "podkop.$section.community_lists"
+
+    for reference in $next_community_lists; do
+        uci add_list "podkop.$section.community_lists=$reference"
+    done
+
+    for reference in $next_rule_set; do
+        uci add_list "podkop.$section.rule_set=$reference"
+    done
+
+    legacy_migration_changed=1
+}
+
+migrate_legacy_zapret_nfqws_default() {
+    local section="$1"
+    local action nfqws_opt
+
+    action="$(get_rule_action "$section")"
+    [ "$action" = "zapret" ] || return 0
+
+    config_get nfqws_opt "$section" "nfqws_opt"
+    [ -n "$nfqws_opt" ] || return 0
+    [ "$nfqws_opt" = "$ZAPRET_LEGACY_DEFAULT_NFQWS_OPT" ] || return 0
+
+    log "Migrating legacy built-in NFQWS strategy for '$section' to the Podkop Plus compatible default"
+    uci set "podkop.$section.nfqws_opt=$ZAPRET_DEFAULT_NFQWS_OPT"
+    legacy_migration_changed=1
+}
 
 check_requirements() {
     log "Check Requirements"
@@ -76,16 +682,19 @@ check_requirements() {
     fi
 
     if has_outbound_section; then
-        log "Outbound section found" "debug"
+        log "Outbound proxy section found" "debug"
     else
-        log "Outbound section not found. Please check your configuration file (missing proxy_string, selector_proxy_links, urltest_proxy_links, outbound_json, or interface). Aborted." "error"
-        exit 1
+        log "No proxy outbound sections found. Podkop Plus will use direct and/or Zapret-only routing." "warn"
     fi
+
+    check_zapret_requirements
 }
 
-_check_outbound_section() {
+_check_outbound_node() {
     local section="$1"
-    local proxy_string interface outbound_json urltest_proxy_links
+    local proxy_string interface outbound_json selector_proxy_links urltest_proxy_links
+
+    rule_is_enabled "$section" || return 0
 
     config_get proxy_string "$section" "proxy_string"
     config_get selector_proxy_links "$section" "selector_proxy_links"
@@ -102,19 +711,19 @@ _check_outbound_section() {
 has_outbound_section() {
     local section_exists=1
 
-    config_foreach _check_outbound_section "section"
+    config_foreach _check_outbound_node "rule"
 
     return $section_exists
 }
 
 start_main() {
-    log "Starting podkop"
-
-    check_requirements
+    log "Starting Podkop Plus"
 
     migration
 
-    config_foreach process_validate_service "section"
+    check_requirements
+
+    config_foreach process_validate_rule "rule"
 
     br_netfilter_disable
 
@@ -123,8 +732,7 @@ start_main() {
 
     sleep 1
 
-    mkdir -p "$TMP_SING_BOX_FOLDER"
-    mkdir -p "$TMP_RULESET_FOLDER"
+    ensure_runtime_dirs
 
     # base
     route_table_rule_mark
@@ -133,16 +741,16 @@ start_main() {
 
     # sing-box
     sing_box_init_config
-    config_foreach add_cron_job "section"
+    refresh_list_update_cron
     /etc/init.d/sing-box start
+    start_zapret_runtime
 
     log "Nice"
     list_update &
-    echo $! > /var/run/podkop_list_update.pid
 }
 
 stop_main() {
-    log "Stopping the podkop"
+    log "Stopping Podkop Plus"
 
     if [ -f /var/run/podkop_list_update.pid ]; then
         pid=$(cat /var/run/podkop_list_update.pid)
@@ -157,13 +765,15 @@ stop_main() {
 
     rm -f "$TMP_RULESET_FOLDER"/*
 
+    stop_zapret_runtime
+
     log "Flush nft"
     if nft list table inet "$NFT_TABLE_NAME" > /dev/null 2>&1; then
         nft delete table inet "$NFT_TABLE_NAME"
     fi
 
     log "Flush ip rule"
-    if ip rule list | grep -q "podkop"; then
+    if ip rule list | grep -q "$RT_TABLE_NAME"; then
         ip rule del fwmark "$NFT_FAKEIP_MARK"/"$NFT_FAKEIP_MARK" table "$RT_TABLE_NAME" priority 105
     fi
 
@@ -185,7 +795,9 @@ start() {
     fi
 
     uci_set "podkop" "settings" "shutdown_correctly" 0
-    uci commit "podkop" && config_load "$PODKOP_CONFIG"
+    commit_podkop_config
+    capture_reload_state
+    write_reload_state
 }
 
 stop() {
@@ -198,24 +810,250 @@ stop() {
     stop_main
 
     uci_set "podkop" "settings" "shutdown_correctly" 1
-    uci commit "podkop" && config_load "$PODKOP_CONFIG"
+    commit_podkop_config
+    clear_reload_state
 }
 
 reload() {
-    log "Podkop reload"
-    stop_main
-    start_main
+    local reload_reason="${1:-}"
+    local force_runtime_reload=0
+    local previous_restart_signature previous_dnsmasq_signature previous_sing_box_signature previous_nft_signature
+    local previous_zapret_queue_signature previous_zapret_runtime_signature previous_list_signature previous_cron_signature
+    local previous_dont_touch_dhcp needs_init_restart needs_sing_box_reload needs_nft_rebuild needs_zapret_restart
+    local needs_dnsmasq_configure needs_dnsmasq_restore needs_cron_refresh needs_list_update
+
+    log "Podkop Plus reload"
+
+    [ "$reload_reason" = "on_config_change" ] || force_runtime_reload=1
+
+    migration
+    config_load "$PODKOP_CONFIG"
+    check_requirements
+    config_foreach process_validate_rule "rule"
+    ensure_runtime_dirs
+
+    if ! podkop_is_running; then
+        log "Podkop runtime is incomplete, falling back to init restart"
+        "$PODKOP_SERVICE_INIT" restart
+        return $?
+    fi
+
+    if ! reload_state_is_compatible; then
+        log "Reload state is missing or incompatible, falling back to init restart"
+        "$PODKOP_SERVICE_INIT" restart
+        return $?
+    fi
+
+    previous_restart_signature="$(read_reload_state_value "restart_signature")"
+    previous_dnsmasq_signature="$(read_reload_state_value "dnsmasq_signature")"
+    previous_sing_box_signature="$(read_reload_state_value "sing_box_signature")"
+    previous_nft_signature="$(read_reload_state_value "nft_signature")"
+    previous_zapret_queue_signature="$(read_reload_state_value "zapret_queue_signature")"
+    previous_zapret_runtime_signature="$(read_reload_state_value "zapret_runtime_signature")"
+    previous_list_signature="$(read_reload_state_value "list_signature")"
+    previous_cron_signature="$(read_reload_state_value "cron_signature")"
+    previous_dont_touch_dhcp="$(read_reload_state_value "dont_touch_dhcp")"
+    capture_reload_state
+
+    needs_init_restart=0
+    needs_sing_box_reload=0
+    needs_nft_rebuild=0
+    needs_zapret_restart=0
+    needs_dnsmasq_configure=0
+    needs_dnsmasq_restore=0
+    needs_cron_refresh=0
+    needs_list_update=0
+
+    [ "$RELOAD_STATE_RESTART_SIGNATURE" != "$previous_restart_signature" ] && needs_init_restart=1
+
+    if [ "$needs_init_restart" -eq 1 ]; then
+        log "Reload requires init restart to refresh procd watchers"
+        "$PODKOP_SERVICE_INIT" restart
+        return $?
+    fi
+
+    [ "$RELOAD_STATE_SING_BOX_SIGNATURE" != "$previous_sing_box_signature" ] && needs_sing_box_reload=1
+    [ "$RELOAD_STATE_NFT_SIGNATURE" != "$previous_nft_signature" ] && needs_nft_rebuild=1
+
+    if [ "$RELOAD_STATE_ZAPRET_QUEUE_SIGNATURE" != "$previous_zapret_queue_signature" ]; then
+        needs_zapret_restart=1
+        needs_nft_rebuild=1
+        needs_sing_box_reload=1
+    fi
+
+    if [ "$RELOAD_STATE_ZAPRET_RUNTIME_SIGNATURE" != "$previous_zapret_runtime_signature" ]; then
+        needs_zapret_restart=1
+    fi
+
+    if [ "$RELOAD_STATE_DNSMASQ_SIGNATURE" != "$previous_dnsmasq_signature" ] &&
+        [ "$RELOAD_STATE_DONT_TOUCH_DHCP" != "$previous_dont_touch_dhcp" ]; then
+        if [ "$RELOAD_STATE_DONT_TOUCH_DHCP" -eq 0 ]; then
+            needs_dnsmasq_configure=1
+        else
+            needs_dnsmasq_restore=1
+        fi
+    fi
+
+    [ "$RELOAD_STATE_CRON_SIGNATURE" != "$previous_cron_signature" ] && needs_cron_refresh=1
+
+    if [ "$RELOAD_STATE_LIST_SIGNATURE" != "$previous_list_signature" ] && has_list_update_sources; then
+        needs_list_update=1
+    fi
+
+    if [ "$needs_nft_rebuild" -eq 1 ] && has_nft_list_update_sources; then
+        needs_list_update=1
+    fi
+
+    if [ "$force_runtime_reload" -eq 1 ] &&
+        [ "$needs_sing_box_reload" -eq 0 ] &&
+        [ "$needs_nft_rebuild" -eq 0 ] &&
+        [ "$needs_zapret_restart" -eq 0 ] &&
+        [ "$needs_dnsmasq_configure" -eq 0 ] &&
+        [ "$needs_dnsmasq_restore" -eq 0 ]; then
+        needs_sing_box_reload=1
+    fi
+
+    log "Reload plan: sing-box=$needs_sing_box_reload nft=$needs_nft_rebuild zapret=$needs_zapret_restart dnsmasq_configure=$needs_dnsmasq_configure dnsmasq_restore=$needs_dnsmasq_restore cron=$needs_cron_refresh list_update=$needs_list_update" "debug"
+
+    if [ "$needs_sing_box_reload" -eq 0 ] &&
+        [ "$needs_nft_rebuild" -eq 0 ] &&
+        [ "$needs_zapret_restart" -eq 0 ] &&
+        [ "$needs_dnsmasq_configure" -eq 0 ] &&
+        [ "$needs_dnsmasq_restore" -eq 0 ] &&
+        [ "$needs_cron_refresh" -eq 0 ] &&
+        [ "$needs_list_update" -eq 0 ]; then
+        log "Reload skipped: runtime-relevant configuration is unchanged"
+        return 0
+    fi
+
+    if [ "$needs_dnsmasq_restore" -eq 1 ]; then
+        dnsmasq_restore force
+    fi
+
+    if [ "$needs_zapret_restart" -eq 1 ]; then
+        stop_zapret_runtime
+    fi
+
+    if [ "$needs_nft_rebuild" -eq 1 ]; then
+        rebuild_nft_runtime
+    fi
+
+    if [ "$needs_sing_box_reload" -eq 1 ]; then
+        sing_box_configure_service
+        if [ "$needs_nft_rebuild" -eq 1 ]; then
+            PODKOP_NFT_POPULATE_ENABLED=1
+        else
+            PODKOP_NFT_POPULATE_ENABLED=0
+        fi
+        sing_box_init_config
+        PODKOP_NFT_POPULATE_ENABLED=1
+        reload_sing_box_runtime
+    elif [ "$needs_nft_rebuild" -eq 1 ]; then
+        populate_nft_runtime_sets
+    fi
+
+    if [ "$needs_zapret_restart" -eq 1 ]; then
+        start_zapret_runtime
+    fi
+
+    if [ "$needs_dnsmasq_configure" -eq 1 ]; then
+        dnsmasq_configure force
+    fi
+
+    if [ "$needs_cron_refresh" -eq 1 ]; then
+        refresh_list_update_cron
+    fi
+
+    if [ "$needs_list_update" -eq 1 ]; then
+        list_update &
+    fi
+
+    write_reload_state
 }
 
 restart() {
-    log "Podkop restart"
+    log "Podkop Plus restart"
     stop
     start
 }
 
+package_manager_remove_if_installed() {
+    local package_name="$1"
+
+    if command -v apk >/dev/null 2>&1; then
+        apk info -e "$package_name" >/dev/null 2>&1 && apk del "$package_name" >/dev/null 2>&1 || true
+        return 0
+    fi
+
+    if command -v opkg >/dev/null 2>&1; then
+        opkg list-installed | grep -Eq "^${package_name}[[:space:]-]" && \
+            opkg remove --force-depends "$package_name" >/dev/null 2>&1 || true
+    fi
+}
+
+uninstall() {
+    log "Uninstalling Podkop Plus"
+
+    if [ -x "$PODKOP_SERVICE_INIT" ]; then
+        stop >/dev/null 2>&1 || true
+        "$PODKOP_SERVICE_INIT" disable >/dev/null 2>&1 || true
+    fi
+
+    if [ -x /etc/init.d/podkop ]; then
+        /etc/init.d/podkop stop >/dev/null 2>&1 || true
+        /etc/init.d/podkop disable >/dev/null 2>&1 || true
+    fi
+
+    package_manager_remove_if_installed "luci-i18n-podkop-plus-ru"
+    package_manager_remove_if_installed "luci-app-podkop-plus"
+    package_manager_remove_if_installed "luci-i18n-podkop-ru"
+    package_manager_remove_if_installed "luci-app-podkop"
+    package_manager_remove_if_installed "podkop"
+
+    rm -rf /usr/lib/podkop-plus
+    rm -rf /usr/lib/podkop
+    rm -rf /www/luci-static/resources/view/podkop
+    rm -f "$PODKOP_SERVICE_INIT"
+    rm -f "$PODKOP_BIN"
+    rm -f /etc/init.d/podkop
+    rm -f /usr/bin/podkop
+    rm -f /usr/share/luci/menu.d/luci-app-podkop-plus.json
+    rm -f /usr/share/rpcd/acl.d/luci-app-podkop-plus.json
+    rm -f /usr/share/luci/menu.d/luci-app-podkop.json
+    rm -f /usr/share/rpcd/acl.d/luci-app-podkop.json
+    rm -f /etc/uci-defaults/50_luci-podkop-plus
+    rm -f /etc/uci-defaults/50_luci-podkop
+    rm -f /usr/lib/lua/luci/i18n/podkop.*.lmo
+    rm -f /usr/lib/lua/luci/i18n/podkop.ru.lua
+    rm -f /usr/lib/lua/luci/i18n/podkop.en.lua
+    rm -f /var/luci-indexcache*
+    rm -f /tmp/luci-indexcache*
+    [ -x /etc/init.d/rpcd ] && /etc/init.d/rpcd reload >/dev/null 2>&1 || true
+
+    echo '{"removed":true}' | jq .
+}
+
 # Migrations and validation funcs
 migration() {
-    :
+    legacy_migration_changed=0
+
+    if ! uci show podkop | grep -q "=section"; then
+        config_foreach migrate_builtin_rulesets_to_community_lists "rule"
+        config_foreach migrate_legacy_zapret_nfqws_default "rule"
+        if [ "$legacy_migration_changed" -eq 1 ]; then
+            commit_podkop_config
+        fi
+        return 0
+    fi
+
+    log "Migrating legacy section-based Podkop config to rule-based config"
+    config_foreach migrate_legacy_section_to_rule "section"
+    config_foreach migrate_builtin_rulesets_to_community_lists "rule"
+    config_foreach migrate_legacy_zapret_nfqws_default "rule"
+
+    if [ "$legacy_migration_changed" -eq 1 ]; then
+        commit_podkop_config
+    fi
 }
 
 validate_service() {
@@ -231,13 +1069,124 @@ validate_service() {
     exit 1
 }
 
-process_validate_service() {
-    local section="$1"
-    local community_lists
-    config_get community_lists "$section" "community_lists"
-    if [ -n "$community_lists" ]; then
-        config_list_foreach "$section" "community_lists" validate_service
+validate_ruleset_reference() {
+    local reference="$1"
+
+    if [ -z "$reference" ]; then
+        return 0
     fi
+
+    if printf '%s\n' "$COMMUNITY_SERVICES" | tr ' ' '\n' | grep -Fxq "$reference"; then
+        return 0
+    fi
+
+    case "$reference" in
+    http://*.srs | https://*.srs | /*.srs)
+        return 0
+        ;;
+    esac
+
+    log "Unknown rule set reference '$reference'. Aborted." "fatal"
+    exit 1
+}
+
+ruleset_kind_from_reference_hint() {
+    local reference="$1"
+
+    case "$reference" in
+    *geosite*|*domain*|*domains*|*adguard*|*filter*)
+        echo "domains"
+        ;;
+    *geoip*|*subnet*|*subnets*|*cidr*)
+        echo "subnets"
+        ;;
+    *)
+        echo "unknown"
+        ;;
+    esac
+}
+
+json_ruleset_has_domain_matchers() {
+    local filepath="$1"
+
+    jq -e '
+        .. | objects | to_entries[]? |
+        select(.key == "domain" or .key == "domain_suffix" or .key == "domain_keyword" or .key == "domain_regex") |
+        .value |
+        if type == "array" then length > 0
+        elif type == "string" then . != ""
+        else false end
+    ' "$filepath" > /dev/null 2>&1
+}
+
+detect_local_binary_ruleset_kind() {
+    local filepath="$1"
+    local json_tmpfile kind
+
+    kind="$(ruleset_kind_from_reference_hint "$filepath")"
+    if [ "$kind" != "unknown" ]; then
+        echo "$kind"
+        return 0
+    fi
+
+    if ! file_exists "$filepath"; then
+        echo "unknown"
+        return 0
+    fi
+
+    json_tmpfile="$(mktemp)"
+    if ! decompile_binary_ruleset "$filepath" "$json_tmpfile"; then
+        rm -f "$json_tmpfile"
+        echo "unknown"
+        return 0
+    fi
+
+    if json_ruleset_has_domain_matchers "$json_tmpfile"; then
+        kind="domains"
+    else
+        kind="subnets"
+    fi
+
+    rm -f "$json_tmpfile"
+    echo "$kind"
+}
+
+detect_inline_ruleset_reference_kind() {
+    local reference="$1"
+    local kind
+
+    kind="$(ruleset_kind_from_reference_hint "$reference")"
+    if [ "$kind" != "unknown" ]; then
+        echo "$kind"
+        return 0
+    fi
+
+    case "$reference" in
+    /*.srs)
+        detect_local_binary_ruleset_kind "$reference"
+        ;;
+    http://*.srs|https://*.srs)
+        echo "domains"
+        ;;
+    *)
+        echo "unknown"
+        ;;
+    esac
+}
+
+process_validate_rule() {
+    local section="$1"
+    local action
+
+    rule_is_enabled "$section" || return 0
+
+    action="$(get_rule_action "$section")"
+    if [ "$action" = "zapret" ]; then
+        validate_rule_nfqws_opt "$section"
+    fi
+
+    config_list_foreach "$section" "community_lists" validate_service
+    config_list_foreach "$section" "rule_set" validate_ruleset_reference
 }
 
 br_netfilter_disable() {
@@ -246,6 +1195,190 @@ br_netfilter_disable() {
         sysctl -w net.bridge.bridge-nf-call-iptables=0
         sysctl -w net.bridge.bridge-nf-call-ip6tables=0
     fi
+}
+
+parse_generic_string_to_commas_string() {
+    local string="$1"
+
+    printf "%s\n" "$string" | sed -e 's/[[:space:]]*\/\/.*$//' -e 's/[[:space:]]*#.*$//' | tr ',' '\n' | sed 's/\r//g' | \
+        sed 's/^[[:space:]]*//;s/[[:space:]]*$//' | grep -v '^$' | awk 'BEGIN { first = 1 } { if (!first) printf ","; printf "%s", $0; first = 0 } END { if (!first) printf "\n" }'
+}
+
+get_rule_condition_commas_string() {
+    local section="$1"
+    local key="$2"
+    local kind="$3"
+
+    local text_mode conditions_text_mode text_value list_value
+    config_get_bool text_mode "$section" "${key}_text_mode" 0
+    config_get_bool conditions_text_mode "$section" "conditions_text_mode" 0
+    config_get text_value "$section" "${key}_text"
+    config_get list_value "$section" "$key"
+
+    if [ "$text_mode" -eq 1 ] || [ "$conditions_text_mode" -eq 1 ]; then
+        case "$kind" in
+        domains) parse_domain_or_subnet_string_to_commas_string "$text_value" "domains" ;;
+        subnets) parse_domain_or_subnet_string_to_commas_string "$text_value" "subnets" ;;
+        *)
+            parse_generic_string_to_commas_string "$text_value"
+            ;;
+        esac
+        return 0
+    fi
+
+    if [ -n "$list_value" ]; then
+        echo "${list_value// /,}"
+        return 0
+    fi
+
+    if [ -n "$text_value" ]; then
+        case "$kind" in
+        domains) parse_domain_or_subnet_string_to_commas_string "$text_value" "domains" ;;
+        subnets) parse_domain_or_subnet_string_to_commas_string "$text_value" "subnets" ;;
+        *)
+            parse_generic_string_to_commas_string "$text_value"
+            ;;
+        esac
+        return 0
+    fi
+
+    echo "${list_value// /,}"
+}
+
+get_rule_condition_json_array() {
+    local section="$1"
+    local key="$2"
+    local kind="$3"
+    local values
+
+    values="$(get_rule_condition_commas_string "$section" "$key" "$kind")"
+    comma_string_to_json_array "$values"
+}
+
+ruleset_registered() {
+    local tag="$1"
+    echo ",$configured_rulesets," | grep -q ",$tag,"
+}
+
+register_ruleset_tag() {
+    local tag="$1"
+    if ! ruleset_registered "$tag"; then
+        if [ -z "$configured_rulesets" ]; then
+            configured_rulesets="$tag"
+        else
+            configured_rulesets="$configured_rulesets,$tag"
+        fi
+    fi
+}
+
+ENSURED_RULESET_TAG=""
+ENSURED_RULESET_KIND="unknown"
+
+ensure_builtin_ruleset() {
+    local name="$1"
+    local tag="builtin-$name-ruleset"
+
+    ENSURED_RULESET_TAG="$tag"
+    ENSURED_RULESET_KIND="domains"
+
+    if ! ruleset_registered "$tag"; then
+        local detour update_interval url
+        detour="$(get_download_detour_tag)"
+        config_get update_interval "settings" "update_interval" "1d"
+        url="$SRS_MAIN_URL/$name.srs"
+        config=$(sing_box_cm_add_remote_ruleset "$config" "$tag" "binary" "$url" "$detour" "$update_interval")
+        register_ruleset_tag "$tag"
+    fi
+}
+
+ensure_custom_ruleset() {
+    local section="$1"
+    local tag="$section"
+
+    ENSURED_RULESET_TAG="$tag"
+    ENSURED_RULESET_KIND="unknown"
+
+    if ruleset_registered "$tag"; then
+        return 0
+    fi
+
+    local enabled type format path url outbound update_interval detour kind
+    config_get_bool enabled "$section" "enabled" 1
+    [ "$enabled" -eq 1 ] || return 1
+
+    config_get type "$section" "type" "remote"
+    config_get format "$section" "format" "binary"
+    config_get path "$section" "path"
+    config_get url "$section" "url"
+    config_get outbound "$section" "outbound"
+    config_get update_interval "$section" "update_interval" "1d"
+
+    case "$type" in
+    local)
+        if [ "$format" = "binary" ]; then
+            kind="$(detect_local_binary_ruleset_kind "$path")"
+        else
+            kind="$(ruleset_kind_from_reference_hint "$path")"
+        fi
+        config=$(sing_box_cm_add_local_ruleset "$config" "$tag" "$format" "$path")
+        ;;
+    remote)
+        kind="$(ruleset_kind_from_reference_hint "$url")"
+        [ "$kind" = "unknown" ] && kind="domains"
+        [ -n "$outbound" ] && detour="$(get_outbound_tag_by_section "$outbound")"
+        config=$(sing_box_cm_add_remote_ruleset "$config" "$tag" "$format" "$url" "$detour" "$update_interval")
+        ;;
+    *)
+        log "Unknown rule set type '$type' for '$section'. Aborted." "fatal"
+        exit 1
+        ;;
+    esac
+
+    ENSURED_RULESET_KIND="$kind"
+
+    register_ruleset_tag "$tag"
+}
+
+ensure_inline_custom_ruleset() {
+    local reference="$1"
+    local tag hash detour update_interval
+
+    hash="$(printf '%s' "$reference" | md5sum | cut -c1-12)"
+    tag="inline-custom-$hash-ruleset"
+    ENSURED_RULESET_TAG="$tag"
+    ENSURED_RULESET_KIND="$(detect_inline_ruleset_reference_kind "$reference")"
+
+    if ! ruleset_registered "$tag"; then
+        config_get update_interval "settings" "update_interval" "1d"
+
+        case "$reference" in
+        /*.srs)
+            config=$(sing_box_cm_add_local_ruleset "$config" "$tag" "binary" "$reference")
+            ;;
+        http://*.srs | https://*.srs)
+            detour="$(get_download_detour_tag)"
+            config=$(sing_box_cm_add_remote_ruleset "$config" "$tag" "binary" "$reference" "$detour" "$update_interval")
+            ;;
+        *)
+            return 1
+            ;;
+        esac
+
+        register_ruleset_tag "$tag"
+    fi
+}
+
+resolve_ruleset_reference() {
+    local reference="$1"
+    ENSURED_RULESET_TAG=""
+    ENSURED_RULESET_KIND="unknown"
+
+    if printf '%s\n' "$COMMUNITY_SERVICES" | tr ' ' '\n' | grep -Fxq "$reference"; then
+        ensure_builtin_ruleset "$reference"
+        return 0
+    fi
+
+    ensure_inline_custom_ruleset "$reference"
 }
 
 # Main funcs
@@ -322,6 +1455,7 @@ create_nft_rules() {
 
     nft add rule inet "$NFT_TABLE_NAME" mangle_output ip daddr "@$NFT_LOCALV4_SET_NAME" return
     nft add rule inet "$NFT_TABLE_NAME" mangle_output meta mark "$NFT_OUTBOUND_MARK" counter return
+    create_zapret_nft_rules
     nft add rule inet "$NFT_TABLE_NAME" mangle_output ip daddr "@$NFT_COMMON_SET_NAME" meta l4proto tcp meta mark set "$NFT_FAKEIP_MARK" counter
     nft add rule inet "$NFT_TABLE_NAME" mangle_output ip daddr "@$NFT_COMMON_SET_NAME" meta l4proto udp meta mark set "$NFT_FAKEIP_MARK" counter
     nft add rule inet "$NFT_TABLE_NAME" mangle_output ip daddr "$SB_FAKEIP_INET4_RANGE" meta l4proto tcp meta mark set "$NFT_FAKEIP_MARK" counter
@@ -347,9 +1481,10 @@ backup_dnsmasq_config_option() {
 }
 
 dnsmasq_configure() {
+    local force="${1:-0}"
     local shutdown_correctly
     config_get shutdown_correctly "settings" "shutdown_correctly"
-    if [ "$shutdown_correctly" -eq 0 ]; then
+    if [ "$force" != "force" ] && [ "$shutdown_correctly" -eq 0 ]; then
         log "Previous shutdown of podkop was not correct, reconfiguration of dnsmasq is not required"
         return 0
     fi
@@ -378,10 +1513,11 @@ dnsmasq_configure() {
 }
 
 dnsmasq_restore() {
+    local force="${1:-0}"
     log "Restoring the dnsmasq configuration"
     local shutdown_correctly
     config_get shutdown_correctly "settings" "shutdown_correctly"
-    if [ "$shutdown_correctly" -eq 1 ]; then
+    if [ "$force" != "force" ] && [ "$shutdown_correctly" -eq 1 ]; then
         log "Previous shutdown of podkop was correct, reconfiguration of dnsmasq is not required"
         return 0
     fi
@@ -431,55 +1567,55 @@ dnsmasq_restore() {
     /etc/init.d/dnsmasq restart
 }
 
-add_cron_job() {
-    ## Future: make a check so that it doesn't recreate many times
-    local community_lists remote_domain_lists remote_subnet_lists update_interval
-    config_get community_lists "$section" "community_lists"
-    config_get remote_domain_lists "$section" "remote_domain_lists"
-    config_get remote_subnet_lists "$section" "remote_subnet_lists"
-    config_get update_interval "settings" "update_interval"
+build_list_update_cron_job() {
+    local update_interval cron_job
 
+    config_get update_interval "settings" "update_interval"
     case "$update_interval" in
     "1h")
-        cron_job="13 * * * * /usr/bin/podkop list_update"
+        cron_job="13 * * * * $PODKOP_BIN list_update"
         ;;
     "3h")
-        cron_job="13 */3 * * * /usr/bin/podkop list_update"
+        cron_job="13 */3 * * * $PODKOP_BIN list_update"
         ;;
     "12h")
-        cron_job="13 */12 * * * /usr/bin/podkop list_update"
+        cron_job="13 */12 * * * $PODKOP_BIN list_update"
         ;;
     "1d")
-        cron_job="13 9 * * * /usr/bin/podkop list_update"
+        cron_job="13 9 * * * $PODKOP_BIN list_update"
         ;;
     "3d")
-        cron_job="13 9 */3 * * /usr/bin/podkop list_update"
+        cron_job="13 9 */3 * * $PODKOP_BIN list_update"
         ;;
     *)
         log "Invalid update_interval value: $update_interval"
-        return
+        return 1
         ;;
     esac
 
-    if [ -n "$community_lists" ] ||
-        [ -n "$remote_domain_lists" ] ||
-        [ -n "$remote_subnet_lists" ]; then
-        remove_cron_job
-        crontab -l | {
-            cat
-            echo "$cron_job"
-        } | crontab -
-        log "The cron job has been created: $cron_job"
-    fi
+    printf '%s\n' "$cron_job"
 }
 
 remove_cron_job() {
-    (crontab -l | grep -v "/usr/bin/podkop list_update") | crontab -
+    (crontab -l | grep -v "$PODKOP_BIN list_update") | crontab -
     log "The cron job removed"
 }
 
 list_update() {
     echolog "🔄 Starting lists update..."
+
+    local pidfile="/var/run/podkop_list_update.pid"
+    local existing_pid
+    if [ -f "$pidfile" ]; then
+        existing_pid=$(cat "$pidfile" 2> /dev/null)
+        if [ -n "$existing_pid" ] && [ "$existing_pid" != "$$" ] && kill -0 "$existing_pid" 2> /dev/null; then
+            echolog "Another lists update is already running, skipping"
+            return 0
+        fi
+    fi
+
+    echo $$ > "$pidfile"
+    trap 'rm -f "$pidfile"' EXIT INT TERM
 
     local nslookup_timeout=3
     local nslookup_attempts=10
@@ -490,7 +1626,7 @@ list_update() {
     local i
 
     # DNS Check
-    for i in $(seq 1 $nslookup_timeout); do
+    for i in $(seq 1 $nslookup_attempts); do
         if nslookup -timeout=$nslookup_timeout openwrt.org > /dev/null 2>&1; then
             echolog "✅ DNS check passed"
             break
@@ -509,7 +1645,7 @@ list_update() {
         local service_proxy_address
         service_proxy_address="$(get_service_proxy_address)"
 
-        if [ -n "$http_proxy_address" ]; then
+        if [ -n "$service_proxy_address" ]; then
             if curl -s -x "http://$service_proxy_address" -m $curl_timeout https://github.com > /dev/null; then
                 echolog "✅ GitHub connection check passed (via proxy)"
                 break
@@ -535,9 +1671,13 @@ list_update() {
 
     echolog "📥 Downloading and processing lists..."
 
-    config_foreach import_community_subnet_lists "section"
-    config_foreach import_domains_from_remote_domain_lists "section"
-    config_foreach import_subnets_from_remote_subnet_lists "section"
+    config_foreach import_builtin_subnets_from_rule "rule"
+    config_foreach import_domains_from_remote_domain_lists "rule"
+    config_foreach import_subnets_from_remote_subnet_lists "rule"
+    # Keep arbitrary .srs rule_set references inside sing-box only.
+    # Mirroring them into nft via decompile/import regressed compared to the
+    # original Podkop behavior and causes long-running list updates plus
+    # unstable routing when third-party SRS files are large or incompatible.
 
     if [ $? -eq 0 ]; then
         echolog "✅ Lists update completed successfully"
@@ -580,6 +1720,7 @@ sing_box_configure_service() {
 sing_box_init_config() {
     local config='{"log":{},"dns":{},"ntp":{},"certificate":{},"endpoints":[],"inbounds":[],"outbounds":[],"route":{},"services":[],"experimental":{}}'
 
+    configured_rulesets=""
     sing_box_configure_log
     sing_box_configure_inbounds
     sing_box_configure_outbounds
@@ -615,11 +1756,159 @@ sing_box_configure_outbounds() {
 
     config=$(sing_box_cm_add_direct_outbound "$config" "$SB_DIRECT_OUTBOUND_TAG")
 
-    config_foreach configure_outbound_handler "section"
+    config_foreach configure_outbound_handler "rule"
 }
 
 configure_outbound_handler() {
     local section="$1"
+    local action proxy_config_type
+
+    rule_is_enabled "$section" || return 0
+
+    action="$(get_rule_action "$section")"
+    proxy_config_type="$(get_proxy_config_type "$section")"
+
+    if [ "$action" = "zapret" ]; then
+        local routing_mark outbound_tag zapret_index
+
+        zapret_index="$(get_zapret_rule_index "$section")"
+        if [ "${zapret_index:-0}" -le 0 ]; then
+            log "Unable to resolve Zapret index for rule '$section'. Aborted." "fatal"
+            exit 1
+        fi
+
+        routing_mark="$(get_zapret_rule_mark_value "$zapret_index")"
+        outbound_tag="$(get_outbound_tag_by_section "$section")"
+        config=$(sing_box_cm_add_direct_outbound "$config" "$outbound_tag" "$routing_mark")
+        return 0
+    fi
+
+    if [ "$action" = "proxy" ]; then
+        case "$proxy_config_type" in
+        url)
+            local proxy_string udp_over_tcp
+            config_get proxy_string "$section" "proxy_string"
+            config_get udp_over_tcp "$section" "enable_udp_over_tcp"
+
+            if [ -z "$proxy_string" ]; then
+                log "Proxy string is not set for rule '$section'. Aborted." "fatal"
+                exit 1
+            fi
+
+            config=$(sing_box_cf_add_proxy_outbound "$config" "$section" "$proxy_string" "$udp_over_tcp")
+            return 0
+            ;;
+        outbound)
+            local json_outbound
+            config_get json_outbound "$section" "outbound_json"
+            config=$(sing_box_cf_add_json_outbound "$config" "$section" "$json_outbound")
+            return 0
+            ;;
+        selector)
+            local selector_proxy_links udp_over_tcp i outbound_tags outbound_tag default_outbound selector_tag \
+                selector_outbounds
+            config_get selector_proxy_links "$section" "selector_proxy_links"
+            config_get udp_over_tcp "$section" "enable_udp_over_tcp"
+
+            if [ -z "$selector_proxy_links" ]; then
+                log "Selector proxy links are not set for rule '$section'. Aborted." "fatal"
+                exit 1
+            fi
+
+            i=1
+            for link in $selector_proxy_links; do
+                config="$(sing_box_cf_add_proxy_outbound "$config" "$section-$i" "$link" "$udp_over_tcp")"
+                outbound_tag="$(get_outbound_tag_by_section "$section-$i")"
+                if [ -z "$outbound_tags" ]; then
+                    outbound_tags="$outbound_tag"
+                    default_outbound="$outbound_tag"
+                else
+                    outbound_tags="$outbound_tags,$outbound_tag"
+                fi
+                i=$((i + 1))
+            done
+
+            selector_tag="$(get_outbound_tag_by_section "$section")"
+            selector_outbounds="$(comma_string_to_json_array "$outbound_tags")"
+            config="$(sing_box_cm_add_selector_outbound "$config" "$selector_tag" "$selector_outbounds" "$default_outbound")"
+            return 0
+            ;;
+        urltest)
+            local urltest_proxy_links udp_over_tcp i urltest_tag selector_tag outbound_tag outbound_tags urltest_outbounds \
+                selector_outbounds urltest_check_interval urltest_tolerance urltest_testing_url
+            config_get urltest_proxy_links "$section" "urltest_proxy_links"
+            config_get udp_over_tcp "$section" "enable_udp_over_tcp"
+            config_get urltest_check_interval "$section" "urltest_check_interval" "3m"
+            config_get urltest_tolerance "$section" "urltest_tolerance" 50
+            config_get urltest_testing_url "$section" "urltest_testing_url" "https://www.gstatic.com/generate_204"
+
+            if [ -z "$urltest_proxy_links" ]; then
+                log "URLTest proxy links are not set for rule '$section'. Aborted." "fatal"
+                exit 1
+            fi
+
+            i=1
+            for link in $urltest_proxy_links; do
+                config="$(sing_box_cf_add_proxy_outbound "$config" "$section-$i" "$link" "$udp_over_tcp")"
+                outbound_tag="$(get_outbound_tag_by_section "$section-$i")"
+                if [ -z "$outbound_tags" ]; then
+                    outbound_tags="$outbound_tag"
+                else
+                    outbound_tags="$outbound_tags,$outbound_tag"
+                fi
+                i=$((i + 1))
+            done
+
+            urltest_tag="$(get_outbound_tag_by_section "$section-urltest")"
+            selector_tag="$(get_outbound_tag_by_section "$section")"
+            urltest_outbounds="$(comma_string_to_json_array "$outbound_tags")"
+            selector_outbounds="$(comma_string_to_json_array "$outbound_tags,$urltest_tag")"
+            config="$(sing_box_cm_add_urltest_outbound "$config" "$urltest_tag" "$urltest_outbounds" \
+                "$urltest_testing_url" "$urltest_check_interval" "$urltest_tolerance")"
+            config="$(sing_box_cm_add_selector_outbound "$config" "$selector_tag" "$selector_outbounds" "$urltest_tag")"
+            return 0
+            ;;
+        interface)
+            local interface_name domain_resolver_enabled domain_resolver_dns_type domain_resolver_dns_server \
+                domain_resolver_dns_server_address outbound_tag domain_resolver_tag dns_domain_resolver
+
+            config_get interface_name "$section" "interface"
+            config_get domain_resolver_enabled "$section" "domain_resolver_enabled"
+            config_get domain_resolver_dns_type "$section" "domain_resolver_dns_type"
+            config_get domain_resolver_dns_server "$section" "domain_resolver_dns_server"
+
+            if [ -z "$interface_name" ]; then
+                log "Interface outbound is not set for rule '$section'. Aborted." "fatal"
+                exit 1
+            fi
+
+            outbound_tag="$(get_outbound_tag_by_section "$section")"
+
+            if [ "$domain_resolver_enabled" -eq 1 ]; then
+                domain_resolver_dns_server_address="$(url_get_host "$domain_resolver_dns_server")"
+                if ! is_ipv4 "$domain_resolver_dns_server_address"; then
+                    dns_domain_resolver=$SB_BOOTSTRAP_SERVER_TAG
+                fi
+                domain_resolver_tag="$(get_domain_resolver_tag "$section")"
+                config=$(sing_box_cf_add_dns_server "$config" "$domain_resolver_dns_type" "$domain_resolver_tag" \
+                    "$domain_resolver_dns_server" "$dns_domain_resolver" "$outbound_tag")
+            fi
+
+            config=$(sing_box_cm_add_interface_outbound "$config" "$outbound_tag" "$interface_name" "$domain_resolver_tag")
+            return 0
+            ;;
+        "")
+            log "Proxy rule '$section' has no proxy_config_type configured. Aborted." "fatal"
+            exit 1
+            ;;
+        *)
+            log "Unknown proxy configuration type '$proxy_config_type' for rule '$section'. Aborted." "fatal"
+            exit 1
+            ;;
+        esac
+    fi
+
+    [ -n "$action" ] && return 0
 
     local connection_type
     config_get connection_type "$section" "connection_type"
@@ -737,7 +2026,7 @@ configure_outbound_handler() {
         outbound_tag="$(get_outbound_tag_by_section "$section")"
 
         if [ "$domain_resolver_enabled" -eq 1 ]; then
-            domain_resolver_dns_server_address="$(url_get_host "$dns_server")"
+            domain_resolver_dns_server_address="$(url_get_host "$domain_resolver_dns_server")"
             if ! is_ipv4 "$domain_resolver_dns_server_address"; then
                 dns_domain_resolver=$SB_BOOTSTRAP_SERVER_TAG
             fi
@@ -783,13 +2072,17 @@ sing_box_configure_dns() {
     log "Adding DNS Rules"
     local rewrite_ttl service_domains
     config_get rewrite_ttl "settings" "dns_rewrite_ttl" "60"
+    service_domains=$(comma_string_to_json_array "$FAKEIP_TEST_DOMAIN,$CHECK_PROXY_IP_DOMAIN")
 
     config=$(sing_box_cm_add_dns_reject_rule "$config" "query_type" "HTTPS")
     config=$(sing_box_cm_add_dns_reject_rule "$config" "domain_suffix" '"use-application-dns.net"')
+    config=$(sing_box_cm_add_dns_route_rule "$config" "$SB_FAKEIP_DNS_SERVER_TAG" "$SB_SERVICE_FAKEIP_DNS_RULE_TAG")
+    config=$(sing_box_cm_patch_dns_route_rule "$config" "$SB_SERVICE_FAKEIP_DNS_RULE_TAG" "rewrite_ttl" "$rewrite_ttl")
+    config=$(sing_box_cm_patch_dns_route_rule "$config" "$SB_SERVICE_FAKEIP_DNS_RULE_TAG" "domain" "$service_domains")
     config=$(sing_box_cm_add_dns_route_rule "$config" "$SB_FAKEIP_DNS_SERVER_TAG" "$SB_FAKEIP_DNS_RULE_TAG")
     config=$(sing_box_cm_patch_dns_route_rule "$config" "$SB_FAKEIP_DNS_RULE_TAG" "rewrite_ttl" "$rewrite_ttl")
-    service_domains=$(comma_string_to_json_array "$FAKEIP_TEST_DOMAIN,$CHECK_PROXY_IP_DOMAIN")
-    config=$(sing_box_cm_patch_dns_route_rule "$config" "$SB_FAKEIP_DNS_RULE_TAG" "domain" "$service_domains")
+    config=$(sing_box_cm_add_dns_route_rule "$config" "$SB_FAKEIP_DNS_SERVER_TAG" "$SB_FAKEIP_RULESET_DNS_RULE_TAG")
+    config=$(sing_box_cm_patch_dns_route_rule "$config" "$SB_FAKEIP_RULESET_DNS_RULE_TAG" "rewrite_ttl" "$rewrite_ttl")
 }
 
 sing_box_configure_route() {
@@ -818,12 +2111,11 @@ sing_box_configure_route() {
 
     local first_outbound_section
     first_outbound_section="$(get_first_outbound_section)"
-    first_outbound_tag="$(get_outbound_tag_by_section "$first_outbound_section")"
-    config=$(sing_box_cf_proxy_domain "$config" "$SB_TPROXY_INBOUND_TAG" "$CHECK_PROXY_IP_DOMAIN" "$first_outbound_tag")
+    if [ -n "$first_outbound_section" ]; then
+        first_outbound_tag="$(get_outbound_tag_by_section "$first_outbound_section")"
+        config=$(sing_box_cf_proxy_domain "$config" "$SB_TPROXY_INBOUND_TAG" "$CHECK_PROXY_IP_DOMAIN" "$first_outbound_tag")
+    fi
     config=$(sing_box_cf_override_domain_port "$config" "$FAKEIP_TEST_DOMAIN" 8443)
-
-    configure_common_reject_route_rule
-    configure_common_direct_route_rule
 
     local routing_excluded_ips
     config_get routing_excluded_ips "settings" "routing_excluded_ips"
@@ -833,9 +2125,156 @@ sing_box_configure_route() {
         config_list_foreach "settings" "routing_excluded_ips" exclude_source_ip_from_routing_handler "$rule_tag"
     fi
 
-    config_foreach include_source_ips_in_routing_handler "section"
+    config_foreach configure_route_rule_handler "rule"
+}
 
-    config_foreach configure_routing_for_section_lists "section"
+create_route_rule_for_action() {
+    local section="$1"
+    local action="$2"
+    local rule_tag="$3"
+
+    case "$action" in
+    proxy)
+        local outbound_tag
+        outbound_tag="$(get_outbound_tag_by_section "$section")"
+        config=$(sing_box_cm_add_route_rule "$config" "$rule_tag" "$SB_TPROXY_INBOUND_TAG" "$outbound_tag")
+        ;;
+    zapret)
+        local zapret_outbound_tag
+        zapret_outbound_tag="$(get_outbound_tag_by_section "$section")"
+        config=$(sing_box_cm_add_route_rule "$config" "$rule_tag" "$SB_TPROXY_INBOUND_TAG" "$zapret_outbound_tag")
+        ;;
+    direct)
+        config=$(sing_box_cm_add_route_rule "$config" "$rule_tag" "$SB_TPROXY_INBOUND_TAG" "$SB_DIRECT_OUTBOUND_TAG")
+        ;;
+    block)
+        config=$(sing_box_cm_add_reject_route_rule "$config" "$rule_tag" "$SB_TPROXY_INBOUND_TAG")
+        ;;
+    *)
+        log "Unsupported action '$action' for rule '$section'. Aborted." "fatal"
+        exit 1
+        ;;
+    esac
+}
+
+patch_route_rule_item_handler() {
+    local value="$1"
+    local rule_tag="$2"
+    local key="$3"
+
+    config=$(sing_box_cm_patch_route_rule "$config" "$rule_tag" "$key" "$value")
+}
+
+patch_route_and_dns_rule_item_handler() {
+    local value="$1"
+    local rule_tag="$2"
+    local key="$3"
+
+    config=$(sing_box_cm_patch_route_rule "$config" "$rule_tag" "$key" "$value")
+    config=$(sing_box_cm_patch_dns_route_rule "$config" "$SB_FAKEIP_DNS_RULE_TAG" "$key" "$value")
+}
+
+configure_rule_set_reference_handler() {
+    local reference="$1"
+    local route_rule_tag="$2"
+
+    resolve_ruleset_reference "$reference"
+    if [ -n "$ENSURED_RULESET_TAG" ]; then
+        config=$(sing_box_cm_patch_route_rule "$config" "$route_rule_tag" "rule_set" "$ENSURED_RULESET_TAG")
+        if [ "$ENSURED_RULESET_KIND" = "domains" ]; then
+            config=$(sing_box_cm_patch_dns_route_rule "$config" "$SB_FAKEIP_RULESET_DNS_RULE_TAG" "rule_set" "$ENSURED_RULESET_TAG")
+        else
+            log "Skip DNS FakeIP rule patch for '$reference' ruleset kind '$ENSURED_RULESET_KIND'" "debug"
+        fi
+    fi
+}
+
+rule_has_primary_matchers() {
+    local section="$1"
+    local domain domain_suffix domain_keyword domain_regex ip_cidr source_ip_cidr community_lists rule_set
+
+    domain="$(get_rule_condition_commas_string "$section" "domain" "domains")"
+    domain_suffix="$(get_rule_condition_commas_string "$section" "domain_suffix" "domains")"
+    domain_keyword="$(get_rule_condition_commas_string "$section" "domain_keyword" "generic")"
+    domain_regex="$(get_rule_condition_commas_string "$section" "domain_regex" "generic")"
+    ip_cidr="$(get_rule_condition_commas_string "$section" "ip_cidr" "subnets")"
+    source_ip_cidr="$(get_rule_condition_commas_string "$section" "source_ip_cidr" "subnets")"
+    config_get community_lists "$section" "community_lists"
+    config_get rule_set "$section" "rule_set"
+
+    if [ -n "$domain" ] ||
+        [ -n "$domain_suffix" ] ||
+        [ -n "$domain_keyword" ] ||
+        [ -n "$domain_regex" ] ||
+        [ -n "$ip_cidr" ] ||
+        [ -n "$source_ip_cidr" ] ||
+        [ -n "$community_lists" ] ||
+        [ -n "$rule_set" ]; then
+        return 0
+    fi
+
+    return 1
+}
+
+configure_route_rule_handler() {
+    local section="$1"
+    local action route_rule_tag ip_values_json ip_values
+
+    rule_is_enabled "$section" || return 0
+
+    action="$(get_rule_action "$section")"
+    [ -n "$action" ] || return 0
+
+    log "Configuring route rule '$section' with action '$action'"
+
+    if ! rule_has_primary_matchers "$section"; then
+        if [ "$action" != "proxy" ] && [ "$action" != "zapret" ]; then
+            log "Rule '$section' has no matchers and action '$action', skipping catch-all route creation" "warn"
+            return 0
+        fi
+
+        route_rule_tag="$(gen_id)"
+        create_route_rule_for_action "$section" "$action" "$route_rule_tag"
+        return 0
+    fi
+
+    route_rule_tag="$(gen_id)"
+    create_route_rule_for_action "$section" "$action" "$route_rule_tag"
+
+    local domain_json domain_suffix_json domain_keyword_json domain_regex_json
+    domain_json="$(get_rule_condition_json_array "$section" "domain" "domains")"
+    [ "$domain_json" != "[]" ] && config=$(sing_box_cm_patch_route_rule "$config" "$route_rule_tag" "domain" "$domain_json") && \
+        config=$(sing_box_cm_patch_dns_route_rule "$config" "$SB_FAKEIP_DNS_RULE_TAG" "domain" "$domain_json")
+
+    domain_suffix_json="$(get_rule_condition_json_array "$section" "domain_suffix" "domains")"
+    [ "$domain_suffix_json" != "[]" ] && config=$(sing_box_cm_patch_route_rule "$config" "$route_rule_tag" "domain_suffix" "$domain_suffix_json") && \
+        config=$(sing_box_cm_patch_dns_route_rule "$config" "$SB_FAKEIP_DNS_RULE_TAG" "domain_suffix" "$domain_suffix_json")
+
+    domain_keyword_json="$(get_rule_condition_json_array "$section" "domain_keyword" "generic")"
+    [ "$domain_keyword_json" != "[]" ] && config=$(sing_box_cm_patch_route_rule "$config" "$route_rule_tag" "domain_keyword" "$domain_keyword_json") && \
+        config=$(sing_box_cm_patch_dns_route_rule "$config" "$SB_FAKEIP_DNS_RULE_TAG" "domain_keyword" "$domain_keyword_json")
+
+    domain_regex_json="$(get_rule_condition_json_array "$section" "domain_regex" "generic")"
+    [ "$domain_regex_json" != "[]" ] && config=$(sing_box_cm_patch_route_rule "$config" "$route_rule_tag" "domain_regex" "$domain_regex_json") && \
+        config=$(sing_box_cm_patch_dns_route_rule "$config" "$SB_FAKEIP_DNS_RULE_TAG" "domain_regex" "$domain_regex_json")
+
+    ip_values_json="$(get_rule_condition_json_array "$section" "ip_cidr" "subnets")"
+    if [ "$ip_values_json" != "[]" ]; then
+        config=$(sing_box_cm_patch_route_rule "$config" "$route_rule_tag" "ip_cidr" "$ip_values_json")
+        if [ "$PODKOP_NFT_POPULATE_ENABLED" = "1" ]; then
+            ip_values="$(get_rule_condition_commas_string "$section" "ip_cidr" "subnets")"
+            [ -n "$ip_values" ] && nft_add_set_elements "$NFT_TABLE_NAME" "$NFT_COMMON_SET_NAME" "$ip_values"
+        fi
+    fi
+
+    local source_ip_values_json
+    source_ip_values_json="$(get_rule_condition_json_array "$section" "source_ip_cidr" "subnets")"
+    if [ "$source_ip_values_json" != "[]" ]; then
+        config=$(sing_box_cm_patch_route_rule "$config" "$route_rule_tag" "source_ip_cidr" "$source_ip_values_json")
+    fi
+
+    config_list_foreach "$section" "community_lists" configure_community_list_handler "$section" "$route_rule_tag"
+    config_list_foreach "$section" "rule_set" configure_rule_set_reference_handler "$route_rule_tag"
 }
 
 include_source_ips_in_routing_handler() {
@@ -998,7 +2437,7 @@ configure_community_list_handler() {
 
     config=$(sing_box_cm_add_remote_ruleset "$config" "$ruleset_tag" "$format" "$url" "$detour" "$update_interval")
     config=$(sing_box_cm_patch_route_rule "$config" "$route_rule_tag" "rule_set" "$ruleset_tag")
-    config=$(sing_box_cm_patch_dns_route_rule "$config" "$SB_FAKEIP_DNS_RULE_TAG" "rule_set" "$ruleset_tag")
+    config=$(sing_box_cm_patch_dns_route_rule "$config" "$SB_FAKEIP_RULESET_DNS_RULE_TAG" "rule_set" "$ruleset_tag")
 }
 
 prepare_source_ruleset() {
@@ -1017,7 +2456,7 @@ prepare_source_ruleset() {
         config=$(sing_box_cm_patch_route_rule "$config" "$route_rule_tag" "rule_set" "$ruleset_tag")
         case "$type" in
         domains)
-            config=$(sing_box_cm_patch_dns_route_rule "$config" "$SB_FAKEIP_DNS_RULE_TAG" "rule_set" "$ruleset_tag")
+            config=$(sing_box_cm_patch_dns_route_rule "$config" "$SB_FAKEIP_RULESET_DNS_RULE_TAG" "rule_set" "$ruleset_tag")
             ;;
         subnets) ;;
         *)
@@ -1133,7 +2572,7 @@ configure_remote_domain_or_subnet_list_handler() {
         config=$(sing_box_cm_patch_route_rule "$config" "$route_rule_tag" "rule_set" "$ruleset_tag")
         case "$type" in
         domains)
-            config=$(sing_box_cm_patch_dns_route_rule "$config" "$SB_FAKEIP_DNS_RULE_TAG" "rule_set" "$ruleset_tag")
+            config=$(sing_box_cm_patch_dns_route_rule "$config" "$SB_FAKEIP_RULESET_DNS_RULE_TAG" "rule_set" "$ruleset_tag")
             ;;
         subnets) ;;
         *) log "Unsupported remote rule set type: $type" "error" ;;
@@ -1208,11 +2647,17 @@ sing_box_additional_inbounds() {
         )
     fi
 
-    config_foreach configure_section_mixed_proxy "section"
+    config_foreach configure_section_mixed_proxy "rule"
 }
 
 configure_section_mixed_proxy() {
     local section="$1"
+    local action
+
+    rule_is_enabled "$section" || return 0
+
+    action="$(get_rule_action "$section")"
+    [ "$action" = "proxy" ] || return 0
 
     local mixed_inbound_enabled mixed_proxy_port mixed_inbound_tag mixed_outbound_tag mixed_proxy_address
     config_get_bool mixed_inbound_enabled "$section" "mixed_proxy_enabled" 0
@@ -1268,14 +2713,141 @@ sing_box_config_check() {
     fi
 }
 
+import_builtin_subnets_from_rule() {
+    local section="$1"
+
+    rule_is_enabled "$section" || return 0
+    config_list_foreach "$section" "community_lists" import_builtin_subnets_reference_handler
+}
+
+import_builtin_subnets_reference_handler() {
+    local reference="$1"
+
+    if printf '%s\n' "$COMMUNITY_SERVICES" | tr ' ' '\n' | grep -Fxq "$reference"; then
+        import_community_service_subnet_list_handler "$reference"
+    fi
+}
+
+import_inline_custom_ruleset_subnets_from_rule() {
+    local section="$1"
+
+    rule_is_enabled "$section" || return 0
+    config_list_foreach "$section" "rule_set" import_inline_custom_ruleset_subnets_reference_handler
+}
+
+import_inline_custom_ruleset_subnets_reference_handler() {
+    local reference="$1"
+
+    case "$reference" in
+    /*.srs)
+        import_custom_ruleset_subnets_from_local "$reference" "binary"
+        ;;
+    http://*.srs | https://*.srs)
+        import_custom_ruleset_subnets_from_remote "$reference" "binary"
+        ;;
+    esac
+}
+
+import_custom_ruleset_subnets() {
+    local section="$1"
+    local enabled type format path url
+
+    config_get_bool enabled "$section" "enabled" 1
+    [ "$enabled" -eq 1 ] || return 0
+
+    config_get type "$section" "type" "remote"
+    config_get format "$section" "format" "binary"
+    config_get path "$section" "path"
+    config_get url "$section" "url"
+
+    case "$type" in
+    local)
+        import_custom_ruleset_subnets_from_local "$path" "$format"
+        ;;
+    remote)
+        import_custom_ruleset_subnets_from_remote "$url" "$format"
+        ;;
+    esac
+}
+
+import_custom_ruleset_subnets_from_local() {
+    local path="$1"
+    local format="$2"
+    local json_tmpfile subnets_tmpfile
+
+    [ -f "$path" ] || return 0
+
+    json_tmpfile="$(mktemp)"
+    subnets_tmpfile="$(mktemp)"
+
+    if [ "$format" = "binary" ]; then
+        if ! decompile_binary_ruleset "$path" "$json_tmpfile"; then
+            rm -f "$json_tmpfile" "$subnets_tmpfile"
+            return 1
+        fi
+    else
+        cp "$path" "$json_tmpfile"
+    fi
+
+    extract_ip_cidr_from_json_ruleset_to_file "$json_tmpfile" "$subnets_tmpfile"
+    nft_add_set_elements_from_file_chunked "$subnets_tmpfile" "$NFT_TABLE_NAME" "$NFT_COMMON_SET_NAME"
+    rm -f "$json_tmpfile" "$subnets_tmpfile"
+}
+
+import_custom_ruleset_subnets_from_remote() {
+    local url="$1"
+    local format="$2"
+    local remote_tmpfile json_tmpfile subnets_tmpfile http_proxy_address
+
+    remote_tmpfile="$(mktemp)"
+    json_tmpfile="$(mktemp)"
+    subnets_tmpfile="$(mktemp)"
+    http_proxy_address="$(get_service_proxy_address)"
+
+    download_to_file "$url" "$remote_tmpfile" "$http_proxy_address"
+
+    if [ $? -ne 0 ] || [ ! -s "$remote_tmpfile" ]; then
+        rm -f "$remote_tmpfile" "$json_tmpfile" "$subnets_tmpfile"
+        return 1
+    fi
+
+    if [ "$format" = "binary" ]; then
+        if ! decompile_binary_ruleset "$remote_tmpfile" "$json_tmpfile"; then
+            rm -f "$remote_tmpfile" "$json_tmpfile" "$subnets_tmpfile"
+            return 1
+        fi
+    else
+        cp "$remote_tmpfile" "$json_tmpfile"
+    fi
+
+    extract_ip_cidr_from_json_ruleset_to_file "$json_tmpfile" "$subnets_tmpfile"
+    nft_add_set_elements_from_file_chunked "$subnets_tmpfile" "$NFT_TABLE_NAME" "$NFT_COMMON_SET_NAME"
+    rm -f "$remote_tmpfile" "$json_tmpfile" "$subnets_tmpfile"
+}
+
 import_community_subnet_lists() {
     local section="$1"
     local community_lists
+
+    rule_is_enabled "$section" || return 0
+
     config_get community_lists "$section" "community_lists"
     if [ -n "$community_lists" ]; then
         log "Importing community subnet lists for '$section' section"
         config_list_foreach "$section" "community_lists" import_community_service_subnet_list_handler
     fi
+}
+
+ensure_discord_udp_fakeip_rule() {
+    nft_create_ipv4_set "$NFT_TABLE_NAME" "$NFT_DISCORD_SET_NAME"
+
+    if nft list chain inet "$NFT_TABLE_NAME" mangle 2> /dev/null |
+        grep -Fq "iifname @$NFT_INTERFACE_SET_NAME ip daddr @$NFT_DISCORD_SET_NAME udp dport 50000-65535 meta mark set $NFT_FAKEIP_MARK"; then
+        return 0
+    fi
+
+    nft add rule inet "$NFT_TABLE_NAME" mangle iifname "@$NFT_INTERFACE_SET_NAME" ip daddr \
+        "@$NFT_DISCORD_SET_NAME" udp dport '{ 50000-65535 }' meta mark set "$NFT_FAKEIP_MARK" counter
 }
 
 import_community_service_subnet_list_handler() {
@@ -1308,9 +2880,7 @@ import_community_service_subnet_list_handler() {
         ;;
     "discord")
         URL=$SUBNETS_DISCORD
-        nft_create_ipv4_set "$NFT_TABLE_NAME" "$NFT_DISCORD_SET_NAME"
-        nft add rule inet "$NFT_TABLE_NAME" mangle iifname "@$NFT_INTERFACE_SET_NAME" ip daddr \
-            "@$NFT_DISCORD_SET_NAME" udp dport '{ 50000-65535 }' meta mark set "$NFT_FAKEIP_MARK" counter
+        ensure_discord_udp_fakeip_rule
         ;;
     "roblox")
         URL=$SUBNETS_ROBLOX
@@ -1341,6 +2911,9 @@ import_community_service_subnet_list_handler() {
 import_domains_from_remote_domain_lists() {
     local section="$1"
     local remote_domain_lists
+
+    rule_is_enabled "$section" || return 0
+
     config_get remote_domain_lists "$section" "remote_domain_lists"
     if [ -n "$remote_domain_lists" ]; then
         log "Importing domains from remote domain lists for '$section' section"
@@ -1394,6 +2967,9 @@ import_domains_from_remote_plain_file() {
 import_subnets_from_remote_subnet_lists() {
     local section="$1"
     local remote_subnet_lists
+
+    rule_is_enabled "$section" || return 0
+
     config_get remote_subnet_lists "$section" "remote_subnet_lists"
     if [ -n "$remote_subnet_lists" ]; then
         log "Importing subnets from remote subnet lists for '$section' section"
@@ -1521,11 +3097,12 @@ get_download_detour_tag() {
 
 _determine_first_outbound_section() {
     local section="$1"
+    local action
 
-    local connection_type
-    config_get connection_type "$section" "connection_type"
+    rule_is_enabled "$section" || return 0
 
-    if [ "$connection_type" = "proxy" ] || [ "$connection_type" = "vpn" ]; then
+    action="$(get_rule_action "$section")"
+    if [ "$action" = "proxy" ]; then
         [ -z "$first_section" ] && first_section="$1"
     fi
 }
@@ -1533,7 +3110,7 @@ _determine_first_outbound_section() {
 get_first_outbound_section() {
     local first_section=""
 
-    config_foreach _determine_first_outbound_section "section"
+    config_foreach _determine_first_outbound_section "rule"
 
     echo "$first_section"
 }
@@ -1556,9 +3133,15 @@ section_by_connection_type_exists() {
 
 section_has_enabled_lists() {
     local section="$1"
-    local community_lists user_domain_list_type user_subnet_list_type local_domain_lists local_subnet_lists \
-        remote_domain_lists remote_subnet_lists
+    local domain domain_suffix domain_keyword domain_regex community_lists user_domain_list_type user_subnet_list_type \
+        local_domain_lists local_subnet_lists remote_domain_lists remote_subnet_lists
 
+    rule_is_enabled "$section" || return 1
+
+    config_get domain "$section" "domain"
+    config_get domain_suffix "$section" "domain_suffix"
+    config_get domain_keyword "$section" "domain_keyword"
+    config_get domain_regex "$section" "domain_regex"
     config_get community_lists "$section" "community_lists"
     config_get user_domain_list_type "$section" "user_domain_list_type" "disabled"
     config_get user_subnet_list_type "$section" "user_subnet_list_type" "disabled"
@@ -1567,7 +3150,11 @@ section_has_enabled_lists() {
     config_get remote_domain_lists "$section" "remote_domain_lists"
     config_get remote_subnet_lists "$section" "remote_subnet_lists"
 
-    if [ -n "$community_lists" ] ||
+    if [ -n "$domain" ] ||
+        [ -n "$domain_suffix" ] ||
+        [ -n "$domain_keyword" ] ||
+        [ -n "$domain_regex" ] ||
+        [ -n "$community_lists" ] ||
         [ "$user_domain_list_type" != "disabled" ] ||
         [ "$user_subnet_list_type" != "disabled" ] ||
         [ -n "$local_domain_lists" ] ||
@@ -1594,7 +3181,7 @@ get_service_listen_address() {
     network_get_ipaddr service_listen_address "$interface"
 
     if [ -z "$service_listen_address" ]; then
-        log "Failed to determine the listening IP address. Please open an issue to report this problem: https://github.com/itdoginfo/podkop/issues" "error"
+        log "Failed to determine the listening IP address. Please open an issue to report this problem: https://github.com/ushan0v/podkop-plus/issues" "error"
         return 1
     fi
 
@@ -1768,23 +3355,40 @@ check_logs() {
     fi
 
     local logs
-    logs=$(logread | grep -E "podkop|sing-box")
+    logs=$(logread | grep -E "podkop-plus|podkop|sing-box")
 
     if [ -z "$logs" ]; then
         nolog "Logs not found"
         return 1
     fi
 
-    # Find the last occurrence of "Starting podkop"
+    # Find the last occurrence of "Starting Podkop Plus"
     local start_line
-    start_line=$(echo "$logs" | grep -n "podkop.*Starting podkop" | tail -n 1 | cut -d: -f1)
+    start_line=$(echo "$logs" | grep -n "podkop-plus.*Starting Podkop Plus" | tail -n 1 | cut -d: -f1)
 
     if [ -n "$start_line" ]; then
         echo "$logs" | tail -n +"$start_line"
     else
-        nolog "No 'Starting podkop' message found, showing last 100 lines"
+        nolog "No 'Starting Podkop Plus' message found, showing last 100 lines"
         echo "$logs" | tail -n 100
     fi
+}
+
+check_sing_box_logs() {
+    if ! command -v logread > /dev/null 2>&1; then
+        nolog "Error: logread command not found"
+        return 1
+    fi
+
+    local logs
+    logs=$(logread | grep -E "sing-box")
+
+    if [ -z "$logs" ]; then
+        nolog "sing-box logs not found"
+        return 1
+    fi
+
+    echo "$logs" | tail -n 100
 }
 
 show_sing_box_config() {
@@ -1862,13 +3466,81 @@ show_system_info() {
     cat /tmp/sysinfo/model
 }
 
+fetch_latest_podkop_version() {
+    command -v curl >/dev/null 2>&1 || return 1
+
+    curl --connect-timeout 1 -m 2 -fsSL "https://api.github.com/repos/$PODKOP_RELEASE_REPO/releases/latest" 2>/dev/null |
+        sed -n 's/^[[:space:]]*"tag_name":[[:space:]]*"\([^"]*\)".*/\1/p' |
+        head -n 1
+}
+
+write_podkop_latest_version_cache() {
+    local value="$1"
+    local timestamp="$2"
+    local cache_file="/tmp/podkop-plus.latest-version.cache"
+
+    [ -n "$value" ] || return 0
+
+    {
+        printf '%s\n' "$value"
+        printf '%s\n' "$timestamp"
+    } > "$cache_file"
+}
+
+refresh_podkop_latest_version_cache() {
+    local fetched_value now
+
+    fetched_value="$(fetch_latest_podkop_version)"
+    [ -n "$fetched_value" ] || return 0
+
+    now="$(date +%s 2>/dev/null)"
+    case "$now" in
+    '' | *[!0-9]*) now=0 ;;
+    esac
+
+    write_podkop_latest_version_cache "$fetched_value" "$now"
+}
+
+get_podkop_latest_version() {
+    local cache_file="/tmp/podkop-plus.latest-version.cache"
+    local cache_ttl=21600
+    local now cache_value cache_timestamp
+
+    now="$(date +%s 2>/dev/null)"
+    cache_value="$(sed -n '1p' "$cache_file" 2>/dev/null)"
+    cache_timestamp="$(sed -n '2p' "$cache_file" 2>/dev/null)"
+
+    case "$now" in
+    '' | *[!0-9]*) now=0 ;;
+    esac
+
+    case "$cache_timestamp" in
+    '' | *[!0-9]*) cache_timestamp=0 ;;
+    esac
+
+    if [ -n "$cache_value" ] && [ "$now" -gt 0 ] &&
+        [ $((now - cache_timestamp)) -lt "$cache_ttl" ]; then
+        echo "$cache_value"
+        return 0
+    fi
+
+    (refresh_podkop_latest_version_cache) >/dev/null 2>&1 &
+
+    if [ -n "$cache_value" ]; then
+        echo "$cache_value"
+        return 0
+    fi
+
+    echo "unknown"
+}
+
 get_system_info() {
-    local podkop_version podkop_latest_version luci_app_version sing_box_version openwrt_version device_model
+    local podkop_version podkop_latest_version luci_app_version sing_box_version zapret_version openwrt_version device_model
 
     podkop_version="$PODKOP_VERSION"
 
-    podkop_latest_version=$(curl -m 3 -s https://api.github.com/repos/itdoginfo/podkop/releases/latest | grep '"tag_name":' | cut -d'"' -f4)
-    [ -z "$podkop_latest_version" ] && podkop_latest_version="unknown"
+    podkop_latest_version="$(get_podkop_latest_version)"
+    [ -n "$podkop_latest_version" ] || podkop_latest_version="unknown"
 
     if [ -f /www/luci-static/resources/view/podkop/main.js ]; then
         luci_app_version=$(grep 'var PODKOP_LUCI_APP_VERSION' /www/luci-static/resources/view/podkop/main.js | cut -d'"' -f2)
@@ -1881,6 +3553,13 @@ get_system_info() {
         [ -z "$sing_box_version" ] && sing_box_version="unknown"
     else
         sing_box_version="not installed"
+    fi
+
+    if [ -x "$ZAPRET_SOURCE_NFQWS_BIN" ]; then
+        zapret_version="$(get_zapret_package_version)"
+        [ -z "$zapret_version" ] && zapret_version="unknown"
+    else
+        zapret_version="not installed"
     fi
 
     if [ -f /etc/os-release ]; then
@@ -1897,7 +3576,31 @@ get_system_info() {
         device_model="unknown"
     fi
 
-    echo "{\"podkop_version\": \"$podkop_version\", \"podkop_latest_version\": \"$podkop_latest_version\", \"luci_app_version\": \"$luci_app_version\", \"sing_box_version\": \"$sing_box_version\", \"openwrt_version\": \"$openwrt_version\", \"device_model\": \"$device_model\"}" | jq .
+    jq -cn \
+        --arg podkop_version "$podkop_version" \
+        --arg podkop_latest_version "$podkop_latest_version" \
+        --arg luci_app_version "$luci_app_version" \
+        --arg sing_box_version "$sing_box_version" \
+        --arg zapret_version "$zapret_version" \
+        --arg openwrt_version "$openwrt_version" \
+        --arg device_model "$device_model" \
+        '{
+            podkop_version: $podkop_version,
+            podkop_latest_version: $podkop_latest_version,
+            luci_app_version: $luci_app_version,
+            sing_box_version: $sing_box_version,
+            zapret_version: $zapret_version,
+            openwrt_version: $openwrt_version,
+            device_model: $device_model
+        }'
+}
+
+get_zapret_status() {
+    get_zapret_status_json
+}
+
+check_zapret_runtime() {
+    check_zapret_runtime_json
 }
 
 get_sing_box_status() {
@@ -1944,18 +3647,57 @@ get_sing_box_status() {
 }
 
 get_status() {
+    local running=0
     local enabled=0
     local status=""
+    local dns_configured=0
 
-    # Check if service is enabled
-    if [ -x /etc/rc.d/S99podkop ]; then
-        enabled=1
-        status="enabled"
-    else
-        status="disabled"
+    if pgrep -f "sing-box" > /dev/null 2>&1 &&
+        nft list table inet "$NFT_TABLE_NAME" > /dev/null 2>&1 &&
+        ip rule list | grep -q "lookup $RT_TABLE_NAME" &&
+        ip route list table "$RT_TABLE_NAME" 2> /dev/null | grep -q "local default dev lo scope host"; then
+        running=1
     fi
 
-    echo "{\"enabled\":$enabled,\"status\":\"$status\"}"
+    # Check if service is enabled
+    if [ -x "/etc/rc.d/S99$PODKOP_SERVICE_NAME" ]; then
+        enabled=1
+    fi
+
+    if [ "$(uci get dhcp.@dnsmasq[0].server 2> /dev/null)" = "127.0.0.42" ]; then
+        dns_configured=1
+    fi
+
+    if [ "$running" -eq 1 ]; then
+        if [ "$enabled" -eq 1 ]; then
+            status="running & enabled"
+        else
+            status="running but disabled"
+        fi
+    else
+        if [ "$enabled" -eq 1 ]; then
+            status="stopped but enabled"
+        else
+            status="stopped & disabled"
+        fi
+    fi
+
+    echo "{\"running\":$running,\"enabled\":$enabled,\"status\":\"$status\",\"dns_configured\":$dns_configured}"
+}
+
+validate_nfqws_strategy_json() {
+    local raw_opt="${1:-}"
+
+    if check_nfqws_strategy "$raw_opt"; then
+        jq -cn '{valid:true,message:"",needle:"",needles:[]}'
+        return 0
+    fi
+
+    jq -cn \
+        --arg message "$NFQWS_VALIDATE_ERROR" \
+        --arg needle "$NFQWS_VALIDATE_NEEDLE" \
+        --arg needles "$NFQWS_VALIDATE_NEEDLES" \
+        '{valid:false,message:$message,needle:$needle,needles:($needles | split("\n") | map(select(length > 0)))}'
 }
 
 check_dns_available() {
@@ -2345,18 +4087,20 @@ global_check() {
     system_info_json=$(get_system_info)
 
     if [ -n "$system_info_json" ]; then
-        local podkop_version podkop_latest_version luci_app_version sing_box_version openwrt_version device_model
+        local podkop_version podkop_latest_version luci_app_version sing_box_version zapret_version openwrt_version device_model
 
         podkop_version=$(echo "$system_info_json" | jq -r '.podkop_version // "unknown"')
         podkop_latest_version=$(echo "$system_info_json" | jq -r '.podkop_latest_version // "unknown"')
         luci_app_version=$(echo "$system_info_json" | jq -r '.luci_app_version // "unknown"')
         sing_box_version=$(echo "$system_info_json" | jq -r '.sing_box_version // "unknown"')
+        zapret_version=$(echo "$system_info_json" | jq -r '.zapret_version // "unknown"')
         openwrt_version=$(echo "$system_info_json" | jq -r '.openwrt_version // "unknown"')
         device_model=$(echo "$system_info_json" | jq -r '.device_model // "unknown"')
 
         print_global "🕳️ Podkop:        $podkop_version (latest: $podkop_latest_version)"
         print_global "🕳️ LuCI App:      $luci_app_version"
         print_global "📦 Sing-box:      $sing_box_version"
+        print_global "🧵 Zapret:        $zapret_version"
         print_global "🛜 OpenWrt:       $openwrt_version"
         print_global "🛜 Device:        $device_model"
     else
@@ -2473,6 +4217,26 @@ global_check() {
         fi
     else
         print_global "❌ Failed to get sing-box info"
+    fi
+
+    print_global "━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+    print_global "🧵 Zapret status"
+
+    local zapret_check_json
+    zapret_check_json=$(check_zapret_runtime)
+
+    if [ -n "$zapret_check_json" ]; then
+        local zapret_installed
+
+        zapret_installed=$(echo "$zapret_check_json" | jq -r '.zapret_installed // 0')
+
+        if [ "$zapret_installed" -eq 1 ]; then
+            print_global "✅ Zapret runtime installed"
+        else
+            print_global "❌ Zapret runtime installed"
+        fi
+    else
+        print_global "❌ Failed to get zapret info"
     fi
 
     print_global "━━━━━━━━━━━━━━━━━━━━━━━━━━━"
@@ -2616,9 +4380,12 @@ global_check() {
         done
     fi
 
-    if [ -f "/etc/init.d/zapret" ]; then
+    if [ -x /etc/init.d/zapret ] && /etc/init.d/zapret status >/dev/null 2>&1; then
         print_global "━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-        print_global "⚠️ Zapret detected"
+        print_global "✅ Standalone zapret service is active and kept untouched. Podkop Plus uses its own Zapret contour."
+    elif [ -x /etc/init.d/zapret ] && /etc/init.d/zapret enabled >/dev/null 2>&1; then
+        print_global "━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+        print_global "ℹ️ Standalone zapret autostart is enabled. Podkop Plus uses its own Zapret contour."
     fi
 
     print_global "━━━━━━━━━━━━━━━━━━━━━━━━━━━"
@@ -2656,30 +4423,37 @@ show_help() {
 Usage: $0 COMMAND
 
 Available commands:
-    start                   Start podkop service
-    stop                    Stop podkop service
-    reload                  Reload podkop configuration
-    restart                 Restart podkop service
-    main                    Run main podkop process
+    start                   Start Podkop Plus service
+    stop                    Stop Podkop Plus service
+    reload                  Reload Podkop Plus configuration
+    restart                 Restart Podkop Plus service
+    enable                  Enable Podkop Plus autostart
+    disable                 Disable Podkop Plus autostart
+    uninstall               Remove Podkop Plus files installed outside opkg/apk
+    main                    Run main Podkop Plus process
     list_update             Update domain lists
     check_proxy             Check proxy connectivity
     check_nft               Check NFT rules
     check_nft_rules         Check NFT rules status
     check_sing_box          Check sing-box installation and status
-    check_logs              Show podkop logs from system journal
+    check_logs              Show Podkop Plus logs from system journal
     check_sing_box_logs     Show sing-box logs
     check_fakeip            Test FakeIP on router
+    check_zapret_runtime    Check Podkop-managed zapret runtime state
     clash_api               Clash API interface for managing proxies and groups
-    show_config             Display current podkop configuration
-    show_version            Show podkop version
+    show_config             Display current Podkop Plus configuration
+    show_version            Show Podkop Plus version
     show_sing_box_config    Show sing-box configuration
     show_sing_box_version   Show sing-box version
     show_system_info        Show system information
-    get_status              Get podkop service status
+    get_status              Get Podkop Plus service status
     get_sing_box_status     Get sing-box service status
+    get_zapret_status       Get Podkop-managed zapret runtime status
     get_system_info         Get system information in JSON format
     check_dns_available     Check DNS server availability
     global_check            Run global system check
+    validate_nfqws_strategy_json
+                            Validate an NFQWS strategy and print JSON result
 EOF
 }
 
@@ -2695,6 +4469,15 @@ reload)
     ;;
 restart)
     restart
+    ;;
+enable)
+    "$PODKOP_SERVICE_INIT" enable
+    ;;
+disable)
+    "$PODKOP_SERVICE_INIT" disable
+    ;;
+uninstall)
+    uninstall
     ;;
 main)
     main
@@ -2723,6 +4506,9 @@ check_sing_box_logs)
 check_fakeip)
     check_fakeip
     ;;
+check_zapret_runtime)
+    check_zapret_runtime
+    ;;
 clash_api)
     clash_api "$2" "$3" "$4"
     ;;
@@ -2747,6 +4533,9 @@ get_status)
 get_sing_box_status)
     get_sing_box_status
     ;;
+get_zapret_status)
+    get_zapret_status
+    ;;
 get_system_info)
     get_system_info
     ;;
@@ -2756,8 +4545,13 @@ check_dns_available)
 global_check)
     global_check "${2:-}"
     ;;
+validate_nfqws_strategy_json)
+    validate_nfqws_strategy_json "${2:-}"
+    ;;
 *)
     show_help
     exit 1
     ;;
 esac
+
+
