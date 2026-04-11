@@ -18,6 +18,7 @@ export const initialDiagnosticStore: Pick<
     luci_app_version: 'loading',
     sing_box_version: 'loading',
     zapret_version: 'loading',
+    zapret_installed: 0,
     openwrt_version: 'loading',
     device_model: 'loading',
   },

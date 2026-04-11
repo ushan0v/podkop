@@ -164,6 +164,125 @@ const NFQWS_REQUIRED_ARG_OPTIONS = new Set([
   "--wssize-cutoff",
   "--wssize-forced-cutoff",
 ]);
+const zapretAvailabilityState = {
+  loaded: false,
+  installed: true,
+};
+let zapretAvailabilityPromise = null;
+
+function ensureZapretAvailabilityLoaded() {
+  if (zapretAvailabilityState.loaded) {
+    return Promise.resolve(zapretAvailabilityState);
+  }
+
+  if (zapretAvailabilityPromise) {
+    return zapretAvailabilityPromise;
+  }
+
+  zapretAvailabilityPromise = main.PodkopShellMethods.getZapretStatus()
+    .then((result) => {
+      zapretAvailabilityState.loaded = true;
+      zapretAvailabilityState.installed = Boolean(
+        result && result.success && result.data && result.data.installed,
+      );
+      return zapretAvailabilityState;
+    })
+    .catch(() => {
+      zapretAvailabilityState.loaded = true;
+      zapretAvailabilityState.installed = true;
+      return zapretAvailabilityState;
+    })
+    .finally(() => {
+      zapretAvailabilityPromise = null;
+    });
+
+  return zapretAvailabilityPromise;
+}
+
+function isZapretInstalledForUi() {
+  return zapretAvailabilityState.installed;
+}
+
+function getRuleResolvedAction(section_id) {
+  const action = uci.get("podkop", section_id, "action");
+  if (action) {
+    return `${action}`;
+  }
+
+  const connectionType = uci.get("podkop", section_id, "connection_type");
+  switch (connectionType) {
+    case "proxy":
+    case "vpn":
+      return "proxy";
+    case "block":
+      return "block";
+    case "exclusion":
+      return "direct";
+    default:
+      return "proxy";
+  }
+}
+
+function getActionOptionLabel(action) {
+  switch (`${action}`) {
+    case "block":
+      return _("Block");
+    case "direct":
+      return "Direct";
+    case "zapret":
+      return isZapretInstalledForUi()
+        ? _("Zapret")
+        : _("Zapret (package not installed)");
+    case "proxy":
+    default:
+      return _("Proxy");
+  }
+}
+
+function getRuleActionDisplayValue(section_id) {
+  const action = getRuleResolvedAction(section_id);
+
+  if (action === "zapret") {
+    return _("Zapret");
+  }
+
+  return getActionOptionLabel(action);
+}
+
+function getRuleActionDisplayMarkup(section_id) {
+  return getRuleActionDisplayValue(section_id);
+}
+
+function populateActionOptionValues(option) {
+  delete option.keylist;
+  delete option.vallist;
+
+  option.value("proxy", _("Proxy"));
+  option.value("direct", "Direct");
+  option.value("block", _("Block"));
+  option.value("zapret", getActionOptionLabel("zapret"));
+}
+
+function disableUnavailableZapretOption(node) {
+  if (!node || isZapretInstalledForUi()) {
+    return;
+  }
+
+  const select =
+    typeof node.querySelector === "function"
+      ? node.querySelector("select")
+      : null;
+  if (!select || !select.options) {
+    return;
+  }
+
+  Array.from(select.options).forEach((option) => {
+    if (option.value === "zapret") {
+      option.disabled = true;
+      option.textContent = _("Zapret (package not installed)");
+    }
+  });
+}
 
 function getConfigListValues(section_id, key) {
   return normalizeOptionValues(uci.get("podkop", section_id, key));
@@ -360,7 +479,10 @@ function applyTextareaInputAttributes(textarea) {
 
     if (nextMinHeight > 0) {
       if (storedMinHeight <= 0) {
-        textarea.setAttribute("data-pdk-default-min-height", `${nextMinHeight}`);
+        textarea.setAttribute(
+          "data-pdk-default-min-height",
+          `${nextMinHeight}`,
+        );
       }
 
       textarea.style.minHeight = `${nextMinHeight}px`;
@@ -1383,36 +1505,6 @@ function getCustomRulesetReferences(section_id) {
   );
 }
 
-function getRuleActionDisplayValue(section_id) {
-  const action = uci.get("podkop", section_id, "action");
-  if (action) {
-    switch (`${action}`) {
-      case "block":
-        return "Block";
-      case "direct":
-        return "Direct";
-      case "zapret":
-        return "Zapret";
-      case "proxy":
-      default:
-        return "Proxy";
-    }
-  }
-
-  const connectionType = uci.get("podkop", section_id, "connection_type");
-  switch (connectionType) {
-    case "proxy":
-    case "vpn":
-      return "Proxy";
-    case "block":
-      return "Block";
-    case "exclusion":
-      return "Direct";
-    default:
-      return "Proxy";
-  }
-}
-
 function createSectionContent(section) {
   let o;
 
@@ -1432,6 +1524,13 @@ function createSectionContent(section) {
     _("Action"),
   );
   o.modalonly = false;
+  o.rawhtml = true;
+  o.load = function () {
+    return ensureZapretAvailabilityLoaded();
+  };
+  o.cfgvalue = function (section_id) {
+    return getRuleActionDisplayMarkup(section_id);
+  };
   o.textvalue = function (section_id) {
     return getRuleActionDisplayValue(section_id);
   };
@@ -1457,13 +1556,28 @@ function createSectionContent(section) {
     _("Action"),
     _("What Podkop Plus should do when this section matches"),
   );
-  o.value("proxy", "Proxy");
-  o.value("direct", "Direct");
-  o.value("block", "Block");
-  o.value("zapret", "Zapret");
+  populateActionOptionValues(o);
   o.default = "proxy";
   o.rmempty = false;
   o.modalonly = true;
+  o.load = function () {
+    return ensureZapretAvailabilityLoaded().then(() => {
+      populateActionOptionValues(this);
+    });
+  };
+  {
+    const originalRenderWidget = o.renderWidget;
+    o.renderWidget = function (section_id, option_index, cfgvalue) {
+      const node = originalRenderWidget.call(
+        this,
+        section_id,
+        option_index,
+        cfgvalue,
+      );
+      disableUnavailableZapretOption(node);
+      return node;
+    };
+  }
 
   o = section.taboption(
     "settings",

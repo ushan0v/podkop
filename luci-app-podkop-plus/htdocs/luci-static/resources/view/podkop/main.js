@@ -1198,6 +1198,7 @@ var initialDiagnosticStore = {
     luci_app_version: "loading",
     sing_box_version: "loading",
     zapret_version: "loading",
+    zapret_installed: 0,
     openwrt_version: "loading",
     device_model: "loading"
   },
@@ -1445,7 +1446,13 @@ var initialStore = {
   servicesInfoWidget: {
     loading: true,
     failed: false,
-    data: { singbox: 0, podkopRunning: 0, podkopEnabled: 0, zapret: 0 }
+    data: {
+      singbox: 0,
+      podkopRunning: 0,
+      podkopEnabled: 0,
+      zapret: 0,
+      zapretInstalled: 0
+    }
   },
   sectionsWidget: {
     loading: true,
@@ -1617,6 +1624,30 @@ var PodkopLogWatcher = class _PodkopLogWatcher {
 };
 
 // src/podkop/services/core.service.ts
+var LOG_NOTIFICATION_DEDUPE_WINDOW_MS = 15e3;
+var recentErrorNotifications = /* @__PURE__ */ new Map();
+function getNotificationKey(line) {
+  const lower = line.toLowerCase();
+  const errorIndex = lower.indexOf("[error]");
+  const fatalIndex = lower.indexOf("[fatal]");
+  const markerIndex = errorIndex >= 0 && fatalIndex >= 0 ? Math.min(errorIndex, fatalIndex) : Math.max(errorIndex, fatalIndex);
+  return (markerIndex >= 0 ? line.slice(markerIndex) : line).trim();
+}
+function shouldNotifyAboutLogLine(line) {
+  const key = getNotificationKey(line);
+  const now = Date.now();
+  const lastShownAt = recentErrorNotifications.get(key) ?? 0;
+  recentErrorNotifications.forEach((shownAt, storedKey) => {
+    if (now - shownAt > LOG_NOTIFICATION_DEDUPE_WINDOW_MS) {
+      recentErrorNotifications.delete(storedKey);
+    }
+  });
+  if (now - lastShownAt < LOG_NOTIFICATION_DEDUPE_WINDOW_MS) {
+    return false;
+  }
+  recentErrorNotifications.set(key, now);
+  return true;
+}
 function coreService() {
   TabServiceInstance.onChange((activeId, tabs) => {
     logger.info("[TAB]", activeId);
@@ -1639,12 +1670,8 @@ function coreService() {
     {
       intervalMs: 3e3,
       onNewLog: (line) => {
-        if (line.toLowerCase().includes("[error]") || line.toLowerCase().includes("[fatal]")) {
-          ui.addNotification(
-            "Podkop Plus Error",
-            E("div", {}, line),
-            "error"
-          );
+        if ((line.toLowerCase().includes("[error]") || line.toLowerCase().includes("[fatal]")) && shouldNotifyAboutLogLine(line)) {
+          ui.addNotification("Podkop Plus Error", E("div", {}, line), "error");
         }
       }
     }
@@ -2048,10 +2075,7 @@ async function fetchServicesInfo() {
     return;
   }
   const podkop = getSettledMethodResponse("getStatus", podkopResult);
-  const singbox = getSettledMethodResponse(
-    "getSingBoxStatus",
-    singboxResult
-  );
+  const singbox = getSettledMethodResponse("getSingBoxStatus", singboxResult);
   const zapret = getSettledMethodResponse("getZapretStatus", zapretResult);
   store.set({
     servicesInfoWidget: {
@@ -2061,7 +2085,8 @@ async function fetchServicesInfo() {
         singbox: singbox.success ? singbox.data.running : 0,
         podkopRunning: podkop.success ? podkop.data.running : 0,
         podkopEnabled: podkop.success ? podkop.data.enabled : 0,
-        zapret: zapret.success ? zapret.data.ready : 0
+        zapret: zapret.success ? zapret.data.ready : 0,
+        zapretInstalled: zapret.success ? zapret.data.installed : 0
       }
     }
   });
@@ -2364,9 +2389,9 @@ async function renderServicesInfoWidget() {
       },
       {
         key: _("Zapret"),
-        value: servicesInfoWidget.data.zapret ? _("\u2714 Running") : _("\u2718 Stopped"),
+        value: !servicesInfoWidget.data.zapretInstalled ? _("\u2718 Not installed") : servicesInfoWidget.data.zapret ? _("\u2714 Running") : _("\u2718 Stopped"),
         attributes: {
-          class: servicesInfoWidget.data.zapret ? "pdk_dashboard-page__widgets-section__item__row--success" : "pdk_dashboard-page__widgets-section__item__row--error"
+          class: servicesInfoWidget.data.zapretInstalled && servicesInfoWidget.data.zapret ? "pdk_dashboard-page__widgets-section__item__row--success" : "pdk_dashboard-page__widgets-section__item__row--error"
         }
       }
     ]
@@ -2915,8 +2940,8 @@ async function runZapretCheck() {
     state: "loading",
     items: []
   });
-  const zapretChecks = await PodkopShellMethods.checkZapretRuntime();
-  if (!zapretChecks.success) {
+  const zapretStatus = await PodkopShellMethods.getZapretStatus();
+  if (!zapretStatus.success) {
     updateCheckStore({
       order,
       code,
@@ -2927,24 +2952,71 @@ async function runZapretCheck() {
     });
     throw new Error("Zapret checks failed");
   }
-  const installed = Boolean(zapretChecks.data.zapret_installed);
+  const installed = Boolean(zapretStatus.data.installed);
+  const hasZapretRules = Number(zapretStatus.data.enabled_rule_count || 0) > 0;
+  if (installed) {
+    updateCheckStore({
+      order,
+      code,
+      title,
+      description: _("Checks passed"),
+      state: "success",
+      items: [
+        {
+          state: "success",
+          key: _("Zapret installed"),
+          value: ""
+        },
+        {
+          state: "success",
+          key: hasZapretRules ? _("There are rules using zapret") : _("No rules use zapret"),
+          value: ""
+        }
+      ]
+    });
+    return;
+  }
+  if (hasZapretRules) {
+    updateCheckStore({
+      order,
+      code,
+      title,
+      description: _("Zapret not installed"),
+      state: "error",
+      items: [
+        {
+          state: "error",
+          key: _("Zapret not installed"),
+          value: ""
+        },
+        {
+          state: "error",
+          key: _("There are rules using zapret"),
+          value: ""
+        }
+      ]
+    });
+    return;
+  }
   updateCheckStore({
     order,
     code,
     title,
-    description: installed ? _("Checks passed") : _("Checks failed"),
-    state: installed ? "success" : "error",
+    description: _("Zapret not installed"),
+    state: "warning",
     items: [
       {
-        state: installed ? "success" : "error",
-        key: installed ? _("Zapret installed") : _("Zapret not installed"),
+        state: "warning",
+        key: _("Zapret not installed"),
+        value: ""
+      },
+      {
+        state: "success",
+        key: _("No rules use zapret"),
         value: ""
       }
     ]
   });
-  if (!installed) {
-    throw new Error("Zapret checks failed");
-  }
 }
 
 // src/partials/button/styles.ts
@@ -4260,6 +4332,7 @@ var UNKNOWN_DIAGNOSTICS_SYSTEM_INFO = {
   luci_app_version: _("unknown"),
   sing_box_version: _("unknown"),
   zapret_version: _("unknown"),
+  zapret_installed: 0,
   openwrt_version: _("unknown"),
   device_model: _("unknown")
 };
@@ -4684,7 +4757,7 @@ function renderDiagnosticSystemInfoWidget() {
       },
       {
         key: "Zapret",
-        value: diagnosticsSystemInfo.zapret_version
+        value: diagnosticsSystemInfo.zapret_installed ? diagnosticsSystemInfo.zapret_version : _("not installed")
       },
       {
         key: "OS",

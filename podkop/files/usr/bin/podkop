@@ -38,6 +38,7 @@ PODKOP_RUNTIME_STATE_DIR="/var/run/podkop-plus"
 PODKOP_RELOAD_STATE_FILE="$PODKOP_RUNTIME_STATE_DIR/reload-state"
 PODKOP_RELOAD_STATE_FORMAT=1
 PODKOP_NFT_POPULATE_ENABLED=1
+PODKOP_ZAPRET_MISSING_WARNING_EMITTED=0
 
 config_load "$PODKOP_CONFIG"
 
@@ -1182,6 +1183,16 @@ process_validate_rule() {
 
     action="$(get_rule_action "$section")"
     if [ "$action" = "zapret" ]; then
+        if ! is_zapret_installed; then
+            if [ "$PODKOP_ZAPRET_MISSING_WARNING_EMITTED" -eq 0 ]; then
+                log "There are enabled rules with action 'zapret', but the zapret package is not installed. These rules will be skipped." "error"
+                PODKOP_ZAPRET_MISSING_WARNING_EMITTED=1
+            fi
+            config_list_foreach "$section" "community_lists" validate_service
+            config_list_foreach "$section" "rule_set" validate_ruleset_reference
+            return 0
+        fi
+
         validate_rule_nfqws_opt "$section"
     fi
 
@@ -1769,6 +1780,10 @@ configure_outbound_handler() {
     proxy_config_type="$(get_proxy_config_type "$section")"
 
     if [ "$action" = "zapret" ]; then
+        if ! is_zapret_installed; then
+            return 0
+        fi
+
         local routing_mark outbound_tag zapret_index
 
         zapret_index="$(get_zapret_rule_index "$section")"
@@ -2224,6 +2239,10 @@ configure_route_rule_handler() {
 
     action="$(get_rule_action "$section")"
     [ -n "$action" ] || return 0
+
+    if [ "$action" = "zapret" ] && ! is_zapret_installed; then
+        return 0
+    fi
 
     log "Configuring route rule '$section' with action '$action'"
 
@@ -3535,7 +3554,7 @@ get_podkop_latest_version() {
 }
 
 get_system_info() {
-    local podkop_version podkop_latest_version luci_app_version sing_box_version zapret_version openwrt_version device_model
+    local podkop_version podkop_latest_version luci_app_version sing_box_version zapret_version zapret_installed openwrt_version device_model
 
     podkop_version="$PODKOP_VERSION"
 
@@ -3555,7 +3574,9 @@ get_system_info() {
         sing_box_version="not installed"
     fi
 
-    if [ -x "$ZAPRET_SOURCE_NFQWS_BIN" ]; then
+    zapret_installed=0
+    if is_zapret_installed; then
+        zapret_installed=1
         zapret_version="$(get_zapret_package_version)"
         [ -z "$zapret_version" ] && zapret_version="unknown"
     else
@@ -3582,6 +3603,7 @@ get_system_info() {
         --arg luci_app_version "$luci_app_version" \
         --arg sing_box_version "$sing_box_version" \
         --arg zapret_version "$zapret_version" \
+        --argjson zapret_installed "$zapret_installed" \
         --arg openwrt_version "$openwrt_version" \
         --arg device_model "$device_model" \
         '{
@@ -3590,6 +3612,7 @@ get_system_info() {
             luci_app_version: $luci_app_version,
             sing_box_version: $sing_box_version,
             zapret_version: $zapret_version,
+            zapret_installed: $zapret_installed,
             openwrt_version: $openwrt_version,
             device_model: $device_model
         }'
@@ -4553,5 +4576,3 @@ validate_nfqws_strategy_json)
     exit 1
     ;;
 esac
-
-

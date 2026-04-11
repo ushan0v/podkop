@@ -14,9 +14,9 @@ export async function runZapretCheck() {
     items: [],
   });
 
-  const zapretChecks = await PodkopShellMethods.checkZapretRuntime();
+  const zapretStatus = await PodkopShellMethods.getZapretStatus();
 
-  if (!zapretChecks.success) {
+  if (!zapretStatus.success) {
     updateCheckStore({
       order,
       code,
@@ -29,24 +29,76 @@ export async function runZapretCheck() {
     throw new Error('Zapret checks failed');
   }
 
-  const installed = Boolean(zapretChecks.data.zapret_installed);
+  const installed = Boolean(zapretStatus.data.installed);
+  const hasZapretRules = Number(zapretStatus.data.enabled_rule_count || 0) > 0;
+
+  if (installed) {
+    updateCheckStore({
+      order,
+      code,
+      title,
+      description: _('Checks passed'),
+      state: 'success',
+      items: [
+        {
+          state: 'success',
+          key: _('Zapret installed'),
+          value: '',
+        },
+        {
+          state: 'success',
+          key: hasZapretRules
+            ? _('There are rules using zapret')
+            : _('No rules use zapret'),
+          value: '',
+        },
+      ],
+    });
+
+    return;
+  }
+
+  if (hasZapretRules) {
+    updateCheckStore({
+      order,
+      code,
+      title,
+      description: _('Zapret not installed'),
+      state: 'error',
+      items: [
+        {
+          state: 'error',
+          key: _('Zapret not installed'),
+          value: '',
+        },
+        {
+          state: 'error',
+          key: _('There are rules using zapret'),
+          value: '',
+        },
+      ],
+    });
+
+    return;
+  }
 
   updateCheckStore({
     order,
     code,
     title,
-    description: installed ? _('Checks passed') : _('Checks failed'),
-    state: installed ? 'success' : 'error',
+    description: _('Zapret not installed'),
+    state: 'warning',
     items: [
       {
-        state: installed ? 'success' : 'error',
-        key: installed ? _('Zapret installed') : _('Zapret not installed'),
+        state: 'warning',
+        key: _('Zapret not installed'),
+        value: '',
+      },
+      {
+        state: 'success',
+        key: _('No rules use zapret'),
         value: '',
       },
     ],
   });
-
-  if (!installed) {
-    throw new Error('Zapret checks failed');
-  }
 }

@@ -28,6 +28,7 @@ const UNKNOWN_DIAGNOSTICS_SYSTEM_INFO = {
   luci_app_version: _('unknown'),
   sing_box_version: _('unknown'),
   zapret_version: _('unknown'),
+  zapret_installed: 0,
   openwrt_version: _('unknown'),
   device_model: _('unknown'),
 };
@@ -517,7 +518,9 @@ function renderDiagnosticSystemInfoWidget() {
       },
       {
         key: 'Zapret',
-        value: diagnosticsSystemInfo.zapret_version,
+        value: diagnosticsSystemInfo.zapret_installed
+          ? diagnosticsSystemInfo.zapret_version
+          : _('not installed'),
       },
       {
         key: 'OS',

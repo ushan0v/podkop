@@ -34,10 +34,7 @@ export async function fetchServicesInfo() {
   }
 
   const podkop = getSettledMethodResponse('getStatus', podkopResult);
-  const singbox = getSettledMethodResponse(
-    'getSingBoxStatus',
-    singboxResult,
-  );
+  const singbox = getSettledMethodResponse('getSingBoxStatus', singboxResult);
   const zapret = getSettledMethodResponse('getZapretStatus', zapretResult);
 
   store.set({
@@ -49,6 +46,7 @@ export async function fetchServicesInfo() {
         podkopRunning: podkop.success ? podkop.data.running : 0,
         podkopEnabled: podkop.success ? podkop.data.enabled : 0,
         zapret: zapret.success ? zapret.data.ready : 0,
+        zapretInstalled: zapret.success ? zapret.data.installed : 0,
       },
     },
   });

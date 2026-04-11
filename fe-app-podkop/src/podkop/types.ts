@@ -187,6 +187,7 @@ export namespace Podkop {
     luci_app_version: string;
     sing_box_version: string;
     zapret_version: string;
+    zapret_installed: 0 | 1;
     openwrt_version: string;
     device_model: string;
   }

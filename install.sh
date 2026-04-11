@@ -4,14 +4,7 @@
 REPO_OWNER="ushan0v"
 REPO_NAME="podkop-plus"
 
-PODKOP_PLUS_RELEASE_TAG="${PODKOP_PLUS_RELEASE_TAG:-}"
-PODKOP_PLUS_SOURCE_REF="${PODKOP_PLUS_SOURCE_REF:-}"
-ZAPRET_RELEASE_TAG="${ZAPRET_RELEASE_TAG:-}"
-
-DOWNLOAD_RETRIES="${DOWNLOAD_RETRIES:-3}"
 REQUIRED_SPACE_KB=15360
-PODKOP_PLUS_ASSUME_YES="${PODKOP_PLUS_ASSUME_YES:-0}"
-PODKOP_PLUS_KEEP_EXISTING_ZAPRET="${PODKOP_PLUS_KEEP_EXISTING_ZAPRET:-0}"
 
 PKG_IS_APK=0
 FETCHER=""
@@ -20,8 +13,12 @@ PODKOP_WAS_ENABLED=0
 TARGET_ARCH=""
 ZAPRET_ARCH=""
 ZAPRET_ARCH_CANDIDATES=""
+ZAPRET_ALREADY_PRESENT=0
+ZAPRET_REQUESTED=0
+ZAPRET_SKIPPED_REASON=""
 
 PODKOP_PLUS_RELEASE_JSON=""
+PODKOP_PLUS_RELEASE_TAG=""
 PODKOP_PLUS_PACKAGE_URL=""
 PODKOP_PLUS_PACKAGE_NAME=""
 PODKOP_PLUS_PACKAGE_FILE=""
@@ -55,6 +52,24 @@ fail() {
 
 cleanup() {
     [ -n "$TMP_DIR" ] && rm -rf "$TMP_DIR"
+}
+
+clear_zapret_download_state() {
+    ZAPRET_RELEASE_JSON=""
+    ZAPRET_RELEASE_TAG_RESOLVED=""
+    ZAPRET_BUNDLE_URL=""
+    ZAPRET_BUNDLE_NAME=""
+    ZAPRET_PACKAGE_NAME=""
+    ZAPRET_PACKAGE_FILE=""
+    ZAPRET_PACKAGE_VERSION=""
+    ZAPRET_ARCH=""
+}
+
+read_openwrt_release_value() {
+    key="$1"
+
+    [ -f /etc/openwrt_release ] || return 0
+    sed -n "s/^${key}='\(.*\)'/\1/p" /etc/openwrt_release 2>/dev/null | head -n 1
 }
 
 command_exists() {
@@ -117,9 +132,10 @@ download_with_retry() {
     output_path="$2"
     label="$3"
     attempt=1
+    max_attempts=3
 
-    while [ "$attempt" -le "$DOWNLOAD_RETRIES" ]; do
-        msg "Downloading $label ($attempt/$DOWNLOAD_RETRIES)"
+    while [ "$attempt" -le "$max_attempts" ]; do
+        msg "Downloading $label ($attempt/$max_attempts)"
 
         if download_file_once "$url" "$output_path" && [ -s "$output_path" ]; then
             return 0
@@ -149,6 +165,10 @@ pkg_is_installed() {
     else
         opkg list-installed 2>/dev/null | grep -Eq "^${pkg_name}([[:space:]-]|$)"
     fi
+}
+
+is_zapret_present() {
+    pkg_is_installed "zapret" || [ -x /opt/zapret/nfq/nfqws ]
 }
 
 pkg_list_update() {
@@ -241,7 +261,7 @@ check_system() {
     model="$(cat /tmp/sysinfo/model 2>/dev/null || true)"
     [ -n "$model" ] && msg "Router model: $model"
 
-    release="$(sed -n "s/^DISTRIB_RELEASE='\(.*\)'/\1/p" /etc/openwrt_release | head -n 1)"
+    release="$(read_openwrt_release_value "DISTRIB_RELEASE")"
     major="$(printf '%s' "$release" | sed 's/[^0-9].*$//' | cut -d. -f1)"
 
     if [ -n "$major" ] && [ "$major" -lt 24 ]; then
@@ -259,10 +279,6 @@ check_system() {
 confirm_prompt() {
     prompt_text="$1"
     answer=""
-
-    if [ "$PODKOP_PLUS_ASSUME_YES" = "1" ]; then
-        return 0
-    fi
 
     printf '%s [y/N]: ' "$prompt_text"
     read -r answer || return 1
@@ -332,16 +348,9 @@ extract_package_version() {
 fetch_github_release_json() {
     owner="$1"
     repo="$2"
-    tag="$3"
-    url=""
     response=""
     message=""
-
-    if [ -n "$tag" ]; then
-        url="https://api.github.com/repos/${owner}/${repo}/releases/tags/${tag}"
-    else
-        url="https://api.github.com/repos/${owner}/${repo}/releases/latest"
-    fi
+    url="https://api.github.com/repos/${owner}/${repo}/releases/latest"
 
     response="$(http_get "$url" 2>/dev/null || true)"
     [ -n "$response" ] || fail "Failed to query GitHub release metadata for ${owner}/${repo}"
@@ -351,12 +360,9 @@ fetch_github_release_json() {
     message="$(printf '%s' "$response" | jq -r '.message // empty')"
     case "$message" in
         *"API rate limit"*|*"rate limit exceeded"*)
-            fail "GitHub API rate limit reached. Try again later or set PODKOP_PLUS_RELEASE_TAG/ZAPRET_RELEASE_TAG manually."
+            fail "GitHub API rate limit reached. Try again later."
             ;;
         "Not Found")
-            if [ -n "$tag" ]; then
-                fail "GitHub release tag not found: ${owner}/${repo}@${tag}"
-            fi
             fail "No published releases found for ${owner}/${repo}"
             ;;
     esac
@@ -369,11 +375,9 @@ resolve_podkop_plus_release() {
 
     [ "$PKG_IS_APK" -eq 1 ] && asset_ext="apk"
 
-    PODKOP_PLUS_RELEASE_JSON="$(fetch_github_release_json "$REPO_OWNER" "$REPO_NAME" "$PODKOP_PLUS_RELEASE_TAG")"
+    PODKOP_PLUS_RELEASE_JSON="$(fetch_github_release_json "$REPO_OWNER" "$REPO_NAME")"
     PODKOP_PLUS_RELEASE_TAG="$(printf '%s' "$PODKOP_PLUS_RELEASE_JSON" | jq -r '.tag_name // empty')"
     [ -n "$PODKOP_PLUS_RELEASE_TAG" ] || fail "Failed to detect the Podkop Plus release tag"
-
-    [ -n "$PODKOP_PLUS_SOURCE_REF" ] || PODKOP_PLUS_SOURCE_REF="$PODKOP_PLUS_RELEASE_TAG"
 
     PODKOP_PLUS_PACKAGE_URL="$(printf '%s' "$PODKOP_PLUS_RELEASE_JSON" | jq -r --arg ext "$asset_ext" '.assets[] | select((.name | startswith("luci-app-podkop-plus_")) and (.name | endswith("." + $ext))) | .browser_download_url' | sed -n '1p')"
     PODKOP_PLUS_I18N_URL="$(printf '%s' "$PODKOP_PLUS_RELEASE_JSON" | jq -r --arg ext "$asset_ext" '.assets[] | select((.name | startswith("luci-i18n-podkop-plus-ru_")) and (.name | endswith("." + $ext))) | .browser_download_url' | sed -n '1p')"
@@ -426,7 +430,7 @@ reset_legacy_config_if_needed() {
     backup_path="/etc/config/podkop-070.$(date +%Y%m%d%H%M%S 2>/dev/null || echo "$$")"
     mv /etc/config/podkop "$backup_path" || fail "Failed to back up /etc/config/podkop"
 
-    default_config_url="https://raw.githubusercontent.com/${REPO_OWNER}/${REPO_NAME}/${PODKOP_PLUS_SOURCE_REF}/podkop/files/etc/config/podkop"
+    default_config_url="https://raw.githubusercontent.com/${REPO_OWNER}/${REPO_NAME}/${PODKOP_PLUS_RELEASE_TAG}/podkop/files/etc/config/podkop"
     default_config_tmp="$TMP_DIR/default-podkop-config"
 
     download_with_retry "$default_config_url" "$default_config_tmp" "default Podkop Plus config" || fail "Failed to download the default Podkop Plus config"
@@ -512,6 +516,12 @@ append_arch_candidate() {
 
     [ -n "$candidate" ] || return 0
 
+    case "$candidate" in
+        all|noarch)
+            return 0
+            ;;
+    esac
+
     case " $ZAPRET_ARCH_CANDIDATES " in
         *" $candidate "*)
             return 0
@@ -525,66 +535,143 @@ append_arch_candidate() {
     fi
 }
 
+append_arch_candidate_variants() {
+    candidate="$1"
+    base_candidate=""
+
+    [ -n "$candidate" ] || return 0
+
+    append_arch_candidate "$candidate"
+
+    case "$candidate" in
+        *+*)
+            append_arch_candidate "${candidate%%+*}"
+            ;;
+    esac
+
+    for suffix in _musl _uclibc _glibc -musl -uclibc -glibc .musl .uclibc .glibc; do
+        case "$candidate" in
+            *"$suffix")
+                base_candidate="${candidate%"$suffix"}"
+                append_arch_candidate "$base_candidate"
+                ;;
+        esac
+    done
+}
+
 add_arch_family_fallbacks() {
     arch="$1"
 
-    append_arch_candidate "$arch"
+    append_arch_candidate_variants "$arch"
 
     case "$arch" in
         aarch64_*)
-            append_arch_candidate "aarch64_generic"
+            append_arch_candidate_variants "aarch64_generic"
             ;;
         riscv64_*)
-            append_arch_candidate "riscv64_generic"
+            append_arch_candidate_variants "riscv64_generic"
             ;;
         arm_cortex-a7_neon-vfpv4)
-            append_arch_candidate "arm_cortex-a7_vfpv4"
-            append_arch_candidate "arm_cortex-a7"
+            append_arch_candidate_variants "arm_cortex-a7_vfpv4"
+            append_arch_candidate_variants "arm_cortex-a7"
             ;;
         arm_cortex-a7_*)
-            append_arch_candidate "arm_cortex-a7"
+            append_arch_candidate_variants "arm_cortex-a7"
             ;;
         arm_cortex-a9_*)
-            append_arch_candidate "arm_cortex-a9"
+            append_arch_candidate_variants "arm_cortex-a9"
             ;;
         mipsel_24kc_24kf)
-            append_arch_candidate "mipsel_24kc"
+            append_arch_candidate_variants "mipsel_24kc"
             ;;
     esac
 }
 
 resolve_arch_candidates() {
     arch_list=""
+    apk_arch_list=""
+    release_arch=""
 
     if [ "$PKG_IS_APK" -eq 1 ]; then
-        arch_list="$(apk --print-arch 2>/dev/null || true)"
+        if [ -f /etc/apk/arch ]; then
+            apk_arch_list="$(tr '\r\n' '  ' </etc/apk/arch)"
+            [ -n "$apk_arch_list" ] && arch_list="$arch_list $apk_arch_list"
+        fi
+
+        apk_arch_list="$(apk --print-arch 2>/dev/null || true)"
+        [ -n "$apk_arch_list" ] && arch_list="$arch_list $apk_arch_list"
     else
         arch_list="$(opkg print-architecture 2>/dev/null | awk '$1 == "arch" && $2 !~ /^(all|noarch)$/ {print $2 " " $3}' | sort -k2,2nr | awk '{print $1}')"
     fi
 
-    if [ -z "$arch_list" ]; then
+    release_arch="$(read_openwrt_release_value "DISTRIB_ARCH")"
+    [ -n "$release_arch" ] && arch_list="$arch_list $release_arch"
+
+    if [ -z "$(printf '%s' "$arch_list" | tr -d '[:space:]')" ]; then
         arch_list="$(uname -m 2>/dev/null || true)"
     fi
 
     for arch in $arch_list; do
+        case "$arch" in
+            all|noarch)
+                continue
+                ;;
+        esac
+
         [ -n "$TARGET_ARCH" ] || TARGET_ARCH="$arch"
         add_arch_family_fallbacks "$arch"
     done
 
     [ -n "$TARGET_ARCH" ] || fail "Failed to detect the router package architecture"
+    msg "Detected zapret architecture candidates: $ZAPRET_ARCH_CANDIDATES"
 }
 
 resolve_zapret_release() {
     candidate_name=""
+    message=""
+    url="https://api.github.com/repos/remittor/zapret-openwrt/releases/latest"
 
-    if [ "$PODKOP_PLUS_KEEP_EXISTING_ZAPRET" = "1" ] && pkg_is_installed "zapret"; then
-        warn "Keeping the existing zapret package because PODKOP_PLUS_KEEP_EXISTING_ZAPRET=1"
+    clear_zapret_download_state
+
+    [ "$ZAPRET_REQUESTED" -eq 1 ] || return 0
+
+    ZAPRET_RELEASE_JSON="$(http_get "$url" 2>/dev/null || true)"
+    if [ -z "$ZAPRET_RELEASE_JSON" ]; then
+        warn "Failed to query zapret release metadata. Continuing without zapret."
+        ZAPRET_SKIPPED_REASON="release metadata unavailable"
         return 0
     fi
 
-    ZAPRET_RELEASE_JSON="$(fetch_github_release_json "remittor" "zapret-openwrt" "$ZAPRET_RELEASE_TAG")"
+    if ! printf '%s' "$ZAPRET_RELEASE_JSON" | jq -e . >/dev/null 2>&1; then
+        warn "GitHub returned an invalid zapret release response. Continuing without zapret."
+        ZAPRET_SKIPPED_REASON="invalid release metadata"
+        clear_zapret_download_state
+        return 0
+    fi
+
+    message="$(printf '%s' "$ZAPRET_RELEASE_JSON" | jq -r '.message // empty')"
+    case "$message" in
+        *"API rate limit"*|*"rate limit exceeded"*)
+            warn "GitHub API rate limit reached while resolving zapret. Continuing without zapret."
+            ZAPRET_SKIPPED_REASON="GitHub API rate limit"
+            clear_zapret_download_state
+            return 0
+            ;;
+        "Not Found")
+            warn "No published releases found for remittor/zapret-openwrt. Continuing without zapret."
+            ZAPRET_SKIPPED_REASON="release not found"
+            clear_zapret_download_state
+            return 0
+            ;;
+    esac
+
     ZAPRET_RELEASE_TAG_RESOLVED="$(printf '%s' "$ZAPRET_RELEASE_JSON" | jq -r '.tag_name // empty')"
-    [ -n "$ZAPRET_RELEASE_TAG_RESOLVED" ] || fail "Failed to detect the zapret release tag"
+    if [ -z "$ZAPRET_RELEASE_TAG_RESOLVED" ]; then
+        warn "Failed to detect the zapret release tag. Continuing without zapret."
+        ZAPRET_SKIPPED_REASON="release tag unavailable"
+        clear_zapret_download_state
+        return 0
+    fi
 
     for arch in $ZAPRET_ARCH_CANDIDATES; do
         candidate_name="$(printf '%s' "$ZAPRET_RELEASE_JSON" | jq -r --arg arch "$arch" '.assets[] | select(.name | endswith("_" + $arch + ".zip")) | .name' | sed -n '1p')"
@@ -596,10 +683,36 @@ resolve_zapret_release() {
         fi
     done
 
-    [ -n "$ZAPRET_BUNDLE_NAME" ] || fail "No zapret package was found for architecture: $TARGET_ARCH. Tried: $ZAPRET_ARCH_CANDIDATES"
+    if [ -z "$ZAPRET_BUNDLE_NAME" ]; then
+        warn "No zapret package was found for architecture: $TARGET_ARCH. Tried: $ZAPRET_ARCH_CANDIDATES. Continuing without zapret."
+        ZAPRET_SKIPPED_REASON="package not found for architecture"
+        clear_zapret_download_state
+        return 0
+    fi
 
     ZAPRET_BUNDLE_URL="$(printf '%s' "$ZAPRET_RELEASE_JSON" | jq -r --arg name "$ZAPRET_BUNDLE_NAME" '.assets[] | select(.name == $name) | .browser_download_url' | sed -n '1p')"
-    [ -n "$ZAPRET_BUNDLE_URL" ] || fail "Failed to resolve the zapret download URL for $ZAPRET_BUNDLE_NAME"
+    if [ -z "$ZAPRET_BUNDLE_URL" ]; then
+        warn "Failed to resolve the zapret download URL for $ZAPRET_BUNDLE_NAME. Continuing without zapret."
+        ZAPRET_SKIPPED_REASON="download URL unavailable"
+        clear_zapret_download_state
+        return 0
+    fi
+}
+
+decide_zapret_installation() {
+    if is_zapret_present; then
+        ZAPRET_ALREADY_PRESENT=1
+        msg "Detected an existing zapret installation. Skipping zapret installation."
+        return 0
+    fi
+
+    if confirm_prompt "Install optional zapret package?"; then
+        ZAPRET_REQUESTED=1
+        return 0
+    fi
+
+    ZAPRET_SKIPPED_REASON="installation declined by user"
+    warn "Continuing without zapret."
 }
 
 download_podkop_plus_packages() {
@@ -617,7 +730,12 @@ download_and_extract_zapret_package() {
     [ -n "$ZAPRET_BUNDLE_URL" ] || return 0
 
     bundle_file="$TMP_DIR/$ZAPRET_BUNDLE_NAME"
-    download_with_retry "$ZAPRET_BUNDLE_URL" "$bundle_file" "$ZAPRET_BUNDLE_NAME" || fail "Failed to download $ZAPRET_BUNDLE_NAME"
+    if ! download_with_retry "$ZAPRET_BUNDLE_URL" "$bundle_file" "$ZAPRET_BUNDLE_NAME"; then
+        warn "Failed to download $ZAPRET_BUNDLE_NAME. Continuing without zapret."
+        ZAPRET_SKIPPED_REASON="download failed"
+        clear_zapret_download_state
+        return 0
+    fi
 
     if [ "$PKG_IS_APK" -eq 1 ]; then
         inner_package_path="$(unzip -l "$bundle_file" | awk '{print $4}' | grep -E '^apk/zapret-.*\.apk$' | sed -n '1p')"
@@ -626,24 +744,41 @@ download_and_extract_zapret_package() {
         [ -n "$inner_package_path" ] || inner_package_path="$(unzip -l "$bundle_file" | awk '{print $4}' | grep -E '^zapret_.*\.ipk$' | sed -n '1p')"
     fi
 
-    [ -n "$inner_package_path" ] || fail "Failed to locate the zapret package inside $ZAPRET_BUNDLE_NAME"
+    if [ -z "$inner_package_path" ]; then
+        warn "Failed to locate the zapret package inside $ZAPRET_BUNDLE_NAME. Continuing without zapret."
+        ZAPRET_SKIPPED_REASON="package archive layout is unsupported"
+        clear_zapret_download_state
+        return 0
+    fi
 
     ZAPRET_PACKAGE_NAME="$(basename "$inner_package_path")"
     ZAPRET_PACKAGE_FILE="$TMP_DIR/$ZAPRET_PACKAGE_NAME"
     ZAPRET_PACKAGE_VERSION="$(extract_package_version "$ZAPRET_PACKAGE_NAME")"
 
-    unzip -p "$bundle_file" "$inner_package_path" > "$ZAPRET_PACKAGE_FILE" || fail "Failed to extract $ZAPRET_PACKAGE_NAME"
-    [ -s "$ZAPRET_PACKAGE_FILE" ] || fail "The extracted zapret package is empty"
-}
-
-install_packages() {
-    if [ "$PODKOP_PLUS_KEEP_EXISTING_ZAPRET" = "1" ] && pkg_is_installed "zapret"; then
-        pkg_install_files "$PODKOP_PLUS_PACKAGE_FILE" "$PODKOP_PLUS_I18N_FILE" || fail "Podkop Plus package installation failed"
+    if ! unzip -p "$bundle_file" "$inner_package_path" > "$ZAPRET_PACKAGE_FILE"; then
+        warn "Failed to extract $ZAPRET_PACKAGE_NAME. Continuing without zapret."
+        ZAPRET_SKIPPED_REASON="package extraction failed"
+        clear_zapret_download_state
         return 0
     fi
 
-    pkg_remove_if_installed "zapret"
-    pkg_install_files "$ZAPRET_PACKAGE_FILE" "$PODKOP_PLUS_PACKAGE_FILE" "$PODKOP_PLUS_I18N_FILE" || fail "Package installation failed"
+    if [ ! -s "$ZAPRET_PACKAGE_FILE" ]; then
+        warn "The extracted zapret package is empty. Continuing without zapret."
+        ZAPRET_SKIPPED_REASON="empty package archive"
+        clear_zapret_download_state
+        return 0
+    fi
+}
+
+install_packages() {
+    set -- "$PODKOP_PLUS_PACKAGE_FILE" "$PODKOP_PLUS_I18N_FILE"
+
+    if [ -n "$ZAPRET_PACKAGE_FILE" ]; then
+        pkg_remove_if_installed "zapret"
+        set -- "$ZAPRET_PACKAGE_FILE" "$@"
+    fi
+
+    pkg_install_files "$@" || fail "Package installation failed"
 }
 
 post_install() {
@@ -673,6 +808,7 @@ main() {
     remove_conflicting_dns_proxy
     remove_old_sing_box_if_needed
     resolve_arch_candidates
+    decide_zapret_installation
     resolve_zapret_release
 
     cleanup_legacy_installation
@@ -687,8 +823,10 @@ main() {
     if [ -n "$ZAPRET_PACKAGE_VERSION" ]; then
         msg "zapret $ZAPRET_PACKAGE_VERSION installed for architecture $ZAPRET_ARCH"
         msg "zapret source: remittor/zapret-openwrt@${ZAPRET_RELEASE_TAG_RESOLVED}"
-    elif [ "$PODKOP_PLUS_KEEP_EXISTING_ZAPRET" = "1" ] && pkg_is_installed "zapret"; then
-        warn "Keeping the existing zapret package"
+    elif [ "$ZAPRET_ALREADY_PRESENT" -eq 1 ]; then
+        msg "Using the existing zapret installation"
+    elif [ -n "$ZAPRET_SKIPPED_REASON" ]; then
+        warn "zapret was not installed: $ZAPRET_SKIPPED_REASON"
     fi
 
     warn "Open LuCI and review your rules before enabling Podkop Plus"

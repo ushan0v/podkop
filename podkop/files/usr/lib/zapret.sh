@@ -436,6 +436,10 @@ run_nfqws_dry_run_validation() {
     local raw_opt="$1"
     local old_ifs output_file output summary needles rc
 
+    if ! is_zapret_installed; then
+        return 0
+    fi
+
     if ! prepare_zapret_runtime; then
         set_nfqws_validation_failure \
             "The Podkop Plus zapret runtime is unavailable. Install the upstream zapret package so $ZAPRET_SOURCE_NFQWS_BIN exists."
@@ -648,6 +652,10 @@ prepare_zapret_runtime() {
     prepare_zapret_runtime_dir "$ZAPRET_SOURCE_IPSET_DIR" "$ZAPRET_RUNTIME_IPSET_DIR" || return 1
 
     return 0
+}
+
+is_zapret_installed() {
+    [ -x "$ZAPRET_SOURCE_NFQWS_BIN" ]
 }
 
 rewrite_zapret_runtime_paths() {
@@ -869,9 +877,9 @@ build_generated_zapret_hostlist() {
 check_zapret_requirements() {
     has_enabled_zapret_rules || return 0
 
-    if [ ! -x "$ZAPRET_SOURCE_NFQWS_BIN" ]; then
-        log "Action 'zapret' requires the upstream zapret runtime package. Missing binary: $ZAPRET_SOURCE_NFQWS_BIN. Aborted." "fatal"
-        exit 1
+    if ! is_zapret_installed; then
+        log "Zapret package is not installed. Rules with action 'zapret' will be skipped until zapret is installed." "error"
+        return 0
     fi
 
     if ! prepare_zapret_runtime; then
@@ -1100,6 +1108,7 @@ _create_zapret_nft_rule_handler() {
 
 create_zapret_nft_rules() {
     has_enabled_zapret_rules || return 0
+    is_zapret_installed || return 0
 
     nft add rule inet "$NFT_TABLE_NAME" mangle_output meta mark \& "$ZAPRET_DESYNC_MARK" == "$ZAPRET_DESYNC_MARK" return
     nft add rule inet "$NFT_TABLE_NAME" mangle_output meta mark \& "$ZAPRET_DESYNC_MARK_POSTNAT" == "$ZAPRET_DESYNC_MARK_POSTNAT" return
@@ -1158,6 +1167,7 @@ _start_zapret_runtime_handler() {
 
 start_zapret_runtime() {
     has_enabled_zapret_rules || return 0
+    is_zapret_installed || return 0
 
     stop_zapret_runtime
     check_zapret_requirements
