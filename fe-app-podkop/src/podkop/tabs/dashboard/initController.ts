@@ -340,7 +340,7 @@ async function renderServicesInfoWidget() {
     title: _('Services info'),
     items: [
       {
-        key: _('Podkop Plus'),
+        key: 'Podkop Plus',
         value: servicesInfoWidget.data.podkopRunning
           ? _('✔ Running')
           : _('✘ Stopped'),
@@ -351,7 +351,7 @@ async function renderServicesInfoWidget() {
         },
       },
       {
-        key: _('Sing-box'),
+        key: 'Sing-box',
         value: servicesInfoWidget.data.singbox
           ? _('✔ Running')
           : _('✘ Stopped'),
@@ -362,7 +362,7 @@ async function renderServicesInfoWidget() {
         },
       },
       {
-        key: _('Zapret'),
+        key: 'Zapret',
         value: !servicesInfoWidget.data.zapretInstalled
           ? _('✘ Not installed')
           : servicesInfoWidget.data.zapret

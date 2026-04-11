@@ -784,6 +784,10 @@ install_packages() {
 post_install() {
     rm -f /var/luci-indexcache* /tmp/luci-indexcache*
     [ -x /etc/init.d/rpcd ] && /etc/init.d/rpcd reload >/dev/null 2>&1 || true
+    if [ -n "$ZAPRET_PACKAGE_FILE" ] && [ -x /usr/bin/podkop-plus ]; then
+        /usr/bin/podkop-plus neutralize_zapret_defaults >/dev/null 2>&1 ||
+            warn "Failed to neutralize the default standalone zapret profile after installation."
+    fi
 
     if [ "$PODKOP_WAS_ENABLED" -eq 1 ] && [ -x /etc/init.d/podkop-plus ]; then
         /etc/init.d/podkop-plus enable >/dev/null 2>&1 || true

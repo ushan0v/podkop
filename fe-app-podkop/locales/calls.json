@@ -153,14 +153,6 @@
     ]
   },
   {
-    "call": "Block",
-    "key": "Block",
-    "places": [
-      "../luci-app-podkop-plus/htdocs/luci-static/resources/view/podkop/section.js:229",
-      "../luci-app-podkop-plus/htdocs/luci-static/resources/view/podkop/section.js:262"
-    ]
-  },
-  {
     "call": "Bootsrap DNS",
     "key": "Bootsrap DNS",
     "places": [
@@ -251,7 +243,6 @@
     "key": "Checks passed",
     "places": [
       "src/podkop/tabs/diagnostic/checks/runZapretCheck.ts:40",
-      "src/podkop/tabs/diagnostic/checks/runZapretCheck.ts:82",
       "src/podkop/tabs/diagnostic/helpers/getMeta.ts:13"
     ]
   },
@@ -1312,7 +1303,8 @@
     "call": "No rules use zapret",
     "key": "No rules use zapret",
     "places": [
-      "src/podkop/tabs/diagnostic/checks/runZapretCheck.ts:45"
+      "src/podkop/tabs/diagnostic/checks/runZapretCheck.ts:52",
+      "src/podkop/tabs/diagnostic/checks/runZapretCheck.ts:99"
     ]
   },
   {
@@ -1457,13 +1449,6 @@
     ]
   },
   {
-    "call": "Podkop Plus",
-    "key": "Podkop Plus",
-    "places": [
-      "src/podkop/tabs/dashboard/initController.ts:343"
-    ]
-  },
-  {
     "call": "Podkop Plus manages the nfqws process lifecycle itself, so daemon mode is not allowed here.",
     "key": "Podkop Plus manages the nfqws process lifecycle itself, so daemon mode is not allowed here.",
     "places": [
@@ -1496,14 +1481,6 @@
     "key": "Port for the local mixed proxy of this section",
     "places": [
       "../luci-app-podkop-plus/htdocs/luci-static/resources/view/podkop/section.js:1911"
-    ]
-  },
-  {
-    "call": "Proxy",
-    "key": "Proxy",
-    "places": [
-      "../luci-app-podkop-plus/htdocs/luci-static/resources/view/podkop/section.js:238",
-      "../luci-app-podkop-plus/htdocs/luci-static/resources/view/podkop/section.js:260"
     ]
   },
   {
@@ -1789,14 +1766,6 @@
     ]
   },
   {
-    "call": "Selector",
-    "key": "Selector",
-    "places": [
-      "../luci-app-podkop-plus/htdocs/luci-static/resources/view/podkop/node.js:20",
-      "../luci-app-podkop-plus/htdocs/luci-static/resources/view/podkop/section.js:1624"
-    ]
-  },
-  {
     "call": "Selector connections",
     "key": "Selector connections",
     "places": [
@@ -1838,13 +1807,6 @@
     "places": [
       "src/podkop/tabs/diagnostic/initController.ts:330",
       "src/podkop/tabs/diagnostic/partials/renderAvailableActions.ts:116"
-    ]
-  },
-  {
-    "call": "Sing-box",
-    "key": "Sing-box",
-    "places": [
-      "src/podkop/tabs/dashboard/initController.ts:354"
     ]
   },
   {
@@ -1991,8 +1953,8 @@
     "call": "There are rules using zapret",
     "key": "There are rules using zapret",
     "places": [
-      "src/podkop/tabs/diagnostic/checks/runZapretCheck.ts:69",
-      "src/podkop/tabs/diagnostic/checks/runZapretCheck.ts:92"
+      "src/podkop/tabs/diagnostic/checks/runZapretCheck.ts:51",
+      "src/podkop/tabs/diagnostic/checks/runZapretCheck.ts:76"
     ]
   },
   {
@@ -2070,14 +2032,6 @@
     "key": "Type",
     "places": [
       "../luci-app-podkop-plus/htdocs/luci-static/resources/view/podkop/ruleset.js:13"
-    ]
-  },
-  {
-    "call": "UDP",
-    "key": "UDP",
-    "places": [
-      "../luci-app-podkop-plus/htdocs/luci-static/resources/view/podkop/node.js:229",
-      "../luci-app-podkop-plus/htdocs/luci-static/resources/view/podkop/section.js:1862"
     ]
   },
   {
@@ -2171,14 +2125,6 @@
     "key": "URL must use one of the following protocols:",
     "places": [
       "src/validators/validateUrl.ts:17"
-    ]
-  },
-  {
-    "call": "URLTest",
-    "key": "URLTest",
-    "places": [
-      "../luci-app-podkop-plus/htdocs/luci-static/resources/view/podkop/node.js:21",
-      "../luci-app-podkop-plus/htdocs/luci-static/resources/view/podkop/section.js:1625"
     ]
   },
   {
@@ -2333,15 +2279,6 @@
     ]
   },
   {
-    "call": "Zapret",
-    "key": "Zapret",
-    "places": [
-      "../luci-app-podkop-plus/htdocs/luci-static/resources/view/podkop/section.js:234",
-      "../luci-app-podkop-plus/htdocs/luci-static/resources/view/podkop/section.js:246",
-      "src/podkop/tabs/dashboard/initController.ts:365"
-    ]
-  },
-  {
     "call": "Zapret (package not installed)",
     "key": "Zapret (package not installed)",
     "places": [
@@ -2360,15 +2297,17 @@
     "call": "Zapret installed",
     "key": "Zapret installed",
     "places": [
-      "src/podkop/tabs/diagnostic/checks/runZapretCheck.ts:87"
+      "src/podkop/tabs/diagnostic/checks/runZapretCheck.ts:45"
     ]
   },
   {
     "call": "Zapret not installed",
     "key": "Zapret not installed",
     "places": [
-      "src/podkop/tabs/diagnostic/checks/runZapretCheck.ts:59",
-      "src/podkop/tabs/diagnostic/checks/runZapretCheck.ts:64"
+      "src/podkop/tabs/diagnostic/checks/runZapretCheck.ts:66",
+      "src/podkop/tabs/diagnostic/checks/runZapretCheck.ts:71",
+      "src/podkop/tabs/diagnostic/checks/runZapretCheck.ts:89",
+      "src/podkop/tabs/diagnostic/checks/runZapretCheck.ts:94"
     ]
   }
 ]

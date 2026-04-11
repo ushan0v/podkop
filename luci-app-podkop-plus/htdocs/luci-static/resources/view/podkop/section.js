@@ -226,16 +226,16 @@ function getRuleResolvedAction(section_id) {
 function getActionOptionLabel(action) {
   switch (`${action}`) {
     case "block":
-      return _("Block");
+      return "Block";
     case "direct":
       return "Direct";
     case "zapret":
       return isZapretInstalledForUi()
-        ? _("Zapret")
+        ? "Zapret"
         : _("Zapret (package not installed)");
     case "proxy":
     default:
-      return _("Proxy");
+      return "Proxy";
   }
 }
 
@@ -243,7 +243,7 @@ function getRuleActionDisplayValue(section_id) {
   const action = getRuleResolvedAction(section_id);
 
   if (action === "zapret") {
-    return _("Zapret");
+    return "Zapret";
   }
 
   return getActionOptionLabel(action);
@@ -257,9 +257,9 @@ function populateActionOptionValues(option) {
   delete option.keylist;
   delete option.vallist;
 
-  option.value("proxy", _("Proxy"));
+  option.value("proxy", "Proxy");
   option.value("direct", "Direct");
-  option.value("block", _("Block"));
+  option.value("block", "Block");
   option.value("zapret", getActionOptionLabel("zapret"));
 }
 
@@ -1621,8 +1621,8 @@ function createSectionContent(section) {
     _("How to configure the proxy connection for this section"),
   );
   o.value("url", _("Connection URL"));
-  o.value("selector", _("Selector"));
-  o.value("urltest", _("URLTest"));
+  o.value("selector", "Selector");
+  o.value("urltest", "URLTest");
   o.value("outbound", _("Outbound JSON"));
   o.value("interface", _("Interface"));
   o.default = "url";
@@ -1859,7 +1859,7 @@ function createSectionContent(section) {
   );
   o.value("doh", _("DNS over HTTPS (DoH)"));
   o.value("dot", _("DNS over TLS (DoT)"));
-  o.value("udp", _("UDP"));
+  o.value("udp", "UDP");
   o.default = "udp";
   o.rmempty = false;
   o.depends({

@@ -17,8 +17,8 @@ function createNodeContent(section) {
     _("Choose how this outbound should be configured"),
   );
   o.value("url", _("Connection URL"));
-  o.value("selector", _("Selector"));
-  o.value("urltest", _("URLTest"));
+  o.value("selector", "Selector");
+  o.value("urltest", "URLTest");
   o.value("outbound", _("Outbound JSON"));
   o.value("interface", _("Interface"));
   o.default = "url";
@@ -226,7 +226,7 @@ function createNodeContent(section) {
   o = section.option(form.ListValue, "domain_resolver_dns_type", _("DNS Protocol"));
   o.value("doh", _("DNS over HTTPS (DoH)"));
   o.value("dot", _("DNS over TLS (DoT)"));
-  o.value("udp", _("UDP"));
+  o.value("udp", "UDP");
   o.default = "udp";
   o.rmempty = false;
   o.depends({

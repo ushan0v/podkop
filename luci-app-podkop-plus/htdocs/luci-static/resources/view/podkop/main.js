@@ -2374,21 +2374,21 @@ async function renderServicesInfoWidget() {
     title: _("Services info"),
     items: [
       {
-        key: _("Podkop Plus"),
+        key: "Podkop Plus",
         value: servicesInfoWidget.data.podkopRunning ? _("\u2714 Running") : _("\u2718 Stopped"),
         attributes: {
           class: servicesInfoWidget.data.podkopRunning ? "pdk_dashboard-page__widgets-section__item__row--success" : "pdk_dashboard-page__widgets-section__item__row--error"
         }
       },
       {
-        key: _("Sing-box"),
+        key: "Sing-box",
         value: servicesInfoWidget.data.singbox ? _("\u2714 Running") : _("\u2718 Stopped"),
         attributes: {
           class: servicesInfoWidget.data.singbox ? "pdk_dashboard-page__widgets-section__item__row--success" : "pdk_dashboard-page__widgets-section__item__row--error"
         }
       },
       {
-        key: _("Zapret"),
+        key: "Zapret",
         value: !servicesInfoWidget.data.zapretInstalled ? _("\u2718 Not installed") : servicesInfoWidget.data.zapret ? _("\u2714 Running") : _("\u2718 Stopped"),
         attributes: {
           class: servicesInfoWidget.data.zapretInstalled && servicesInfoWidget.data.zapret ? "pdk_dashboard-page__widgets-section__item__row--success" : "pdk_dashboard-page__widgets-section__item__row--error"

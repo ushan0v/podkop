@@ -3622,6 +3622,10 @@ get_zapret_status() {
     get_zapret_status_json
 }
 
+neutralize_zapret_defaults() {
+    neutralize_zapret_standalone_defaults
+}
+
 check_zapret_runtime() {
     check_zapret_runtime_json
 }
@@ -4463,6 +4467,8 @@ Available commands:
     check_sing_box_logs     Show sing-box logs
     check_fakeip            Test FakeIP on router
     check_zapret_runtime    Check Podkop-managed zapret runtime state
+    neutralize_zapret_defaults
+                            Neutralize the default standalone zapret profile after a fresh install
     clash_api               Clash API interface for managing proxies and groups
     show_config             Display current Podkop Plus configuration
     show_version            Show Podkop Plus version
@@ -4531,6 +4537,9 @@ check_fakeip)
     ;;
 check_zapret_runtime)
     check_zapret_runtime
+    ;;
+neutralize_zapret_defaults)
+    neutralize_zapret_defaults
     ;;
 clash_api)
     clash_api "$2" "$3" "$4"

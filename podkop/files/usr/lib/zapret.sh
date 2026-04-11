@@ -914,6 +914,78 @@ is_zapret_standalone_service_running() {
     /etc/init.d/zapret status >/dev/null 2>&1
 }
 
+zapret_standalone_uci_config_present() {
+    [ -f /etc/config/zapret ] || return 1
+    uci -q get zapret.config >/dev/null 2>&1
+}
+
+sync_zapret_standalone_config() {
+    [ -x "$ZAPRET_SOURCE_BASE_DIR/renew-cfg.sh" ] || return 0
+    "$ZAPRET_SOURCE_BASE_DIR/renew-cfg.sh" sync >/dev/null 2>&1
+}
+
+neutralize_zapret_standalone_defaults() {
+    local config_dirty=0
+    local run_on_boot nfqws_enable
+
+    # remittor/zapret-openwrt enables and starts the main standalone profile
+    # in postinst. Podkop Plus only needs the package payload on fresh install,
+    # so make that default profile dormant until the user explicitly enables it.
+    if zapret_standalone_uci_config_present; then
+        run_on_boot="$(uci -q get zapret.config.run_on_boot)"
+        if [ "${run_on_boot:-0}" != "0" ]; then
+            uci -q set zapret.config.run_on_boot='0'
+            config_dirty=1
+        fi
+
+        nfqws_enable="$(uci -q get zapret.config.NFQWS_ENABLE)"
+        if [ "${nfqws_enable:-0}" != "0" ]; then
+            uci -q set zapret.config.NFQWS_ENABLE='0'
+            config_dirty=1
+        fi
+
+        if [ "$config_dirty" -eq 1 ]; then
+            log "Neutralizing the default standalone zapret NFQWS profile installed alongside Podkop Plus"
+            uci commit zapret >/dev/null 2>&1 || {
+                log "Failed to commit /etc/config/zapret while neutralizing the default standalone zapret profile. Aborted." "fatal"
+                return 1
+            }
+
+            sync_zapret_standalone_config || {
+                log "Failed to synchronize /opt/zapret/config after updating /etc/config/zapret. Aborted." "fatal"
+                return 1
+            }
+        fi
+    fi
+
+    if is_zapret_standalone_service_running; then
+        log "Stopping the default standalone zapret service installed alongside Podkop Plus"
+        /etc/init.d/zapret stop >/dev/null 2>&1 || true
+    fi
+
+    if is_zapret_standalone_service_enabled; then
+        log "Disabling the default standalone zapret autostart installed alongside Podkop Plus"
+        /etc/init.d/zapret disable >/dev/null 2>&1 || true
+    fi
+
+    if is_zapret_standalone_service_running || is_zapret_standalone_service_enabled; then
+        log "The standalone zapret service is still active after Podkop Plus tried to neutralize its default auto-started profile. Aborted." "fatal"
+        return 1
+    fi
+
+    if zapret_standalone_uci_config_present; then
+        run_on_boot="$(uci -q get zapret.config.run_on_boot)"
+        nfqws_enable="$(uci -q get zapret.config.NFQWS_ENABLE)"
+
+        if [ "${run_on_boot:-0}" != "0" ] || [ "${nfqws_enable:-0}" != "0" ]; then
+            log "The default standalone zapret profile remains active in /etc/config/zapret after Podkop Plus tried to neutralize it. Aborted." "fatal"
+            return 1
+        fi
+    fi
+
+    return 0
+}
+
 get_zapret_nfqws_process_count() {
     local count=0 pidfile pid
 
