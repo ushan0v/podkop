@@ -174,9 +174,9 @@ is_zapret_present() {
 
 pkg_list_update() {
     if [ "$PKG_IS_APK" -eq 1 ]; then
-        apk update
+        apk update </dev/null
     else
-        opkg update
+        opkg update </dev/null
     fi
 }
 
@@ -184,9 +184,9 @@ pkg_install_name() {
     pkg_name="$1"
 
     if [ "$PKG_IS_APK" -eq 1 ]; then
-        apk add "$pkg_name"
+        apk add "$pkg_name" </dev/null
     else
-        opkg install "$pkg_name"
+        opkg install "$pkg_name" </dev/null
     fi
 }
 
@@ -198,9 +198,9 @@ pkg_remove_if_installed() {
     fi
 
     if [ "$PKG_IS_APK" -eq 1 ]; then
-        apk del "$pkg_name" >/dev/null 2>&1 || true
+        apk del "$pkg_name" >/dev/null 2>&1 </dev/null || true
     else
-        opkg remove --force-depends "$pkg_name" >/dev/null 2>&1 || true
+        opkg remove --force-depends "$pkg_name" >/dev/null 2>&1 </dev/null || true
     fi
 }
 
@@ -214,9 +214,9 @@ pkg_remove_matching_prefix() {
 
 pkg_install_files() {
     if [ "$PKG_IS_APK" -eq 1 ]; then
-        apk add --allow-untrusted "$@"
+        apk add --allow-untrusted "$@" </dev/null
     else
-        opkg install "$@"
+        opkg install --force-overwrite "$@" </dev/null
     fi
 }
 
