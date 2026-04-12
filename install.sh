@@ -309,12 +309,17 @@ version_ge() {
     lhs_version="$(sanitize_semver "$1")"
     rhs_version="$(sanitize_semver "$2")"
 
-    IFS=. set -- $lhs_version
+    old_ifs="$IFS"
+    IFS='.'
+    set -- $lhs_version
+    IFS="$old_ifs"
     [ -n "$1" ] && lhs_major="$1"
     [ -n "$2" ] && lhs_minor="$2"
     [ -n "$3" ] && lhs_patch="$3"
 
-    IFS=. set -- $rhs_version
+    IFS='.'
+    set -- $rhs_version
+    IFS="$old_ifs"
     [ -n "$1" ] && rhs_major="$1"
     [ -n "$2" ] && rhs_minor="$2"
     [ -n "$3" ] && rhs_patch="$3"
