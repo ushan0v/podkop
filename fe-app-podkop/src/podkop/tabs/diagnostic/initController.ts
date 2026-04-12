@@ -518,7 +518,9 @@ function renderDiagnosticSystemInfoWidget() {
       },
       {
         key: 'Zapret',
-        value: diagnosticsSystemInfo.zapret_installed
+        value: diagnosticsSystemInfo.loading
+          ? 'loading'
+          : diagnosticsSystemInfo.zapret_installed
           ? diagnosticsSystemInfo.zapret_version
           : _('not installed'),
       },

@@ -183,6 +183,7 @@ url_get_basename() {
     local url="$1"
 
     local filename="${url##*/}"
+    filename="${filename%%[?#]*}"
     local basename="${filename%%.*}"
 
     echo "$basename"
@@ -193,8 +194,9 @@ url_get_file_extension() {
     local url="$1"
 
     local basename="${url##*/}"
+    basename="${basename%%[?#]*}"
     case "$basename" in
-    *.*) echo "${basename##*.}" ;;
+    *.*) echo "${basename##*.}" | tr '[:upper:]' '[:lower:]' ;;
     *) echo "" ;;
     esac
 }
@@ -354,4 +356,41 @@ parse_domain_or_subnet_file_to_comma_string() {
     done < "$filepath"
 
     echo "$result"
+}
+
+#######################################
+# Splits a plain list file into separate domain and subnet files.
+# Invalid items are skipped.
+# Arguments:
+#   $1 - Path to the input file
+#   $2 - Output file for domains
+#   $3 - Output file for IPv4 / IPv4 CIDR entries
+#######################################
+split_domain_or_subnet_file() {
+    local filepath="$1"
+    local domains_output="$2"
+    local subnets_output="$3"
+    local line
+
+    : > "$domains_output"
+    : > "$subnets_output"
+
+    while IFS= read -r line; do
+        line=$(printf "%s\n" "$line" | sed -e 's/[[:space:]]*\/\/.*$//' -e 's/[[:space:]]*#.*$//')
+        line=$(echo "$line" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')
+
+        [ -z "$line" ] && continue
+
+        if is_domain_suffix "$line"; then
+            printf '%s\n' "$line" >> "$domains_output"
+            continue
+        fi
+
+        if is_ipv4_ip_or_ipv4_cidr "$line"; then
+            printf '%s\n' "$line" >> "$subnets_output"
+            continue
+        fi
+
+        log "'$line' is neither a valid domain nor IPv4 / IPv4 CIDR" "debug"
+    done < "$filepath"
 }

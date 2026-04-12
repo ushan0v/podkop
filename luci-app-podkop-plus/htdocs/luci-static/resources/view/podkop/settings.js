@@ -7,6 +7,10 @@
 
 const UCI_PACKAGE = main.PODKOP_UCI_PACKAGE;
 
+function isSingBoxDuration(value) {
+  return /^([0-9]+(?:\.[0-9]+)?(?:ns|us|ms|s|m|h|d))+$/.test(value);
+}
+
 function createSettingsContent(section) {
   let o = section.option(
     form.ListValue,
@@ -273,16 +277,40 @@ function createSettingsContent(section) {
   o.rmempty = false;
 
   o = section.option(
-    form.ListValue,
+    form.Value,
     "update_interval",
     _("List Update Frequency"),
-    _("Select how often the domain or subnet lists are updated automatically"),
+    _(
+      "Use sing-box duration format. Leave empty to disable automatic updates.",
+    ),
   );
-  Object.entries(main.UPDATE_INTERVAL_OPTIONS).forEach(([key, label]) => {
-    o.value(key, _(label));
-  });
-  o.default = "1d";
-  o.rmempty = false;
+  o.placeholder = "1d";
+  o.rmempty = true;
+  o.cfgvalue = function (section_id) {
+    return uci.get(UCI_PACKAGE, section_id, "update_interval") || "";
+  };
+  o.write = function (section_id, value) {
+    const normalized = value ? `${value}`.trim() : "";
+
+    if (normalized.length) {
+      uci.set(UCI_PACKAGE, section_id, "update_interval", normalized);
+    } else {
+      uci.unset(UCI_PACKAGE, section_id, "update_interval");
+    }
+  };
+  o.validate = function (_section_id, value) {
+    const normalized = value ? `${value}`.trim() : "";
+
+    if (!normalized.length) {
+      return true;
+    }
+
+    if (isSingBoxDuration(normalized)) {
+      return true;
+    }
+
+    return _("Use sing-box duration format like 1d, 12h or 30m");
+  };
 
   o = section.option(
     form.Flag,

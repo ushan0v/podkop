@@ -857,6 +857,7 @@ build_generated_zapret_hostlist() {
     config_list_foreach "$section" "local_domain_lists" _append_zapret_hostlist_reference_handler "$tmpfile"
     config_list_foreach "$section" "remote_domain_lists" _append_zapret_hostlist_reference_handler "$tmpfile"
     config_list_foreach "$section" "rule_set" _append_zapret_hostlist_reference_handler "$tmpfile"
+    config_list_foreach "$section" "domain_ip_lists" _append_zapret_hostlist_reference_handler "$tmpfile"
 
     config_get user_domain_list_type "$section" "user_domain_list_type" "disabled"
     case "$user_domain_list_type" in

@@ -111,6 +111,8 @@ export namespace Podkop {
     proxy_config_type?: ProxyConfigType;
     node?: string;
     rule_set?: string[];
+    domain_ip_lists?: string[];
+    update_interval?: string;
     proxy_string?: string;
     nfqws_opt?: string;
     selector_proxy_links?: string[];

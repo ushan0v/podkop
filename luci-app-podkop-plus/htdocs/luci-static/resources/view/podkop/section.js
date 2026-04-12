@@ -1454,30 +1454,55 @@ function isBuiltinRulesetValue(value) {
   return Object.prototype.hasOwnProperty.call(main.DOMAIN_LIST_OPTIONS, value);
 }
 
-function validateCustomRulesetReference(value) {
+function normalizeReferenceForExtensionCheck(value) {
+  return `${value || ""}`.split(/[?#]/, 1)[0].toLowerCase();
+}
+
+function hasAllowedReferenceExtension(value, extensions) {
+  const normalized = normalizeReferenceForExtensionCheck(value);
+  return extensions.some((extension) => normalized.endsWith(extension));
+}
+
+function validateFileReference(value, extensions, errorMessage) {
   if (!value || value.length === 0) {
     return true;
   }
 
   if (value.startsWith("http://") || value.startsWith("https://")) {
     const validation = main.validateUrl(value);
-    if (validation.valid && value.endsWith(".srs")) {
+    if (validation.valid && hasAllowedReferenceExtension(value, extensions)) {
       return true;
     }
 
-    return _("Rule set must be a direct .srs URL or a local .srs path");
+    return errorMessage;
   }
 
   if (value.startsWith("/")) {
     const validation = main.validatePath(value);
-    if (validation.valid && value.endsWith(".srs")) {
+    if (validation.valid && hasAllowedReferenceExtension(value, extensions)) {
       return true;
     }
 
-    return _("Rule set must be a direct .srs URL or a local .srs path");
+    return errorMessage;
   }
 
-  return _("Rule set must be a direct .srs URL or a local .srs path");
+  return errorMessage;
+}
+
+function validateCustomRulesetReference(value) {
+  return validateFileReference(
+    value,
+    [".srs", ".json"],
+    _("Rule set must be a direct .srs / .json URL or a local .srs / .json path"),
+  );
+}
+
+function validatePlainListReference(value) {
+  return validateFileReference(
+    value,
+    [".lst"],
+    _("List must be a direct .lst URL or a local .lst path"),
+  );
 }
 
 function getRulesetReferences(section_id) {
@@ -1562,9 +1587,13 @@ function createSectionContent(section) {
   o.default = "proxy";
   o.rmempty = false;
   o.modalonly = true;
-  o.load = function () {
+  o.cfgvalue = function (section_id) {
+    return getRuleResolvedAction(section_id);
+  };
+  o.load = function (section_id) {
     return ensureZapretAvailabilityLoaded().then(() => {
       populateActionOptionValues(this);
+      return this.cfgvalue(section_id);
     });
   };
   {
@@ -2083,7 +2112,7 @@ function createSectionContent(section) {
     form.DynamicList,
     "rule_set",
     _("Rule sets"),
-    _("Add URLs or local paths to .srs lists"),
+    _("Add URLs or local paths to .srs / .json lists"),
   );
   ruleSetOption.modalonly = true;
   ruleSetOption.load = function (section_id) {
@@ -2091,6 +2120,21 @@ function createSectionContent(section) {
   };
   ruleSetOption.validate = function (_section_id, value) {
     return validateCustomRulesetReference(value);
+  };
+
+  const domainIpListsOption = section.taboption(
+    "conditions",
+    form.DynamicList,
+    "domain_ip_lists",
+    _("Domain and IP Lists"),
+    _("Add URLs or local paths to .lst lists"),
+  );
+  domainIpListsOption.modalonly = true;
+  domainIpListsOption.load = function (section_id) {
+    return getConfigListValues(section_id, "domain_ip_lists");
+  };
+  domainIpListsOption.validate = function (_section_id, value) {
+    return validatePlainListReference(value);
   };
 }
 
