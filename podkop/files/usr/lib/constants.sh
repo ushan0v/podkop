@@ -2,7 +2,7 @@
 
 PODKOP_APP_NAME="Podkop Plus"
 PODKOP_VERSION="__COMPILED_VERSION_VARIABLE__"
-PODKOP_CONFIG_NAME="podkop_plus"
+PODKOP_CONFIG_NAME="podkop-plus"
 PODKOP_CONFIG="/etc/config/$PODKOP_CONFIG_NAME"
 PODKOP_BIN="/usr/bin/podkop-plus"
 PODKOP_SERVICE_NAME="podkop-plus"

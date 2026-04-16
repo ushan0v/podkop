@@ -27,6 +27,9 @@ PODKOP_PLUS_I18N_URL=""
 PODKOP_PLUS_I18N_NAME=""
 PODKOP_PLUS_I18N_FILE=""
 PODKOP_PLUS_PACKAGE_VERSION=""
+PODKOP_CANONICAL_CONFIG="/etc/config/podkop-plus"
+PODKOP_COMPAT_CONFIG="/etc/config/podkop_plus"
+PODKOP_LEGACY_CONFIG="/etc/config/podkop"
 
 ZAPRET_RELEASE_JSON=""
 ZAPRET_RELEASE_TAG_RESOLVED=""
@@ -446,9 +449,147 @@ is_original_podkop_present() {
         [ -f /usr/share/rpcd/acl.d/luci-app-podkop.json ]
 }
 
+move_config_file() {
+    source_path="$1"
+    target_path="$2"
+
+    [ -f "$source_path" ] || return 1
+
+    if mv "$source_path" "$target_path" 2>/dev/null; then
+        chmod 0644 "$target_path" 2>/dev/null || true
+        return 0
+    fi
+
+    cp "$source_path" "$target_path" 2>/dev/null || return 1
+    chmod 0644 "$target_path" 2>/dev/null || true
+    rm -f "$source_path" 2>/dev/null || true
+    return 0
+}
+
+backup_config_file() {
+    source_path="$1"
+    backup_label="${2:-podkop-plus-migrate}"
+    backup_path="${source_path}.${backup_label}.$(date +%Y%m%d%H%M%S 2>/dev/null || echo "$$")"
+
+    if mv "$source_path" "$backup_path" 2>/dev/null; then
+        chmod 0644 "$backup_path" 2>/dev/null || true
+        printf '%s\n' "$backup_path"
+        return 0
+    fi
+
+    if cp "$source_path" "$backup_path" 2>/dev/null; then
+        chmod 0644 "$backup_path" 2>/dev/null || true
+        rm -f "$source_path" 2>/dev/null || true
+        printf '%s\n' "$backup_path"
+        return 0
+    fi
+
+    return 1
+}
+
+config_file_is_regular() {
+    [ -f "$1" ] && [ ! -L "$1" ]
+}
+
+replace_canonical_podkop_plus_config_from() {
+    source_path="$1"
+    source_label="$2"
+    backup_path=""
+
+    config_file_is_regular "$source_path" || return 1
+
+    if [ -e "$PODKOP_CANONICAL_CONFIG" ]; then
+        if [ -L "$PODKOP_CANONICAL_CONFIG" ]; then
+            rm -f "$PODKOP_CANONICAL_CONFIG" || return 1
+        elif cmp -s "$PODKOP_CANONICAL_CONFIG" "$source_path" 2>/dev/null; then
+            [ "$source_path" = "$PODKOP_CANONICAL_CONFIG" ] || rm -f "$source_path" || true
+            return 0
+        else
+            backup_path="$(backup_config_file "$PODKOP_CANONICAL_CONFIG")" ||
+                fail "Failed to back up the conflicting canonical Podkop Plus config"
+            warn "Backed up the conflicting canonical Podkop Plus config to $backup_path while migrating $source_label."
+        fi
+    fi
+
+    if [ "$source_path" != "$PODKOP_CANONICAL_CONFIG" ]; then
+        move_config_file "$source_path" "$PODKOP_CANONICAL_CONFIG" || return 1
+    fi
+
+    chmod 0644 "$PODKOP_CANONICAL_CONFIG" 2>/dev/null || true
+    return 0
+}
+
+cleanup_noncanonical_podkop_configs_if_needed() {
+    backup_path=""
+
+    config_file_is_regular "$PODKOP_CANONICAL_CONFIG" || return 0
+
+    if config_file_is_regular "$PODKOP_COMPAT_CONFIG"; then
+        if cmp -s "$PODKOP_CANONICAL_CONFIG" "$PODKOP_COMPAT_CONFIG" 2>/dev/null; then
+            rm -f "$PODKOP_COMPAT_CONFIG" || true
+        else
+            backup_path="$(backup_config_file "$PODKOP_COMPAT_CONFIG")" ||
+                fail "Failed to back up the conflicting compatibility Podkop Plus config"
+            warn "Backed up the conflicting compatibility Podkop Plus config to $backup_path."
+        fi
+    fi
+
+    if config_file_is_regular "$PODKOP_LEGACY_CONFIG" && ! is_original_podkop_present; then
+        if cmp -s "$PODKOP_CANONICAL_CONFIG" "$PODKOP_LEGACY_CONFIG" 2>/dev/null; then
+            rm -f "$PODKOP_LEGACY_CONFIG" || true
+        else
+            backup_path="$(backup_config_file "$PODKOP_LEGACY_CONFIG")" ||
+                fail "Failed to back up the legacy Podkop config"
+            warn "Backed up the legacy Podkop config to $backup_path after migrating Podkop Plus to $PODKOP_CANONICAL_CONFIG."
+        fi
+    fi
+}
+
+ensure_podkop_plus_compat_alias() {
+    alias_target=""
+    backup_path=""
+
+    config_file_is_regular "$PODKOP_CANONICAL_CONFIG" || return 0
+
+    if [ -L "$PODKOP_COMPAT_CONFIG" ]; then
+        alias_target="$(readlink "$PODKOP_COMPAT_CONFIG" 2>/dev/null)"
+        case "$alias_target" in
+            podkop-plus | "$PODKOP_CANONICAL_CONFIG")
+                return 0
+                ;;
+        esac
+
+        rm -f "$PODKOP_COMPAT_CONFIG" || true
+    elif [ -e "$PODKOP_COMPAT_CONFIG" ]; then
+        if cmp -s "$PODKOP_CANONICAL_CONFIG" "$PODKOP_COMPAT_CONFIG" 2>/dev/null; then
+            rm -f "$PODKOP_COMPAT_CONFIG" || true
+        else
+            backup_path="$(backup_config_file "$PODKOP_COMPAT_CONFIG")" ||
+                fail "Failed to back up the conflicting compatibility Podkop Plus config"
+            warn "Backed up the conflicting compatibility Podkop Plus config to $backup_path before recreating the alias."
+        fi
+    fi
+
+    ln -snf podkop-plus "$PODKOP_COMPAT_CONFIG" 2>/dev/null ||
+        warn "Failed to create the $PODKOP_COMPAT_CONFIG compatibility alias."
+}
+
+normalize_podkop_plus_config_layout_if_needed() {
+    if config_file_is_regular "$PODKOP_COMPAT_CONFIG"; then
+        replace_canonical_podkop_plus_config_from "$PODKOP_COMPAT_CONFIG" "$PODKOP_COMPAT_CONFIG" ||
+            fail "Failed to migrate the Podkop Plus config from $PODKOP_COMPAT_CONFIG"
+        msg "Migrated the Podkop Plus config to $PODKOP_CANONICAL_CONFIG"
+    elif config_file_is_regular "$PODKOP_LEGACY_CONFIG" && ! is_original_podkop_present; then
+        replace_canonical_podkop_plus_config_from "$PODKOP_LEGACY_CONFIG" "$PODKOP_LEGACY_CONFIG" ||
+            fail "Failed to migrate the Podkop Plus config from $PODKOP_LEGACY_CONFIG"
+        msg "Migrated the Podkop Plus config to $PODKOP_CANONICAL_CONFIG"
+    fi
+}
+
 migrate_podkop_plus_config_if_needed() {
-    [ -f /etc/config/podkop_plus ] && return 0
-    [ -f /etc/config/podkop ] || return 0
+    normalize_podkop_plus_config_layout_if_needed
+    config_file_is_regular "$PODKOP_CANONICAL_CONFIG" && return 0
+    config_file_is_regular "$PODKOP_LEGACY_CONFIG" || return 0
 
     if ! pkg_is_installed "luci-app-podkop-plus" &&
         [ ! -x /etc/init.d/podkop-plus ] &&
@@ -458,15 +599,15 @@ migrate_podkop_plus_config_if_needed() {
     fi
 
     if is_original_podkop_present; then
-        warn "Detected the original Podkop installation together with a shared legacy config at /etc/config/podkop."
-        warn "Podkop Plus will not import this shared config automatically. The new version will use /etc/config/podkop_plus."
+        warn "Detected the original Podkop installation together with a shared legacy config at $PODKOP_LEGACY_CONFIG."
+        warn "Podkop Plus will not import this shared config automatically. The new version will use $PODKOP_CANONICAL_CONFIG."
         return 0
     fi
 
-    cp /etc/config/podkop /etc/config/podkop_plus || fail "Failed to migrate the Podkop Plus config to /etc/config/podkop_plus"
-    chmod 0644 /etc/config/podkop_plus || true
+    replace_canonical_podkop_plus_config_from "$PODKOP_LEGACY_CONFIG" "$PODKOP_LEGACY_CONFIG" ||
+        fail "Failed to migrate the Podkop Plus config to $PODKOP_CANONICAL_CONFIG"
 
-    msg "Migrated the Podkop Plus config to /etc/config/podkop_plus"
+    msg "Migrated the Podkop Plus config to $PODKOP_CANONICAL_CONFIG"
 }
 
 reset_legacy_config_if_needed() {
@@ -475,7 +616,7 @@ reset_legacy_config_if_needed() {
     default_config_url=""
     default_config_tmp=""
 
-    [ -f /etc/config/podkop_plus ] || return 0
+    config_file_is_regular "$PODKOP_CANONICAL_CONFIG" || return 0
 
     current_version="$(detect_installed_podkop_plus_version)"
 
@@ -491,19 +632,19 @@ reset_legacy_config_if_needed() {
     fi
 
     warn "Detected a legacy Podkop Plus installation."
-    warn "The current config will be backed up to /etc/config/podkop_plus-070.<timestamp> and replaced with the Podkop Plus default config."
+    warn "The current config will be backed up to /etc/config/podkop-plus-070.<timestamp> and replaced with the Podkop Plus default config."
 
-    confirm_prompt "Continue and reset /etc/config/podkop_plus?" || fail "Installation cancelled by user"
+    confirm_prompt "Continue and reset $PODKOP_CANONICAL_CONFIG?" || fail "Installation cancelled by user"
 
-    backup_path="/etc/config/podkop_plus-070.$(date +%Y%m%d%H%M%S 2>/dev/null || echo "$$")"
-    mv /etc/config/podkop_plus "$backup_path" || fail "Failed to back up /etc/config/podkop_plus"
+    backup_path="/etc/config/podkop-plus-070.$(date +%Y%m%d%H%M%S 2>/dev/null || echo "$$")"
+    mv "$PODKOP_CANONICAL_CONFIG" "$backup_path" || fail "Failed to back up $PODKOP_CANONICAL_CONFIG"
 
-    default_config_url="https://raw.githubusercontent.com/${REPO_OWNER}/${REPO_NAME}/${PODKOP_PLUS_RELEASE_TAG}/podkop/files/etc/config/podkop"
+    default_config_url="https://raw.githubusercontent.com/${REPO_OWNER}/${REPO_NAME}/${PODKOP_PLUS_RELEASE_TAG}/podkop/files/etc/config/podkop-plus"
     default_config_tmp="$TMP_DIR/default-podkop-plus-config"
 
     download_with_retry "$default_config_url" "$default_config_tmp" "default Podkop Plus config" || fail "Failed to download the default Podkop Plus config"
-    cp "$default_config_tmp" /etc/config/podkop_plus || fail "Failed to restore /etc/config/podkop_plus"
-    chmod 0644 /etc/config/podkop_plus || true
+    cp "$default_config_tmp" "$PODKOP_CANONICAL_CONFIG" || fail "Failed to restore $PODKOP_CANONICAL_CONFIG"
+    chmod 0644 "$PODKOP_CANONICAL_CONFIG" || true
 
     msg "A fresh Podkop Plus config was installed. Backup saved to $backup_path"
 }
@@ -574,6 +715,7 @@ cleanup_legacy_installation() {
     pkg_remove_if_installed "luci-app-podkop-plus"
 
     rm -rf /usr/lib/podkop-plus /www/luci-static/resources/view/podkop_plus
+    rm -f "$PODKOP_COMPAT_CONFIG"
     rm -f /etc/init.d/podkop-plus
     rm -f /usr/bin/podkop-plus
     rm -f /usr/share/luci/menu.d/luci-app-podkop-plus.json
@@ -879,6 +1021,8 @@ install_packages() {
 }
 
 post_install() {
+    cleanup_noncanonical_podkop_configs_if_needed
+    ensure_podkop_plus_compat_alias
     rm -f /var/luci-indexcache* /tmp/luci-indexcache*
     [ -x /etc/init.d/rpcd ] && /etc/init.d/rpcd reload >/dev/null 2>&1 || true
 

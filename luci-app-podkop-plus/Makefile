@@ -37,9 +37,11 @@ exit 0
 endef
 
 define Package/$(PKG_NAME)/conffiles
-/etc/config/podkop_plus
+/etc/config/podkop-plus
 endef
 
+# The compatibility alias /etc/config/podkop_plus is recreated by uci-defaults
+# after install, so upgrades can migrate the old regular conffile first.
 define Package/$(PKG_NAME)/install
 	$(INSTALL_DIR) $(1)$(HTDOCS)/luci-static/resources/view/podkop_plus
 	$(CP) $(PKG_BUILD_DIR)/htdocs/luci-static/resources/view/podkop/* $(1)$(HTDOCS)/luci-static/resources/view/podkop_plus/
@@ -48,7 +50,7 @@ define Package/$(PKG_NAME)/install
 	$(INSTALL_DIR) $(1)/etc/init.d
 	$(INSTALL_BIN) ../podkop/files/etc/init.d/podkop $(1)/etc/init.d/podkop-plus
 	$(INSTALL_DIR) $(1)/etc/config
-	$(INSTALL_CONF) ../podkop/files/etc/config/podkop $(1)/etc/config/podkop_plus
+	$(INSTALL_CONF) ../podkop/files/etc/config/podkop-plus $(1)/etc/config/podkop-plus
 	$(INSTALL_DIR) $(1)/usr/bin
 	$(INSTALL_BIN) ../podkop/files/usr/bin/podkop $(1)/usr/bin/podkop-plus
 	$(INSTALL_DIR) $(1)/usr/lib/podkop-plus

@@ -622,6 +622,11 @@ replace_file "$BUNDLE_DIR/usr/share/rpcd/acl.d/luci-app-podkop-plus.json" "/usr/
 replace_file "$BUNDLE_DIR/usr/lib/lua/luci/i18n/podkop_plus.ru.lmo" "/usr/lib/lua/luci/i18n/podkop_plus.ru.lmo" 0644
 replace_file "$BUNDLE_DIR/etc/uci-defaults/50_luci-podkop-plus" "/etc/uci-defaults/50_luci-podkop-plus" 0755
 
+PODKOP_CANONICAL_CONFIG="/etc/config/podkop-plus"
+PODKOP_COMPAT_CONFIG="/etc/config/podkop_plus"
+PODKOP_LEGACY_CONFIG="/etc/config/podkop"
+PODKOP_BUNDLE_CONFIG="$BUNDLE_DIR/etc/config/podkop-plus"
+
 is_original_podkop_present() {
     opkg list-installed 2>/dev/null | grep -Eq '^podkop([[:space:]-]|$)' ||
     opkg list-installed 2>/dev/null | grep -Eq '^luci-app-podkop([[:space:]-]|$)' ||
@@ -632,16 +637,125 @@ is_original_podkop_present() {
     [ -f /usr/share/rpcd/acl.d/luci-app-podkop.json ]
 }
 
-if [ ! -f /etc/config/podkop_plus ]; then
-    if [ -f /etc/config/podkop ] &&
-        { [ -x /etc/init.d/podkop-plus ] || [ -x /usr/bin/podkop-plus ] || [ -d /usr/lib/podkop-plus ]; } &&
-        ! is_original_podkop_present; then
-        cp /etc/config/podkop /etc/config/podkop_plus
-        chmod 0644 /etc/config/podkop_plus || true
-    else
-        replace_file "$BUNDLE_DIR/etc/config/podkop_plus" "/etc/config/podkop_plus" 0644
+move_config_file() {
+    local source_path="$1"
+    local target_path="$2"
+
+    [ -f "$source_path" ] || return 1
+
+    if mv "$source_path" "$target_path" 2>/dev/null; then
+        chmod 0644 "$target_path" 2>/dev/null || true
+        return 0
     fi
-fi
+
+    cp "$source_path" "$target_path" 2>/dev/null || return 1
+    chmod 0644 "$target_path" 2>/dev/null || true
+    rm -f "$source_path" 2>/dev/null || true
+    return 0
+}
+
+config_file_is_regular() {
+    [ -f "$1" ] && [ ! -L "$1" ]
+}
+
+backup_config_file() {
+    local source_path="$1"
+    local backup_path="${source_path}.podkop-plus-migrate.$(date +%Y%m%d%H%M%S 2>/dev/null || echo "$$")"
+
+    if mv "$source_path" "$backup_path" 2>/dev/null; then
+        chmod 0644 "$backup_path" 2>/dev/null || true
+        printf '%s\n' "$backup_path"
+        return 0
+    fi
+
+    if cp "$source_path" "$backup_path" 2>/dev/null; then
+        chmod 0644 "$backup_path" 2>/dev/null || true
+        rm -f "$source_path" 2>/dev/null || true
+        printf '%s\n' "$backup_path"
+        return 0
+    fi
+
+    return 1
+}
+
+replace_canonical_podkop_plus_config_from() {
+    local source_path="$1"
+    local source_label="$2"
+    local backup_path=""
+
+    config_file_is_regular "$source_path" || return 1
+
+    if [ -e "$PODKOP_CANONICAL_CONFIG" ]; then
+        if [ -L "$PODKOP_CANONICAL_CONFIG" ]; then
+            rm -f "$PODKOP_CANONICAL_CONFIG" || return 1
+        elif cmp -s "$PODKOP_CANONICAL_CONFIG" "$source_path" 2>/dev/null; then
+            [ "$source_path" = "$PODKOP_CANONICAL_CONFIG" ] || rm -f "$source_path" || true
+            return 0
+        else
+            backup_path="$(backup_config_file "$PODKOP_CANONICAL_CONFIG")" || return 1
+            echo "warning: backed up conflicting canonical Podkop Plus config to $backup_path while migrating $source_label" >&2
+        fi
+    fi
+
+    if [ "$source_path" != "$PODKOP_CANONICAL_CONFIG" ]; then
+        move_config_file "$source_path" "$PODKOP_CANONICAL_CONFIG" || return 1
+    fi
+
+    chmod 0644 "$PODKOP_CANONICAL_CONFIG" 2>/dev/null || true
+    return 0
+}
+
+normalize_podkop_config_layout() {
+    if config_file_is_regular "$PODKOP_COMPAT_CONFIG"; then
+        replace_canonical_podkop_plus_config_from "$PODKOP_COMPAT_CONFIG" "$PODKOP_COMPAT_CONFIG" || true
+    elif config_file_is_regular "$PODKOP_LEGACY_CONFIG" && ! is_original_podkop_present; then
+        replace_canonical_podkop_plus_config_from "$PODKOP_LEGACY_CONFIG" "$PODKOP_LEGACY_CONFIG" || true
+    fi
+
+    if ! config_file_is_regular "$PODKOP_CANONICAL_CONFIG"; then
+        replace_file "$PODKOP_BUNDLE_CONFIG" "$PODKOP_CANONICAL_CONFIG" 0644
+    fi
+}
+
+ensure_podkop_config_alias() {
+    local alias_target=""
+    local backup_path=""
+
+    config_file_is_regular "$PODKOP_CANONICAL_CONFIG" || return 0
+
+    if config_file_is_regular "$PODKOP_COMPAT_CONFIG"; then
+        if cmp -s "$PODKOP_CANONICAL_CONFIG" "$PODKOP_COMPAT_CONFIG" 2>/dev/null; then
+            rm -f "$PODKOP_COMPAT_CONFIG" || true
+        else
+            backup_path="$(backup_config_file "$PODKOP_COMPAT_CONFIG")" || true
+            [ -n "$backup_path" ] && echo "warning: backed up conflicting compatibility Podkop Plus config to $backup_path" >&2
+        fi
+    elif [ -L "$PODKOP_COMPAT_CONFIG" ]; then
+        alias_target="$(readlink "$PODKOP_COMPAT_CONFIG" 2>/dev/null)"
+        case "$alias_target" in
+            podkop-plus | "$PODKOP_CANONICAL_CONFIG")
+                alias_target=""
+                ;;
+            *)
+                rm -f "$PODKOP_COMPAT_CONFIG" || true
+                ;;
+        esac
+    fi
+
+    if config_file_is_regular "$PODKOP_LEGACY_CONFIG" && ! is_original_podkop_present; then
+        if cmp -s "$PODKOP_CANONICAL_CONFIG" "$PODKOP_LEGACY_CONFIG" 2>/dev/null; then
+            rm -f "$PODKOP_LEGACY_CONFIG" || true
+        else
+            backup_path="$(backup_config_file "$PODKOP_LEGACY_CONFIG")" || true
+            [ -n "$backup_path" ] && echo "warning: backed up legacy Podkop config to $backup_path after migrating Podkop Plus" >&2
+        fi
+    fi
+
+    [ -n "$alias_target" ] || ln -snf podkop-plus "$PODKOP_COMPAT_CONFIG" || true
+}
+
+normalize_podkop_config_layout
+ensure_podkop_config_alias
 
 rm -f /var/luci-indexcache* /tmp/luci-indexcache*
 [ -x /etc/init.d/rpcd ] && /etc/init.d/rpcd reload >/dev/null 2>&1 || true
@@ -699,7 +813,7 @@ function New-DeployBundle {
 
     $bundleFiles = @{
         'podkop/files/etc/init.d/podkop' = 'etc/init.d/podkop-plus'
-        'podkop/files/etc/config/podkop' = 'etc/config/podkop_plus'
+        'podkop/files/etc/config/podkop-plus' = 'etc/config/podkop-plus'
         'podkop/files/usr/bin/podkop' = 'usr/bin/podkop-plus'
         'luci-app-podkop-plus/root/usr/share/luci/menu.d/luci-app-podkop-plus.json' = 'usr/share/luci/menu.d/luci-app-podkop-plus.json'
         'luci-app-podkop-plus/root/usr/share/rpcd/acl.d/luci-app-podkop-plus.json' = 'usr/share/rpcd/acl.d/luci-app-podkop-plus.json'

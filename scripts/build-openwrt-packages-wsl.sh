@@ -239,7 +239,9 @@ build_app_root() {
   fi
 
   install -m 0755 "$ROOT_DIR/podkop/files/etc/init.d/podkop" "$output_root/etc/init.d/podkop-plus"
-  install -m 0644 "$ROOT_DIR/podkop/files/etc/config/podkop" "$output_root/etc/config/podkop_plus"
+  # Recreate the podkop_plus compatibility alias in post-install, not in the
+  # payload, so upgrades can migrate the old regular conffile safely first.
+  install -m 0644 "$ROOT_DIR/podkop/files/etc/config/podkop-plus" "$output_root/etc/config/podkop-plus"
   install -m 0755 "$ROOT_DIR/podkop/files/usr/bin/podkop" "$output_root/usr/bin/podkop-plus"
   cp -a "$ROOT_DIR/podkop/files/usr/lib/." "$output_root/usr/lib/podkop-plus/"
 
@@ -277,7 +279,7 @@ generate_apk_metadata_files() {
   make_dir "$(dirname "$list_file")"
   (
     cd "$package_root"
-    find . -type f ! -path './lib/apk/packages/*' | LC_ALL=C sort | sed 's#^\./#/#'
+    find . \( -type f -o -type l \) ! -path './lib/apk/packages/*' | LC_ALL=C sort | sed 's#^\./#/#'
   ) > "$list_file"
 
   if [[ -n "$conffile_path" ]]; then
@@ -316,7 +318,7 @@ Description: ${APP_DESCRIPTION}
 EOF
 
   cat > "$control_dir/conffiles" <<'EOF'
-/etc/config/podkop_plus
+/etc/config/podkop-plus
 EOF
 
   cat > "$control_dir/postinst" <<'EOF'
@@ -733,7 +735,7 @@ main() {
     "$i18n_control" \
     "$output_dir/luci-i18n-podkop-plus-ru_${RELEASE_VERSION}.ipk"
 
-  generate_apk_metadata_files "luci-app-podkop-plus" "$app_root" "/etc/config/podkop_plus"
+  generate_apk_metadata_files "luci-app-podkop-plus" "$app_root" "/etc/config/podkop-plus"
   generate_apk_metadata_files "luci-i18n-podkop-plus-ru" "$i18n_root"
   write_app_apk_scripts "$apk_scripts"
   write_i18n_apk_scripts "$apk_scripts"
