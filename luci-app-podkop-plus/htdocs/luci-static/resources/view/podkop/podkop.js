@@ -20,6 +20,12 @@
 
 const UCI_PACKAGE = main.PODKOP_UCI_PACKAGE;
 const CBI_PREFIX = main.PODKOP_CBI_PREFIX;
+const DEFAULT_ACTION_ROW_ID = "__podkop_default_action";
+const DEFAULT_ACTION_SECTION_ID = "settings";
+
+function getDefaultActionTitle() {
+  return _("Default route (if no matches)");
+}
 
 function renderSectionAdd(sectionRef, extra_class) {
   const el = form.GridSection.prototype.renderSectionAdd.apply(sectionRef, [
@@ -75,11 +81,21 @@ function repaintRuleRowColors() {
   });
 }
 
+function isDefaultActionRow(row) {
+  return (
+    row &&
+    (row.getAttribute("data-sid") === DEFAULT_ACTION_ROW_ID ||
+      row.classList.contains("pdk-default-action-row"))
+  );
+}
+
 function clearRuleDropIndicators(container) {
-  container.querySelectorAll(".drag-over-above, .drag-over-below").forEach((row) => {
-    row.classList.remove("drag-over-above");
-    row.classList.remove("drag-over-below");
-  });
+  container
+    .querySelectorAll(".drag-over-above, .drag-over-below")
+    .forEach((row) => {
+      row.classList.remove("drag-over-above");
+      row.classList.remove("drag-over-below");
+    });
 }
 
 function sanitizeRuleHeaderRows(root) {
@@ -89,7 +105,10 @@ function sanitizeRuleHeaderRows(root) {
 
   const rows = [];
 
-  if (typeof root.matches === "function" && root.matches(".cbi-section-table-titles")) {
+  if (
+    typeof root.matches === "function" &&
+    root.matches(".cbi-section-table-titles")
+  ) {
     rows.push(root);
   }
 
@@ -140,11 +159,11 @@ function sanitizeRenderedRuleHeaders(output) {
 function showPendingChangeSaveError(error) {
   ui.showModal(_("Save error"), [
     E("p", {}, [_("An error occurred while saving the form:")]),
-    E(
-      "p",
-      {},
-      [E("em", { style: "white-space:pre-wrap" }, [error?.message || `${error}`])],
-    ),
+    E("p", {}, [
+      E("em", { style: "white-space:pre-wrap" }, [
+        error?.message || `${error}`,
+      ]),
+    ]),
     E("div", { class: "right" }, [
       E("button", { class: "cbi-button", click: ui.hideModal }, [_("Dismiss")]),
     ]),
@@ -197,29 +216,42 @@ function removeRuleRowFromDom(sectionRef, section_id) {
 
   const rows = Array.from(
     tbody.querySelectorAll(".cbi-section-table-row"),
-  ).filter((row) => !row.classList.contains("placeholder"));
-  const currentRow = rows.find((row) => row.getAttribute("data-sid") === section_id);
+  ).filter(
+    (row) => !row.classList.contains("placeholder") && !isDefaultActionRow(row),
+  );
+  const currentRow = rows.find(
+    (row) => row.getAttribute("data-sid") === section_id,
+  );
 
   if (currentRow) {
     currentRow.remove();
   }
 
-  tbody.querySelectorAll(".cbi-section-table-row.placeholder").forEach((row) => {
-    row.remove();
-  });
+  tbody
+    .querySelectorAll(".cbi-section-table-row.placeholder")
+    .forEach((row) => {
+      row.remove();
+    });
 
   const remainingRows = Array.from(
     tbody.querySelectorAll(".cbi-section-table-row"),
-  ).filter((row) => !row.classList.contains("placeholder"));
+  ).filter(
+    (row) => !row.classList.contains("placeholder") && !isDefaultActionRow(row),
+  );
 
   if (!remainingRows.length) {
-    tbody.appendChild(
-      E(
-        "tr",
-        { class: "tr cbi-section-table-row placeholder" },
-        E("td", { class: "td" }, sectionRef.renderSectionPlaceholder()),
-      ),
+    const defaultActionRow = tbody.querySelector(".pdk-default-action-row");
+    const placeholderRow = E(
+      "tr",
+      { class: "tr cbi-section-table-row placeholder" },
+      E("td", { class: "td" }, sectionRef.renderSectionPlaceholder()),
     );
+
+    if (defaultActionRow) {
+      tbody.insertBefore(placeholderRow, defaultActionRow);
+    } else {
+      tbody.appendChild(placeholderRow);
+    }
   }
 
   const table = sectionNode.querySelector(".cbi-section-table");
@@ -253,6 +285,222 @@ function saveRulePendingChanges(sectionRef, mutate, options = {}) {
     });
 
   return sectionRef.__pdkRulePendingChangesPromise;
+}
+
+function saveDefaultActionModal(sectionRef, modalMap) {
+  return modalMap
+    .save(null, true)
+    .then(() => sectionRef.map.load())
+    .then(() => ui.changes.init())
+    .then(() => rerenderGridSection(sectionRef))
+    .then(() => ui.hideModal())
+    .catch((error) => showPendingChangeSaveError(error));
+}
+
+function openDefaultActionModal(sectionRef, ev) {
+  if (ev) {
+    ev.preventDefault();
+  }
+
+  const modalMap = new form.Map(UCI_PACKAGE, null, null);
+  modalMap.data = sectionRef.map.data;
+  modalMap.parent = sectionRef.map;
+  modalMap.readonly = sectionRef.map.readonly;
+
+  const defaultActionSection = modalMap.section(
+    form.NamedSection,
+    DEFAULT_ACTION_SECTION_ID,
+    "settings",
+  );
+  defaultActionSection.addremove = false;
+  defaultActionSection.hidetitle = true;
+  section.createDefaultActionContent(defaultActionSection);
+
+  return modalMap.render().then((nodes) => {
+    ui.showModal(getDefaultActionTitle(), [
+      nodes,
+      E("div", { class: "button-row" }, [
+        E(
+          "button",
+          {
+            class: "btn cbi-button",
+            click: ui.hideModal,
+          },
+          [_("Dismiss")],
+        ),
+        " ",
+        E(
+          "button",
+          {
+            class: "btn cbi-button cbi-button-positive important",
+            click: () => saveDefaultActionModal(sectionRef, modalMap),
+            disabled: modalMap.readonly || null,
+          },
+          [_("Save")],
+        ),
+      ]),
+    ], "cbi-modal");
+
+    if (ui.tabs && typeof ui.tabs.init === "function") {
+      window.setTimeout(() => ui.tabs.init(), 0);
+    }
+  });
+}
+
+function getOptionDisplayTitle(sectionRef, option) {
+  const title = option?.title || "";
+
+  if (typeof sectionRef.stripTags === "function") {
+    return sectionRef.stripTags(title).trim();
+  }
+
+  return `${title}`.trim();
+}
+
+function getOptionDisplayDescription(sectionRef, option) {
+  const description = option?.description || "";
+
+  if (typeof sectionRef.stripTags === "function") {
+    return sectionRef.stripTags(description).trim();
+  }
+
+  return `${description}`.trim();
+}
+
+function applyOptionWidth(cell, option) {
+  if (option?.width == null) {
+    return;
+  }
+
+  cell.style.width =
+    typeof option.width === "number" ? `${option.width}px` : option.width;
+}
+
+function renderDefaultActionTableCell(sectionRef, option) {
+  const title = getOptionDisplayTitle(sectionRef, option);
+  const description = getOptionDisplayDescription(sectionRef, option);
+  const cell = E("td", {
+    class: "td cbi-value-field",
+    "data-title": title !== "" ? title : null,
+    "data-description": description !== "" ? description : null,
+    "data-name": option.option,
+    "data-widget": option.__name__,
+  });
+
+  applyOptionWidth(cell, option);
+
+  switch (option.option) {
+    case "enabled":
+      cell.appendChild(
+        E("input", {
+          type: "checkbox",
+          checked: "checked",
+          disabled: "disabled",
+          "aria-label": _("Enable"),
+        }),
+      );
+      break;
+    case "_action_display":
+      cell.textContent = section.getDefaultActionDisplayValue();
+      break;
+    default:
+      cell.appendChild(E("em", [_("none")]));
+  }
+
+  return cell;
+}
+
+function renderDefaultActionRowActions(sectionRef) {
+  return E("td", {
+    class: "td cbi-section-table-cell nowrap cbi-section-actions",
+  }, [
+    E("div", [
+      E(
+        "button",
+        {
+          type: "button",
+          title: _("Drag to reorder"),
+          class: "cbi-button drag-handle center pdk-default-action-disabled",
+          style:
+            "cursor:not-allowed; user-select:none; -webkit-user-select:none; display:inline-block;",
+          disabled: "disabled",
+          draggable: false,
+        },
+        ["\u2630"],
+      ),
+      E(
+        "button",
+        {
+          type: "button",
+          title: _("Edit"),
+          class: "btn cbi-button cbi-button-edit",
+          click: (ev) => openDefaultActionModal(sectionRef, ev),
+        },
+        [_("Edit")],
+      ),
+      E(
+        "button",
+        {
+          type: "button",
+          title: _("Delete"),
+          class: "btn cbi-button cbi-button-remove pdk-default-action-disabled",
+          disabled: "disabled",
+        },
+        [_("Delete")],
+      ),
+    ]),
+  ]);
+}
+
+function renderDefaultActionRow(sectionRef) {
+  const visibleOptions = (sectionRef.children || []).filter(
+    (option) => !option.modalonly,
+  );
+  const maxCols = sectionRef.max_cols ?? visibleOptions.length;
+  const visibleCells = visibleOptions
+    .slice(0, maxCols)
+    .map((option) => renderDefaultActionTableCell(sectionRef, option));
+
+  return E(
+    "tr",
+    {
+      class: "tr cbi-section-table-row pdk-default-action-row",
+      id: `cbi-${UCI_PACKAGE}-${DEFAULT_ACTION_ROW_ID}`,
+      "data-sid": DEFAULT_ACTION_ROW_ID,
+      "data-title": getDefaultActionTitle(),
+      "data-section-id": DEFAULT_ACTION_ROW_ID,
+    },
+    [...visibleCells, renderDefaultActionRowActions(sectionRef)],
+  );
+}
+
+function appendDefaultActionRow(sectionRef, sectionNode) {
+  if (!sectionNode || typeof sectionNode.querySelector !== "function") {
+    return sectionNode;
+  }
+
+  const tbody = sectionNode.querySelector(".cbi-section-tbody");
+  if (!tbody) {
+    return sectionNode;
+  }
+
+  tbody.querySelectorAll(".pdk-default-action-row").forEach((row) => {
+    row.remove();
+  });
+
+  tbody.appendChild(renderDefaultActionRow(sectionRef));
+
+  return sectionNode;
+}
+
+function renderRuleSectionContents(sectionRef, originalRenderContents, args) {
+  const rendered = originalRenderContents.apply(sectionRef, args);
+
+  if (Array.isArray(rendered)) {
+    return rendered.map((node) => appendDefaultActionRow(sectionRef, node));
+  }
+
+  return appendDefaultActionRow(sectionRef, rendered);
 }
 
 function installRulePendingChanges(sectionRef) {
@@ -346,6 +594,17 @@ function configureGridSection(sectionRef, type, title, addTitle) {
   };
 
   if (type === "rule") {
+    const originalRenderContents = sectionRef.renderContents;
+    if (typeof originalRenderContents === "function") {
+      sectionRef.renderContents = function () {
+        return renderRuleSectionContents(
+          this,
+          originalRenderContents,
+          arguments,
+        );
+      };
+    }
+
     const originalRenderHeaderRows = sectionRef.renderHeaderRows;
     if (typeof originalRenderHeaderRows === "function") {
       sectionRef.renderHeaderRows = function () {

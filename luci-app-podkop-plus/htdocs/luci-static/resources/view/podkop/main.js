@@ -5135,6 +5135,28 @@ ${PartialStyles}
     position: relative;
 }
 
+#cbi-${PODKOP_CBI_PREFIX}-rule .pdk-default-action-row {
+    border-top: 2px solid var(--border-color-medium, #d6d6d6);
+    background: var(--background-color-high, #fff) !important;
+}
+
+#cbi-${PODKOP_CBI_PREFIX}-rule .pdk-default-action-row > td,
+#cbi-${PODKOP_CBI_PREFIX}-rule .pdk-default-action-row > .td,
+#cbi-${PODKOP_CBI_PREFIX}-rule .pdk-default-action-row > td::before,
+#cbi-${PODKOP_CBI_PREFIX}-rule .pdk-default-action-row > .td::before {
+    background: var(--background-color-high, #fff) !important;
+}
+
+#cbi-${PODKOP_CBI_PREFIX}-rule .pdk-default-action-row[data-title]::before {
+    font-weight: 600;
+    background: var(--background-color-high, #fff) !important;
+}
+
+#cbi-${PODKOP_CBI_PREFIX}-rule .pdk-default-action-disabled {
+    cursor: not-allowed !important;
+    opacity: 0.55;
+}
+
 #cbi-${PODKOP_CBI_PREFIX}-rule .cbi-section-table-row.placeholder {
     opacity: 1;
 }

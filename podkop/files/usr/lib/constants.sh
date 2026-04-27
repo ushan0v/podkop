@@ -45,6 +45,7 @@ SB_FAKEIP_DNS_RULE_TAG="fakeip-dns-rule-tag"
 SB_FAKEIP_RULESET_DNS_RULE_TAG="fakeip-ruleset-dns-rule-tag"
 SB_SERVICE_FAKEIP_DNS_RULE_TAG="service-fakeip-dns-rule-tag"
 SB_INVERT_FAKEIP_DNS_RULE_TAG="invert-fakeip-dns-rule-tag"
+SB_DNS_REDIRECT_REJECT_RULE_TAG="dns-redirect-non-dns-reject-rule-tag"
 # Inbounds
 SB_TPROXY_INBOUND_TAG="tproxy-in"
 SB_TPROXY_INBOUND_ADDRESS="127.0.0.1"
@@ -60,6 +61,8 @@ SB_SERVICE_MIXED_INBOUND_ADDRESS="127.0.0.1"
 SB_SERVICE_MIXED_INBOUND_PORT=4534
 # Outbounds
 SB_DIRECT_OUTBOUND_TAG="direct-out"
+SB_BLOCK_OUTBOUND_TAG="block-out"
+SB_DEFAULT_ACTION_OUTBOUND_SECTION="default-action"
 # Route
 SB_REJECT_RULE_TAG="reject-rule-tag"
 SB_EXCLUSION_RULE_TAG="exclusion-rule-tag"

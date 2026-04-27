@@ -8,6 +8,8 @@
 "require view.podkop_plus.main as main";
 
 const UCI_PACKAGE = main.PODKOP_UCI_PACKAGE;
+const SETTINGS_SECTION_ID = "settings";
+const DEFAULT_ACTION_OPTION_PREFIX = "default_";
 
 function valuesToText(values) {
   if (!values) {
@@ -255,14 +257,53 @@ function getRuleActionDisplayMarkup(section_id) {
   return getRuleActionDisplayValue(section_id);
 }
 
-function populateActionOptionValues(option) {
+function getDefaultResolvedAction() {
+  const action = uci.get(UCI_PACKAGE, SETTINGS_SECTION_ID, "default_action");
+
+  switch (`${action}`) {
+    case "proxy":
+    case "direct":
+    case "block":
+    case "zapret":
+      return `${action}`;
+    default:
+      return "direct";
+  }
+}
+
+function getDefaultActionDisplayValue() {
+  return getActionOptionLabel(getDefaultResolvedAction());
+}
+
+function fieldName(prefix, key) {
+  return `${prefix || ""}${key}`;
+}
+
+function addPrefixedDepends(option, prefix, dependency, value) {
+  if (typeof dependency === "string") {
+    option.depends(fieldName(prefix, dependency), value);
+    return;
+  }
+
+  const prefixed = {};
+  Object.entries(dependency).forEach(([key, dependencyValue]) => {
+    prefixed[fieldName(prefix, key)] = dependencyValue;
+  });
+  option.depends(prefixed);
+}
+
+function populateActionOptionValues(option, options = {}) {
+  const includeZapret = options.includeZapret !== false;
+
   delete option.keylist;
   delete option.vallist;
 
   option.value("proxy", "Proxy");
   option.value("direct", "Direct");
   option.value("block", "Block");
-  option.value("zapret", getActionOptionLabel("zapret"));
+  if (includeZapret) {
+    option.value("zapret", getActionOptionLabel("zapret"));
+  }
 }
 
 function disableUnavailableZapretOption(node) {
@@ -1493,7 +1534,9 @@ function validateCustomRulesetReference(value) {
   return validateFileReference(
     value,
     [".srs", ".json"],
-    _("Rule set must be a direct .srs / .json URL or a local .srs / .json path"),
+    _(
+      "Rule set must be a direct .srs / .json URL or a local .srs / .json path",
+    ),
   );
 }
 
@@ -1530,6 +1573,449 @@ function getCustomRulesetReferences(section_id) {
   return getRulesetReferences(section_id).filter(
     (value) => !isBuiltinRulesetValue(value),
   );
+}
+
+function addActionSettingsFields(section, tabName, options = {}) {
+  const prefix = options.prefix || "";
+  const includeZapret = options.includeZapret !== false;
+  const includeMixedProxy = options.includeMixedProxy !== false;
+  const defaultAction = options.defaultAction || "proxy";
+  const modalOnly = options.modalonly !== false;
+  const getResolvedAction =
+    options.getResolvedAction ||
+    function (section_id) {
+      return uci.get(UCI_PACKAGE, section_id, fieldName(prefix, "action"));
+    };
+
+  const actionKey = fieldName(prefix, "action");
+  const proxyConfigTypeKey = fieldName(prefix, "proxy_config_type");
+
+  let o = section.taboption(
+    tabName,
+    form.ListValue,
+    actionKey,
+    _("Action"),
+    options.actionDescription ||
+      _("What Podkop Plus should do when this section matches"),
+  );
+  populateActionOptionValues(o, { includeZapret });
+  o.default = defaultAction;
+  o.rmempty = false;
+  o.modalonly = modalOnly;
+  o.cfgvalue = function (section_id) {
+    return getResolvedAction(section_id);
+  };
+  o.load = function (section_id) {
+    if (!includeZapret) {
+      return this.cfgvalue(section_id);
+    }
+
+    return ensureZapretAvailabilityLoaded().then(() => {
+      populateActionOptionValues(this, { includeZapret });
+      return this.cfgvalue(section_id);
+    });
+  };
+
+  if (includeZapret) {
+    const originalRenderWidget = o.renderWidget;
+    o.renderWidget = function (section_id, option_index, cfgvalue) {
+      const node = originalRenderWidget.call(
+        this,
+        section_id,
+        option_index,
+        cfgvalue,
+      );
+      disableUnavailableZapretOption(node);
+      return node;
+    };
+
+    o = section.taboption(
+      tabName,
+      form.TextValue,
+      fieldName(prefix, "nfqws_opt"),
+      _("NFQWS Strategy"),
+    );
+    addPrefixedDepends(o, prefix, "action", "zapret");
+    o.rows = 6;
+    o.wrap = "soft";
+    o.textarea = true;
+    o.modalonly = modalOnly;
+    o.load = function (section_id) {
+      const value = uci.get(
+        UCI_PACKAGE,
+        section_id,
+        fieldName(prefix, "nfqws_opt"),
+      );
+      if (!value || value === ZAPRET_LEGACY_DEFAULT_NFQWS_OPT) {
+        return ZAPRET_DEFAULT_NFQWS_OPT;
+      }
+
+      return value;
+    };
+    o.write = function (section_id, value) {
+      const normalized = normalizeNfqwsStrategyValue(value);
+      const nextValue =
+        !normalized.length || normalized === ZAPRET_LEGACY_DEFAULT_NFQWS_OPT
+          ? ZAPRET_DEFAULT_NFQWS_OPT
+          : normalized;
+
+      uci.set(
+        UCI_PACKAGE,
+        section_id,
+        fieldName(prefix, "nfqws_opt"),
+        nextValue,
+      );
+    };
+    o.validate = function (_section_id, value) {
+      const analysis = analyzeNfqwsStrategy(value);
+      return analysis.valid ? true : analysis.message;
+    };
+    configureTextareaOption(o, analyzeNfqwsStrategy);
+  }
+
+  o = section.taboption(
+    tabName,
+    form.ListValue,
+    proxyConfigTypeKey,
+    _("Connection Type"),
+    _("How to configure the proxy connection for this section"),
+  );
+  o.value("url", _("Connection URL"));
+  o.value("selector", "Selector");
+  o.value("urltest", "URLTest");
+  o.value("outbound", _("Outbound JSON"));
+  o.value("interface", _("Interface"));
+  o.default = "url";
+  o.rmempty = false;
+  addPrefixedDepends(o, prefix, "action", "proxy");
+  o.modalonly = modalOnly;
+
+  o = section.taboption(
+    tabName,
+    form.TextValue,
+    fieldName(prefix, "proxy_string"),
+    _("Connection"),
+    _("vless://, ss://, trojan://, socks4/5://, hy2/hysteria2:// links"),
+  );
+  addPrefixedDepends(o, prefix, { action: "proxy", proxy_config_type: "url" });
+  o.rows = 5;
+  o.wrap = "soft";
+  o.textarea = true;
+  o.modalonly = modalOnly;
+  o.validate = function (_section_id, value) {
+    if (!value || value.length === 0) {
+      return true;
+    }
+
+    const validation = main.validateProxyUrl(value);
+    return validation.valid ? true : validation.message;
+  };
+  configureTextareaOption(o);
+
+  o = section.taboption(
+    tabName,
+    form.TextValue,
+    fieldName(prefix, "outbound_json"),
+    _("Outbound JSON"),
+    _("Enter a complete sing-box outbound object"),
+  );
+  addPrefixedDepends(o, prefix, {
+    action: "proxy",
+    proxy_config_type: "outbound",
+  });
+  o.rows = 10;
+  o.wrap = "soft";
+  o.textarea = true;
+  o.modalonly = modalOnly;
+  o.validate = function (_section_id, value) {
+    if (!value || value.length === 0) {
+      return true;
+    }
+
+    const validation = main.validateOutboundJson(value);
+    return validation.valid ? true : validation.message;
+  };
+  configureTextareaOption(o);
+
+  o = section.taboption(
+    tabName,
+    form.DynamicList,
+    fieldName(prefix, "selector_proxy_links"),
+    _("Selector connections"),
+    _("A manual group of proxy URLs for this section"),
+  );
+  addPrefixedDepends(o, prefix, {
+    action: "proxy",
+    proxy_config_type: "selector",
+  });
+  o.modalonly = modalOnly;
+  o.validate = function (_section_id, value) {
+    if (!value || value.length === 0) {
+      return true;
+    }
+
+    const validation = main.validateProxyUrl(value);
+    return validation.valid ? true : validation.message;
+  };
+
+  o = section.taboption(
+    tabName,
+    form.DynamicList,
+    fieldName(prefix, "urltest_proxy_links"),
+    _("URLTest connections"),
+    _("A latency-tested group of proxy URLs for this section"),
+  );
+  addPrefixedDepends(o, prefix, {
+    action: "proxy",
+    proxy_config_type: "urltest",
+  });
+  o.modalonly = modalOnly;
+  o.validate = function (_section_id, value) {
+    if (!value || value.length === 0) {
+      return true;
+    }
+
+    const validation = main.validateProxyUrl(value);
+    return validation.valid ? true : validation.message;
+  };
+
+  o = section.taboption(
+    tabName,
+    form.ListValue,
+    fieldName(prefix, "urltest_check_interval"),
+    _("URLTest interval"),
+  );
+  o.value("30s", _("Every 30 seconds"));
+  o.value("1m", _("Every minute"));
+  o.value("3m", _("Every 3 minutes"));
+  o.value("5m", _("Every 5 minutes"));
+  o.default = "3m";
+  o.rmempty = false;
+  addPrefixedDepends(o, prefix, {
+    action: "proxy",
+    proxy_config_type: "urltest",
+  });
+  o.modalonly = modalOnly;
+
+  o = section.taboption(
+    tabName,
+    form.Value,
+    fieldName(prefix, "urltest_tolerance"),
+    _("URLTest tolerance"),
+    _("Maximum response time delta in milliseconds"),
+  );
+  o.default = "50";
+  o.rmempty = false;
+  addPrefixedDepends(o, prefix, {
+    action: "proxy",
+    proxy_config_type: "urltest",
+  });
+  o.modalonly = modalOnly;
+  o.validate = function (_section_id, value) {
+    if (!value || value.length === 0) {
+      return true;
+    }
+
+    const parsed = parseFloat(value);
+    if (
+      /^[0-9]+$/.test(value) &&
+      !isNaN(parsed) &&
+      isFinite(parsed) &&
+      parsed >= 50 &&
+      parsed <= 1000
+    ) {
+      return true;
+    }
+
+    return _("Must be a number in the range of 50 - 1000");
+  };
+
+  o = section.taboption(
+    tabName,
+    form.Value,
+    fieldName(prefix, "urltest_testing_url"),
+    _("URLTest URL"),
+  );
+  o.value(
+    "https://www.gstatic.com/generate_204",
+    "https://www.gstatic.com/generate_204 (Google)",
+  );
+  o.value(
+    "https://cp.cloudflare.com/generate_204",
+    "https://cp.cloudflare.com/generate_204 (Cloudflare)",
+  );
+  o.value("https://captive.apple.com", "https://captive.apple.com (Apple)");
+  o.value(
+    "https://connectivity-check.ubuntu.com",
+    "https://connectivity-check.ubuntu.com (Ubuntu)",
+  );
+  o.default = "https://www.gstatic.com/generate_204";
+  o.rmempty = false;
+  addPrefixedDepends(o, prefix, {
+    action: "proxy",
+    proxy_config_type: "urltest",
+  });
+  o.modalonly = modalOnly;
+  o.validate = function (_section_id, value) {
+    if (!value || value.length === 0) {
+      return true;
+    }
+
+    const validation = main.validateUrl(value);
+    return validation.valid ? true : validation.message;
+  };
+
+  o = section.taboption(
+    tabName,
+    form.Flag,
+    fieldName(prefix, "enable_udp_over_tcp"),
+    _("UDP over TCP"),
+    _("Applicable for SOCKS and Shadowsocks links"),
+  );
+  o.default = "0";
+  o.rmempty = false;
+  addPrefixedDepends(o, prefix, "action", "proxy");
+  o.modalonly = modalOnly;
+
+  o = section.taboption(
+    tabName,
+    widgets.DeviceSelect,
+    fieldName(prefix, "interface"),
+    _("Interface"),
+    _("Use a network interface as the outbound for this section"),
+  );
+  o.noaliases = true;
+  o.nobridges = false;
+  o.noinactive = false;
+  addPrefixedDepends(o, prefix, {
+    action: "proxy",
+    proxy_config_type: "interface",
+  });
+  o.modalonly = modalOnly;
+  o.filter = function (_section_id, value) {
+    const blockedInterfaces = [
+      "br-lan",
+      "eth0",
+      "eth1",
+      "wan",
+      "phy0-ap0",
+      "phy1-ap0",
+      "pppoe-wan",
+      "lan",
+    ];
+
+    if (blockedInterfaces.includes(value)) {
+      return false;
+    }
+
+    const device = this.devices.find((dev) => dev.getName() === value);
+    if (!device) {
+      return true;
+    }
+
+    const type = device.getType();
+    const isWireless =
+      type === "wifi" || type === "wireless" || type.indexOf("wlan") >= 0;
+
+    return !isWireless;
+  };
+
+  o = section.taboption(
+    tabName,
+    form.Flag,
+    fieldName(prefix, "domain_resolver_enabled"),
+    _("Resolver for interface outbound"),
+    _("Enable a dedicated DNS resolver when this section uses an interface"),
+  );
+  o.default = "0";
+  o.rmempty = false;
+  addPrefixedDepends(o, prefix, {
+    action: "proxy",
+    proxy_config_type: "interface",
+  });
+  o.modalonly = modalOnly;
+
+  o = section.taboption(
+    tabName,
+    form.ListValue,
+    fieldName(prefix, "domain_resolver_dns_type"),
+    _("DNS protocol"),
+  );
+  o.value("doh", _("DNS over HTTPS (DoH)"));
+  o.value("dot", _("DNS over TLS (DoT)"));
+  o.value("udp", "UDP");
+  o.default = "udp";
+  o.rmempty = false;
+  addPrefixedDepends(o, prefix, {
+    action: "proxy",
+    proxy_config_type: "interface",
+    domain_resolver_enabled: "1",
+  });
+  o.modalonly = modalOnly;
+
+  o = section.taboption(
+    tabName,
+    form.Value,
+    fieldName(prefix, "domain_resolver_dns_server"),
+    _("DNS server"),
+  );
+  Object.entries(main.DNS_SERVER_OPTIONS).forEach(([key, label]) => {
+    o.value(key, _(label));
+  });
+  o.default = "8.8.8.8";
+  o.rmempty = false;
+  addPrefixedDepends(o, prefix, {
+    action: "proxy",
+    proxy_config_type: "interface",
+    domain_resolver_enabled: "1",
+  });
+  o.modalonly = modalOnly;
+  o.validate = function (_section_id, value) {
+    const validation = main.validateDNS(value);
+    return validation.valid ? true : validation.message;
+  };
+
+  if (!includeMixedProxy) {
+    return;
+  }
+
+  o = section.taboption(
+    tabName,
+    form.Flag,
+    fieldName(prefix, "mixed_proxy_enabled"),
+    _("Enable Mixed Proxy"),
+    _("Expose this section as a local HTTP+SOCKS proxy"),
+  );
+  o.default = "0";
+  o.rmempty = false;
+  addPrefixedDepends(o, prefix, "action", "proxy");
+  o.modalonly = modalOnly;
+
+  o = section.taboption(
+    tabName,
+    form.Value,
+    fieldName(prefix, "mixed_proxy_port"),
+    _("Mixed Proxy Port"),
+    _("Port for the local mixed proxy of this section"),
+  );
+  o.rmempty = false;
+  addPrefixedDepends(o, prefix, {
+    action: "proxy",
+    mixed_proxy_enabled: "1",
+  });
+  o.modalonly = modalOnly;
+  o.validate = function (_section_id, value) {
+    if (!value || value.length === 0) {
+      return _("Port cannot be empty");
+    }
+
+    const parsed = parseInt(value, 10);
+    if (!isNaN(parsed) && parsed >= 1 && parsed <= 65535) {
+      return true;
+    }
+
+    return _("Invalid port number. Must be between 1 and 65535");
+  };
 }
 
 function createSectionContent(section) {
@@ -1576,386 +2062,10 @@ function createSectionContent(section) {
     return uci.get(UCI_PACKAGE, section_id, "label") || section_id;
   };
 
-  o = section.taboption(
-    "settings",
-    form.ListValue,
-    "action",
-    _("Action"),
-    _("What Podkop Plus should do when this section matches"),
-  );
-  populateActionOptionValues(o);
-  o.default = "proxy";
-  o.rmempty = false;
-  o.modalonly = true;
-  o.cfgvalue = function (section_id) {
-    return getRuleResolvedAction(section_id);
-  };
-  o.load = function (section_id) {
-    return ensureZapretAvailabilityLoaded().then(() => {
-      populateActionOptionValues(this);
-      return this.cfgvalue(section_id);
-    });
-  };
-  {
-    const originalRenderWidget = o.renderWidget;
-    o.renderWidget = function (section_id, option_index, cfgvalue) {
-      const node = originalRenderWidget.call(
-        this,
-        section_id,
-        option_index,
-        cfgvalue,
-      );
-      disableUnavailableZapretOption(node);
-      return node;
-    };
-  }
-
-  o = section.taboption(
-    "settings",
-    form.TextValue,
-    "nfqws_opt",
-    _("NFQWS Strategy"),
-  );
-  o.depends("action", "zapret");
-  o.rows = 6;
-  o.wrap = "soft";
-  o.textarea = true;
-  o.modalonly = true;
-  o.load = function (section_id) {
-    const value = uci.get(UCI_PACKAGE, section_id, "nfqws_opt");
-    if (!value || value === ZAPRET_LEGACY_DEFAULT_NFQWS_OPT) {
-      return ZAPRET_DEFAULT_NFQWS_OPT;
-    }
-
-    return value;
-  };
-  o.write = function (section_id, value) {
-    const normalized = normalizeNfqwsStrategyValue(value);
-    const nextValue =
-      !normalized.length || normalized === ZAPRET_LEGACY_DEFAULT_NFQWS_OPT
-        ? ZAPRET_DEFAULT_NFQWS_OPT
-        : normalized;
-
-    uci.set(UCI_PACKAGE, section_id, "nfqws_opt", nextValue);
-  };
-  o.validate = function (_section_id, value) {
-    const analysis = analyzeNfqwsStrategy(value);
-    return analysis.valid ? true : analysis.message;
-  };
-  configureTextareaOption(o, analyzeNfqwsStrategy);
-
-  o = section.taboption(
-    "settings",
-    form.ListValue,
-    "proxy_config_type",
-    _("Connection Type"),
-    _("How to configure the proxy connection for this section"),
-  );
-  o.value("url", _("Connection URL"));
-  o.value("selector", "Selector");
-  o.value("urltest", "URLTest");
-  o.value("outbound", _("Outbound JSON"));
-  o.value("interface", _("Interface"));
-  o.default = "url";
-  o.rmempty = false;
-  o.depends("action", "proxy");
-  o.modalonly = true;
-
-  o = section.taboption(
-    "settings",
-    form.TextValue,
-    "proxy_string",
-    _("Connection"),
-    _("vless://, ss://, trojan://, socks4/5://, hy2/hysteria2:// links"),
-  );
-  o.depends({ action: "proxy", proxy_config_type: "url" });
-  o.rows = 5;
-  o.wrap = "soft";
-  o.textarea = true;
-  o.modalonly = true;
-  o.validate = function (_section_id, value) {
-    if (!value || value.length === 0) {
-      return true;
-    }
-
-    const validation = main.validateProxyUrl(value);
-    return validation.valid ? true : validation.message;
-  };
-  configureTextareaOption(o);
-
-  o = section.taboption(
-    "settings",
-    form.TextValue,
-    "outbound_json",
-    _("Outbound JSON"),
-    _("Enter a complete sing-box outbound object"),
-  );
-  o.depends({ action: "proxy", proxy_config_type: "outbound" });
-  o.rows = 10;
-  o.wrap = "soft";
-  o.textarea = true;
-  o.modalonly = true;
-  o.validate = function (_section_id, value) {
-    if (!value || value.length === 0) {
-      return true;
-    }
-
-    const validation = main.validateOutboundJson(value);
-    return validation.valid ? true : validation.message;
-  };
-  configureTextareaOption(o);
-
-  o = section.taboption(
-    "settings",
-    form.DynamicList,
-    "selector_proxy_links",
-    _("Selector connections"),
-    _("A manual group of proxy URLs for this section"),
-  );
-  o.depends({ action: "proxy", proxy_config_type: "selector" });
-  o.modalonly = true;
-  o.validate = function (_section_id, value) {
-    if (!value || value.length === 0) {
-      return true;
-    }
-
-    const validation = main.validateProxyUrl(value);
-    return validation.valid ? true : validation.message;
-  };
-
-  o = section.taboption(
-    "settings",
-    form.DynamicList,
-    "urltest_proxy_links",
-    _("URLTest connections"),
-    _("A latency-tested group of proxy URLs for this section"),
-  );
-  o.depends({ action: "proxy", proxy_config_type: "urltest" });
-  o.modalonly = true;
-  o.validate = function (_section_id, value) {
-    if (!value || value.length === 0) {
-      return true;
-    }
-
-    const validation = main.validateProxyUrl(value);
-    return validation.valid ? true : validation.message;
-  };
-
-  o = section.taboption(
-    "settings",
-    form.ListValue,
-    "urltest_check_interval",
-    _("URLTest interval"),
-  );
-  o.value("30s", _("Every 30 seconds"));
-  o.value("1m", _("Every minute"));
-  o.value("3m", _("Every 3 minutes"));
-  o.value("5m", _("Every 5 minutes"));
-  o.default = "3m";
-  o.rmempty = false;
-  o.depends({ action: "proxy", proxy_config_type: "urltest" });
-  o.modalonly = true;
-
-  o = section.taboption(
-    "settings",
-    form.Value,
-    "urltest_tolerance",
-    _("URLTest tolerance"),
-    _("Maximum response time delta in milliseconds"),
-  );
-  o.default = "50";
-  o.rmempty = false;
-  o.depends({ action: "proxy", proxy_config_type: "urltest" });
-  o.modalonly = true;
-  o.validate = function (_section_id, value) {
-    if (!value || value.length === 0) {
-      return true;
-    }
-
-    const parsed = parseFloat(value);
-    if (
-      /^[0-9]+$/.test(value) &&
-      !isNaN(parsed) &&
-      isFinite(parsed) &&
-      parsed >= 50 &&
-      parsed <= 1000
-    ) {
-      return true;
-    }
-
-    return _("Must be a number in the range of 50 - 1000");
-  };
-
-  o = section.taboption(
-    "settings",
-    form.Value,
-    "urltest_testing_url",
-    _("URLTest URL"),
-  );
-  o.value(
-    "https://www.gstatic.com/generate_204",
-    "https://www.gstatic.com/generate_204 (Google)",
-  );
-  o.value(
-    "https://cp.cloudflare.com/generate_204",
-    "https://cp.cloudflare.com/generate_204 (Cloudflare)",
-  );
-  o.value("https://captive.apple.com", "https://captive.apple.com (Apple)");
-  o.value(
-    "https://connectivity-check.ubuntu.com",
-    "https://connectivity-check.ubuntu.com (Ubuntu)",
-  );
-  o.default = "https://www.gstatic.com/generate_204";
-  o.rmempty = false;
-  o.depends({ action: "proxy", proxy_config_type: "urltest" });
-  o.modalonly = true;
-  o.validate = function (_section_id, value) {
-    if (!value || value.length === 0) {
-      return true;
-    }
-
-    const validation = main.validateUrl(value);
-    return validation.valid ? true : validation.message;
-  };
-
-  o = section.taboption(
-    "settings",
-    form.Flag,
-    "enable_udp_over_tcp",
-    _("UDP over TCP"),
-    _("Applicable for SOCKS and Shadowsocks links"),
-  );
-  o.default = "0";
-  o.rmempty = false;
-  o.depends("action", "proxy");
-  o.modalonly = true;
-
-  o = section.taboption(
-    "settings",
-    widgets.DeviceSelect,
-    "interface",
-    _("Interface"),
-    _("Use a network interface as the outbound for this section"),
-  );
-  o.noaliases = true;
-  o.nobridges = false;
-  o.noinactive = false;
-  o.depends({ action: "proxy", proxy_config_type: "interface" });
-  o.modalonly = true;
-  o.filter = function (_section_id, value) {
-    const blockedInterfaces = [
-      "br-lan",
-      "eth0",
-      "eth1",
-      "wan",
-      "phy0-ap0",
-      "phy1-ap0",
-      "pppoe-wan",
-      "lan",
-    ];
-
-    if (blockedInterfaces.includes(value)) {
-      return false;
-    }
-
-    const device = this.devices.find((dev) => dev.getName() === value);
-    if (!device) {
-      return true;
-    }
-
-    const type = device.getType();
-    const isWireless =
-      type === "wifi" || type === "wireless" || type.indexOf("wlan") >= 0;
-
-    return !isWireless;
-  };
-
-  o = section.taboption(
-    "settings",
-    form.Flag,
-    "domain_resolver_enabled",
-    _("Resolver for interface outbound"),
-    _("Enable a dedicated DNS resolver when this section uses an interface"),
-  );
-  o.default = "0";
-  o.rmempty = false;
-  o.depends({ action: "proxy", proxy_config_type: "interface" });
-  o.modalonly = true;
-
-  o = section.taboption(
-    "settings",
-    form.ListValue,
-    "domain_resolver_dns_type",
-    _("DNS protocol"),
-  );
-  o.value("doh", _("DNS over HTTPS (DoH)"));
-  o.value("dot", _("DNS over TLS (DoT)"));
-  o.value("udp", "UDP");
-  o.default = "udp";
-  o.rmempty = false;
-  o.depends({
-    action: "proxy",
-    proxy_config_type: "interface",
-    domain_resolver_enabled: "1",
+  addActionSettingsFields(section, "settings", {
+    defaultAction: "proxy",
+    getResolvedAction: getRuleResolvedAction,
   });
-  o.modalonly = true;
-
-  o = section.taboption(
-    "settings",
-    form.Value,
-    "domain_resolver_dns_server",
-    _("DNS server"),
-  );
-  Object.entries(main.DNS_SERVER_OPTIONS).forEach(([key, label]) => {
-    o.value(key, _(label));
-  });
-  o.default = "8.8.8.8";
-  o.rmempty = false;
-  o.depends({
-    action: "proxy",
-    proxy_config_type: "interface",
-    domain_resolver_enabled: "1",
-  });
-  o.modalonly = true;
-  o.validate = function (_section_id, value) {
-    const validation = main.validateDNS(value);
-    return validation.valid ? true : validation.message;
-  };
-
-  o = section.taboption(
-    "settings",
-    form.Flag,
-    "mixed_proxy_enabled",
-    _("Enable Mixed Proxy"),
-    _("Expose this section as a local HTTP+SOCKS proxy"),
-  );
-  o.default = "0";
-  o.rmempty = false;
-  o.depends("action", "proxy");
-  o.modalonly = true;
-
-  o = section.taboption(
-    "settings",
-    form.Value,
-    "mixed_proxy_port",
-    _("Mixed Proxy Port"),
-    _("Port for the local mixed proxy of this section"),
-  );
-  o.rmempty = false;
-  o.depends({ action: "proxy", mixed_proxy_enabled: "1" });
-  o.modalonly = true;
-  o.validate = function (_section_id, value) {
-    if (!value || value.length === 0) {
-      return _("Port cannot be empty");
-    }
-
-    const parsed = parseInt(value, 10);
-    if (!isNaN(parsed) && parsed >= 1 && parsed <= 65535) {
-      return true;
-    }
-
-    return _("Invalid port number. Must be between 1 and 65535");
-  };
 
   addTextConditionField(section, {
     key: "domain_suffix",
@@ -2138,8 +2248,24 @@ function createSectionContent(section) {
   };
 }
 
+function createDefaultActionContent(section) {
+  section.tab("settings", _("Settings"));
+
+  addActionSettingsFields(section, "settings", {
+    prefix: DEFAULT_ACTION_OPTION_PREFIX,
+    defaultAction: "direct",
+    modalonly: false,
+    getResolvedAction: getDefaultResolvedAction,
+    actionDescription: _(
+      "What Podkop Plus should do with traffic that does not match any rule",
+    ),
+  });
+}
+
 const EntryPoint = {
   createSectionContent,
+  createDefaultActionContent,
+  getDefaultActionDisplayValue,
 };
 
 return baseclass.extend(EntryPoint);

@@ -234,6 +234,76 @@ append_sing_box_rule_signature() {
     signature_add "rule.$section.domain_ip_lists" "$domain_ip_lists"
 }
 
+append_default_action_signature() {
+    local action proxy_config_type mixed_proxy_enabled
+
+    action="$(get_default_action)"
+    signature_add "settings.default_action" "$action"
+
+    case "$action" in
+    proxy)
+        proxy_config_type="$(get_default_proxy_config_type)"
+        signature_add "settings.default_proxy_config_type" "$proxy_config_type"
+
+        case "$proxy_config_type" in
+        url)
+            local proxy_string udp_over_tcp
+            config_get proxy_string "settings" "default_proxy_string"
+            config_get_bool udp_over_tcp "settings" "default_enable_udp_over_tcp" 0
+            signature_add "settings.default_proxy_string" "$proxy_string"
+            signature_add "settings.default_enable_udp_over_tcp" "$udp_over_tcp"
+            ;;
+        outbound)
+            local outbound_json
+            config_get outbound_json "settings" "default_outbound_json"
+            signature_add "settings.default_outbound_json" "$outbound_json"
+            ;;
+        selector)
+            local selector_proxy_links udp_over_tcp
+            config_get selector_proxy_links "settings" "default_selector_proxy_links"
+            config_get_bool udp_over_tcp "settings" "default_enable_udp_over_tcp" 0
+            signature_add "settings.default_selector_proxy_links" "$selector_proxy_links"
+            signature_add "settings.default_enable_udp_over_tcp" "$udp_over_tcp"
+            ;;
+        urltest)
+            local urltest_proxy_links udp_over_tcp urltest_check_interval urltest_tolerance urltest_testing_url
+            config_get urltest_proxy_links "settings" "default_urltest_proxy_links"
+            config_get_bool udp_over_tcp "settings" "default_enable_udp_over_tcp" 0
+            config_get urltest_check_interval "settings" "default_urltest_check_interval" "3m"
+            config_get urltest_tolerance "settings" "default_urltest_tolerance" 50
+            config_get urltest_testing_url "settings" "default_urltest_testing_url" "https://www.gstatic.com/generate_204"
+            signature_add "settings.default_urltest_proxy_links" "$urltest_proxy_links"
+            signature_add "settings.default_enable_udp_over_tcp" "$udp_over_tcp"
+            signature_add "settings.default_urltest_check_interval" "$urltest_check_interval"
+            signature_add "settings.default_urltest_tolerance" "$urltest_tolerance"
+            signature_add "settings.default_urltest_testing_url" "$urltest_testing_url"
+            ;;
+        interface)
+            local interface_name domain_resolver_enabled domain_resolver_dns_type domain_resolver_dns_server
+            config_get interface_name "settings" "default_interface"
+            config_get_bool domain_resolver_enabled "settings" "default_domain_resolver_enabled" 0
+            signature_add "settings.default_interface" "$interface_name"
+            signature_add "settings.default_domain_resolver_enabled" "$domain_resolver_enabled"
+            if [ "$domain_resolver_enabled" -eq 1 ]; then
+                config_get domain_resolver_dns_type "settings" "default_domain_resolver_dns_type"
+                config_get domain_resolver_dns_server "settings" "default_domain_resolver_dns_server"
+                signature_add "settings.default_domain_resolver_dns_type" "$domain_resolver_dns_type"
+                signature_add "settings.default_domain_resolver_dns_server" "$domain_resolver_dns_server"
+            fi
+            ;;
+        esac
+
+        config_get_bool mixed_proxy_enabled "settings" "default_mixed_proxy_enabled" 0
+        signature_add "settings.default_mixed_proxy_enabled" "$mixed_proxy_enabled"
+        if [ "$mixed_proxy_enabled" -eq 1 ]; then
+            local mixed_proxy_port
+            config_get mixed_proxy_port "settings" "default_mixed_proxy_port"
+            signature_add "settings.default_mixed_proxy_port" "$mixed_proxy_port"
+        fi
+        ;;
+    esac
+}
+
 build_sing_box_signature() {
     local dns_type dns_server bootstrap_dns_server rewrite_ttl output_network_interface disable_quic routing_excluded_ips \
         update_interval cache_path config_path log_level enable_yacd enable_yacd_wan_access yacd_secret_key \
@@ -282,6 +352,7 @@ build_sing_box_signature() {
         signature_add "settings.download_lists_via_proxy_section" "$download_lists_via_proxy_section"
     fi
 
+    append_default_action_signature
     config_foreach append_sing_box_rule_signature "rule"
     signature_finish
 }
@@ -318,8 +389,7 @@ build_nft_signature() {
 append_zapret_queue_signature() {
     local section="$1"
 
-    rule_is_enabled "$section" || return 0
-    [ "$(get_rule_action "$section")" = "zapret" ] || return 0
+    action_context_uses_zapret_runtime "$section" || return 0
 
     signature_add "zapret_queue.section" "$section"
 }
@@ -327,6 +397,9 @@ append_zapret_queue_signature() {
 build_zapret_queue_signature() {
     signature_begin
     config_foreach append_zapret_queue_signature "rule"
+    if default_action_uses_zapret_runtime; then
+        signature_add "zapret_queue.default_action" "$SB_DEFAULT_ACTION_OUTBOUND_SECTION"
+    fi
     signature_finish
 }
 
@@ -334,8 +407,7 @@ append_zapret_runtime_signature() {
     local section="$1"
     local domain domain_suffix community_lists rule_set domain_ip_lists user_domain_list_type items
 
-    rule_is_enabled "$section" || return 0
-    [ "$(get_rule_action "$section")" = "zapret" ] || return 0
+    action_context_uses_zapret_runtime "$section" || return 0
 
     domain="$(get_rule_condition_commas_string "$section" "domain" "domains")"
     domain_suffix="$(get_rule_condition_commas_string "$section" "domain_suffix" "domains")"
@@ -364,9 +436,17 @@ append_zapret_runtime_signature() {
     signature_add "zapret.$section.user_domains" "$items"
 }
 
+append_default_zapret_runtime_signature() {
+    default_action_uses_zapret_runtime || return 0
+
+    signature_add "zapret.$SB_DEFAULT_ACTION_OUTBOUND_SECTION.nfqws_opt" \
+        "$(get_rule_nfqws_opt "$SB_DEFAULT_ACTION_OUTBOUND_SECTION")"
+}
+
 build_zapret_runtime_signature() {
     signature_begin
     config_foreach append_zapret_runtime_signature "rule"
+    append_default_zapret_runtime_signature
     signature_finish
 }
 
@@ -685,6 +765,168 @@ infer_proxy_config_type_from_fields() {
     echo ""
 }
 
+get_default_action() {
+    local action
+
+    config_get action "settings" "default_action" "direct"
+    echo "$action"
+}
+
+infer_default_proxy_config_type_from_fields() {
+    local interface outbound_json selector_proxy_links urltest_proxy_links proxy_string
+
+    config_get interface "settings" "default_interface"
+    if [ -n "$interface" ]; then
+        echo "interface"
+        return 0
+    fi
+
+    config_get outbound_json "settings" "default_outbound_json"
+    if [ -n "$outbound_json" ]; then
+        echo "outbound"
+        return 0
+    fi
+
+    config_get selector_proxy_links "settings" "default_selector_proxy_links"
+    if [ -n "$selector_proxy_links" ]; then
+        echo "selector"
+        return 0
+    fi
+
+    config_get urltest_proxy_links "settings" "default_urltest_proxy_links"
+    if [ -n "$urltest_proxy_links" ]; then
+        echo "urltest"
+        return 0
+    fi
+
+    config_get proxy_string "settings" "default_proxy_string"
+    if [ -n "$proxy_string" ]; then
+        echo "url"
+        return 0
+    fi
+
+    echo ""
+}
+
+get_default_proxy_config_type() {
+    local proxy_config_type
+
+    config_get proxy_config_type "settings" "default_proxy_config_type"
+    if [ -n "$proxy_config_type" ]; then
+        echo "$proxy_config_type"
+        return 0
+    fi
+
+    infer_default_proxy_config_type_from_fields
+}
+
+get_default_final_outbound_tag() {
+    case "$(get_default_action)" in
+    proxy | zapret)
+        get_outbound_tag_by_section "$SB_DEFAULT_ACTION_OUTBOUND_SECTION"
+        ;;
+    block)
+        echo "$SB_BLOCK_OUTBOUND_TAG"
+        ;;
+    direct | *)
+        echo "$SB_DIRECT_OUTBOUND_TAG"
+        ;;
+    esac
+}
+
+is_default_action_context() {
+    [ "$1" = "$SB_DEFAULT_ACTION_OUTBOUND_SECTION" ]
+}
+
+get_action_context_label() {
+    local context="$1"
+
+    if is_default_action_context "$context"; then
+        echo "default action"
+    else
+        echo "rule '$context'"
+    fi
+}
+
+action_context_is_enabled() {
+    local context="$1"
+
+    if is_default_action_context "$context"; then
+        return 0
+    fi
+
+    rule_is_enabled "$context"
+}
+
+get_action_context_action() {
+    local context="$1"
+
+    if is_default_action_context "$context"; then
+        get_default_action
+    else
+        get_rule_action "$context"
+    fi
+}
+
+get_action_context_proxy_config_type() {
+    local context="$1"
+
+    if is_default_action_context "$context"; then
+        get_default_proxy_config_type
+    else
+        get_proxy_config_type "$context"
+    fi
+}
+
+action_config_get() {
+    local __var="$1"
+    local context="$2"
+    local key="$3"
+    local default="${4:-}"
+
+    if is_default_action_context "$context"; then
+        config_get "$__var" "settings" "default_$key" "$default"
+    else
+        config_get "$__var" "$context" "$key" "$default"
+    fi
+}
+
+action_config_get_bool() {
+    local __var="$1"
+    local context="$2"
+    local key="$3"
+    local default="${4:-0}"
+
+    if is_default_action_context "$context"; then
+        config_get_bool "$__var" "settings" "default_$key" "$default"
+    else
+        config_get_bool "$__var" "$context" "$key" "$default"
+    fi
+}
+
+default_action_uses_zapret_runtime() {
+    [ "$(get_default_action)" = "zapret" ]
+}
+
+rule_uses_zapret_runtime() {
+    local section="$1"
+
+    rule_is_enabled "$section" || return 1
+    [ "$(get_rule_action "$section")" = "zapret" ] || return 1
+    rule_has_primary_matchers "$section"
+}
+
+action_context_uses_zapret_runtime() {
+    local context="$1"
+
+    if is_default_action_context "$context"; then
+        default_action_uses_zapret_runtime
+        return $?
+    fi
+
+    rule_uses_zapret_runtime "$context"
+}
+
 rule_is_enabled() {
     local section="$1"
     local enabled
@@ -896,6 +1138,10 @@ _check_outbound_node() {
 has_outbound_section() {
     local section_exists=1
 
+    if [ "$(get_default_action)" = "proxy" ]; then
+        return 0
+    fi
+
     config_foreach _check_outbound_node "rule"
 
     return $section_exists
@@ -908,6 +1154,7 @@ start_main() {
 
     check_requirements
 
+    process_validate_default_action
     config_foreach process_validate_rule "rule"
 
     br_netfilter_disable
@@ -1034,6 +1281,7 @@ reload() {
     migration
     config_load "$PODKOP_CONFIG"
     check_requirements
+    process_validate_default_action
     config_foreach process_validate_rule "rule"
     ensure_runtime_dirs
 
@@ -1439,6 +1687,8 @@ process_validate_rule() {
     fi
 
     if [ "$action" = "zapret" ]; then
+        rule_has_primary_matchers "$section" || return 0
+
         if ! is_zapret_installed; then
             if [ "$PODKOP_ZAPRET_MISSING_WARNING_EMITTED" -eq 0 ]; then
                 log "There are enabled rules with action 'zapret', but the zapret package is not installed. These rules will be skipped." "error"
@@ -1456,6 +1706,59 @@ process_validate_rule() {
     config_list_foreach "$section" "community_lists" validate_service
     config_list_foreach "$section" "rule_set" validate_ruleset_reference
     config_list_foreach "$section" "domain_ip_lists" validate_plain_domain_ip_list_reference
+}
+
+process_validate_default_action() {
+    local action proxy_config_type mixed_proxy_enabled mixed_proxy_port
+
+    action="$(get_default_action)"
+    case "$action" in
+    direct | block)
+        return 0
+        ;;
+    proxy)
+        proxy_config_type="$(get_default_proxy_config_type)"
+        case "$proxy_config_type" in
+        url | outbound | selector | urltest | interface)
+            ;;
+        "")
+            log "Default action is proxy but has no proxy_config_type configured. Aborted." "fatal"
+            exit 1
+            ;;
+        *)
+            log "Unknown proxy configuration type '$proxy_config_type' for default action. Aborted." "fatal"
+            exit 1
+            ;;
+        esac
+        config_get_bool mixed_proxy_enabled "settings" "default_mixed_proxy_enabled" 0
+        if [ "$mixed_proxy_enabled" -eq 1 ]; then
+            config_get mixed_proxy_port "settings" "default_mixed_proxy_port"
+            case "$mixed_proxy_port" in
+            '' | *[!0-9]*)
+                log "Default action Mixed Proxy port must be a number between 1 and 65535. Aborted." "fatal"
+                exit 1
+                ;;
+            esac
+            if [ "$mixed_proxy_port" -lt 1 ] || [ "$mixed_proxy_port" -gt 65535 ]; then
+                log "Default action Mixed Proxy port must be a number between 1 and 65535. Aborted." "fatal"
+                exit 1
+            fi
+        fi
+        return 0
+        ;;
+    zapret)
+        if ! is_zapret_installed; then
+            log "Default action is set to 'zapret', but the zapret package is not installed. Aborted." "fatal"
+            exit 1
+        fi
+        validate_rule_nfqws_opt "$SB_DEFAULT_ACTION_OUTBOUND_SECTION"
+        return 0
+        ;;
+    *)
+        log "Unsupported default action '$action'. Aborted." "fatal"
+        exit 1
+        ;;
+    esac
 }
 
 br_netfilter_disable() {
@@ -2266,22 +2569,40 @@ sing_box_configure_inbounds() {
 sing_box_configure_outbounds() {
     log "Configure the outbounds section of a sing-box JSON configuration"
 
+    local default_action
     config=$(sing_box_cm_add_direct_outbound "$config" "$SB_DIRECT_OUTBOUND_TAG")
+
+    default_action="$(get_default_action)"
+    if [ "$default_action" = "block" ]; then
+        config=$(sing_box_cm_add_block_outbound "$config" "$SB_BLOCK_OUTBOUND_TAG")
+    elif [ "$default_action" = "proxy" ] || [ "$default_action" = "zapret" ]; then
+        configure_outbound_handler "$SB_DEFAULT_ACTION_OUTBOUND_SECTION"
+    fi
 
     config_foreach configure_outbound_handler "rule"
 }
 
 configure_outbound_handler() {
     local section="$1"
-    local action proxy_config_type
+    local action proxy_config_type context_label
 
-    rule_is_enabled "$section" || return 0
+    action_context_is_enabled "$section" || return 0
 
-    action="$(get_rule_action "$section")"
-    proxy_config_type="$(get_proxy_config_type "$section")"
+    action="$(get_action_context_action "$section")"
+    proxy_config_type="$(get_action_context_proxy_config_type "$section")"
+    context_label="$(get_action_context_label "$section")"
+
+    if ! action_context_should_configure_outbound "$section"; then
+        log "$context_label has no matchers and no explicit outbound usage, skipping outbound creation" "warn"
+        return 0
+    fi
 
     if [ "$action" = "zapret" ]; then
         if ! is_zapret_installed; then
+            if is_default_action_context "$section"; then
+                log "Default action is set to 'zapret', but the zapret package is not installed. Aborted." "fatal"
+                exit 1
+            fi
             return 0
         fi
 
@@ -2289,7 +2610,7 @@ configure_outbound_handler() {
 
         zapret_index="$(get_zapret_rule_index "$section")"
         if [ "${zapret_index:-0}" -le 0 ]; then
-            log "Unable to resolve Zapret index for rule '$section'. Aborted." "fatal"
+            log "Unable to resolve Zapret index for $context_label. Aborted." "fatal"
             exit 1
         fi
 
@@ -2303,11 +2624,11 @@ configure_outbound_handler() {
         case "$proxy_config_type" in
         url)
             local proxy_string udp_over_tcp
-            config_get proxy_string "$section" "proxy_string"
-            config_get udp_over_tcp "$section" "enable_udp_over_tcp"
+            action_config_get proxy_string "$section" "proxy_string"
+            action_config_get udp_over_tcp "$section" "enable_udp_over_tcp"
 
             if [ -z "$proxy_string" ]; then
-                log "Proxy string is not set for rule '$section'. Aborted." "fatal"
+                log "Proxy string is not set for $context_label. Aborted." "fatal"
                 exit 1
             fi
 
@@ -2316,18 +2637,18 @@ configure_outbound_handler() {
             ;;
         outbound)
             local json_outbound
-            config_get json_outbound "$section" "outbound_json"
+            action_config_get json_outbound "$section" "outbound_json"
             config=$(sing_box_cf_add_json_outbound "$config" "$section" "$json_outbound")
             return 0
             ;;
         selector)
             local selector_proxy_links udp_over_tcp i outbound_tags outbound_tag default_outbound selector_tag \
                 selector_outbounds
-            config_get selector_proxy_links "$section" "selector_proxy_links"
-            config_get udp_over_tcp "$section" "enable_udp_over_tcp"
+            action_config_get selector_proxy_links "$section" "selector_proxy_links"
+            action_config_get udp_over_tcp "$section" "enable_udp_over_tcp"
 
             if [ -z "$selector_proxy_links" ]; then
-                log "Selector proxy links are not set for rule '$section'. Aborted." "fatal"
+                log "Selector proxy links are not set for $context_label. Aborted." "fatal"
                 exit 1
             fi
 
@@ -2352,14 +2673,14 @@ configure_outbound_handler() {
         urltest)
             local urltest_proxy_links udp_over_tcp i urltest_tag selector_tag outbound_tag outbound_tags urltest_outbounds \
                 selector_outbounds urltest_check_interval urltest_tolerance urltest_testing_url
-            config_get urltest_proxy_links "$section" "urltest_proxy_links"
-            config_get udp_over_tcp "$section" "enable_udp_over_tcp"
-            config_get urltest_check_interval "$section" "urltest_check_interval" "3m"
-            config_get urltest_tolerance "$section" "urltest_tolerance" 50
-            config_get urltest_testing_url "$section" "urltest_testing_url" "https://www.gstatic.com/generate_204"
+            action_config_get urltest_proxy_links "$section" "urltest_proxy_links"
+            action_config_get udp_over_tcp "$section" "enable_udp_over_tcp"
+            action_config_get urltest_check_interval "$section" "urltest_check_interval" "3m"
+            action_config_get urltest_tolerance "$section" "urltest_tolerance" 50
+            action_config_get urltest_testing_url "$section" "urltest_testing_url" "https://www.gstatic.com/generate_204"
 
             if [ -z "$urltest_proxy_links" ]; then
-                log "URLTest proxy links are not set for rule '$section'. Aborted." "fatal"
+                log "URLTest proxy links are not set for $context_label. Aborted." "fatal"
                 exit 1
             fi
 
@@ -2388,13 +2709,13 @@ configure_outbound_handler() {
             local interface_name domain_resolver_enabled domain_resolver_dns_type domain_resolver_dns_server \
                 domain_resolver_dns_server_address outbound_tag domain_resolver_tag dns_domain_resolver
 
-            config_get interface_name "$section" "interface"
-            config_get domain_resolver_enabled "$section" "domain_resolver_enabled"
-            config_get domain_resolver_dns_type "$section" "domain_resolver_dns_type"
-            config_get domain_resolver_dns_server "$section" "domain_resolver_dns_server"
+            action_config_get interface_name "$section" "interface"
+            action_config_get_bool domain_resolver_enabled "$section" "domain_resolver_enabled" 0
+            action_config_get domain_resolver_dns_type "$section" "domain_resolver_dns_type"
+            action_config_get domain_resolver_dns_server "$section" "domain_resolver_dns_server"
 
             if [ -z "$interface_name" ]; then
-                log "Interface outbound is not set for rule '$section'. Aborted." "fatal"
+                log "Interface outbound is not set for $context_label. Aborted." "fatal"
                 exit 1
             fi
 
@@ -2414,11 +2735,11 @@ configure_outbound_handler() {
             return 0
             ;;
         "")
-            log "Proxy rule '$section' has no proxy_config_type configured. Aborted." "fatal"
+            log "$context_label has no proxy_config_type configured. Aborted." "fatal"
             exit 1
             ;;
         *)
-            log "Unknown proxy configuration type '$proxy_config_type' for rule '$section'. Aborted." "fatal"
+            log "Unknown proxy configuration type '$proxy_config_type' for $context_label. Aborted." "fatal"
             exit 1
             ;;
         esac
@@ -2429,152 +2750,14 @@ configure_outbound_handler() {
         return 0
         ;;
     "")
-        log "Rule '$section' has no action and could not be auto-migrated. Aborted." "fatal"
+        log "$context_label has no action and could not be auto-migrated. Aborted." "fatal"
         ;;
     *)
-        log "Unsupported action '$action' for rule '$section'. Aborted." "fatal"
+        log "Unsupported action '$action' for $context_label. Aborted." "fatal"
         ;;
     esac
     exit 1
 
-    local connection_type
-    config_get connection_type "$section" "connection_type"
-    case "$connection_type" in
-    proxy)
-        log "Configuring outbound in proxy connection type for the $section section"
-        local proxy_config_type
-        config_get proxy_config_type "$section" "proxy_config_type"
-
-        case "$proxy_config_type" in
-        url)
-            log "Detected proxy configuration type: url" "debug"
-            local proxy_string udp_over_tcp
-            config_get proxy_string "$section" "proxy_string"
-            config_get udp_over_tcp "$section" "enable_udp_over_tcp"
-
-            if [ -z "$proxy_string" ]; then
-                log "Proxy string is not set. Aborted." "fatal"
-                exit 1
-            fi
-            config=$(sing_box_cf_add_proxy_outbound "$config" "$section" "$proxy_string" "$udp_over_tcp")
-            ;;
-        outbound)
-            log "Detected proxy configuration type: outbound" "debug"
-            local json_outbound
-            config_get json_outbound "$section" "outbound_json"
-            config=$(sing_box_cf_add_json_outbound "$config" "$section" "$json_outbound")
-            ;;
-        selector)
-            log "Detected proxy configuration type: selector" "debug"
-            local selector_proxy_links udp_over_tcp i outbound_tags outbound_tag default_outbound
-            config_get selector_proxy_links "$section" "selector_proxy_links"
-            config_get udp_over_tcp "$section" "enable_udp_over_tcp"
-
-            if [ -z "$selector_proxy_links" ]; then
-                log "URLTest proxy links is not set. Aborted." "fatal"
-                exit 1
-            fi
-
-            i=1
-            for link in $selector_proxy_links; do
-                config="$(sing_box_cf_add_proxy_outbound "$config" "$section-$i" "$link" "$udp_over_tcp")"
-                outbound_tag="$(get_outbound_tag_by_section "$section-$i")"
-                if [ -z "$outbound_tags" ]; then
-                    outbound_tags="$outbound_tag"
-                    default_outbound="$outbound_tag"
-                else
-                    outbound_tags="$outbound_tags,$outbound_tag"
-                fi
-                i=$((i + 1))
-            done
-
-            selector_tag="$(get_outbound_tag_by_section "$section")"
-            selector_outbounds="$(comma_string_to_json_array "$outbound_tags")"
-            config="$(sing_box_cm_add_selector_outbound "$config" "$selector_tag" "$selector_outbounds" \
-                "$default_outbound")"
-            ;;
-        urltest)
-            log "Detected proxy configuration type: urltest" "debug"
-            local urltest_proxy_links udp_over_tcp i urltest_tag selector_tag outbound_tag outbound_tags \
-                urltest_outbounds selector_outbounds urltest_check_interval urltest_tolerance urltest_testing_url
-            config_get urltest_proxy_links "$section" "urltest_proxy_links"
-            config_get udp_over_tcp "$section" "enable_udp_over_tcp"
-            config_get urltest_check_interval "$section" "urltest_check_interval" "3m"
-            config_get urltest_tolerance "$section" "urltest_tolerance" 50
-            config_get urltest_testing_url "$section" "urltest_testing_url" "https://www.gstatic.com/generate_204"
-
-            if [ -z "$urltest_proxy_links" ]; then
-                log "URLTest proxy links is not set. Aborted." "fatal"
-                exit 1
-            fi
-
-            i=1
-            for link in $urltest_proxy_links; do
-                config="$(sing_box_cf_add_proxy_outbound "$config" "$section-$i" "$link" "$udp_over_tcp")"
-                outbound_tag="$(get_outbound_tag_by_section "$section-$i")"
-                if [ -z "$outbound_tags" ]; then
-                    outbound_tags="$outbound_tag"
-                else
-                    outbound_tags="$outbound_tags,$outbound_tag"
-                fi
-                i=$((i + 1))
-            done
-
-            urltest_tag="$(get_outbound_tag_by_section "$section-urltest")"
-            selector_tag="$(get_outbound_tag_by_section "$section")"
-            urltest_outbounds="$(comma_string_to_json_array "$outbound_tags")"
-            selector_outbounds="$(comma_string_to_json_array "$outbound_tags,$urltest_tag")"
-            config="$(sing_box_cm_add_urltest_outbound "$config" "$urltest_tag" "$urltest_outbounds" \
-                "$urltest_testing_url" "$urltest_check_interval" "$urltest_tolerance")"
-            config="$(sing_box_cm_add_selector_outbound "$config" "$selector_tag" "$selector_outbounds" "$urltest_tag")"
-            ;;
-        *)
-            log "Unknown proxy configuration type: '$proxy_config_type'. Aborted." "fatal"
-            exit 1
-            ;;
-        esac
-        ;;
-    vpn)
-        log "Configuring outbound in VPN connection type for the $section section"
-        local interface_name domain_resolver_enabled domain_resolver_dns_type domain_resolver_dns_server \
-            domain_resolver_dns_server_address outbound_tag domain_resolver_tag dns_domain_resolver
-
-        config_get interface_name "$section" "interface"
-        config_get domain_resolver_enabled "$section" "domain_resolver_enabled"
-        config_get domain_resolver_dns_type "$section" "domain_resolver_dns_type"
-        config_get domain_resolver_dns_server "$section" "domain_resolver_dns_server"
-
-        if [ -z "$interface_name" ]; then
-            log "VPN interface is not set. Aborted." "fatal"
-            exit 1
-        fi
-
-        local outbound_tag
-        outbound_tag="$(get_outbound_tag_by_section "$section")"
-
-        if [ "$domain_resolver_enabled" -eq 1 ]; then
-            domain_resolver_dns_server_address="$(url_get_host "$domain_resolver_dns_server")"
-            if ! is_ipv4 "$domain_resolver_dns_server_address"; then
-                dns_domain_resolver=$SB_BOOTSTRAP_SERVER_TAG
-            fi
-            domain_resolver_tag="$(get_domain_resolver_tag "$section")"
-            config=$(sing_box_cf_add_dns_server "$config" "$domain_resolver_dns_type" "$domain_resolver_tag" \
-                "$domain_resolver_dns_server" "$dns_domain_resolver" "$outbound_tag")
-        fi
-
-        config=$(sing_box_cm_add_interface_outbound "$config" "$outbound_tag" "$interface_name" "$domain_resolver_tag")
-        ;;
-    block)
-        log "Connection type 'block' detected for the $section section – no outbound will be created (handled via reject route rules)"
-        ;;
-    exclusion)
-        log "Connection type 'exclusion' detected for the $section section – no outbound will be created (handled via route rules)"
-        ;;
-    *)
-        log "Unknown connection type '$connection_type' for the $section section. Aborted." "fatal"
-        exit 1
-        ;;
-    esac
 }
 
 sing_box_configure_dns() {
@@ -2611,12 +2794,13 @@ sing_box_configure_dns() {
 sing_box_configure_route() {
     log "Configure the route section of a sing-box JSON configuration"
 
-    local output_network_interface
+    local output_network_interface default_final_outbound_tag
+    default_final_outbound_tag="$(get_default_final_outbound_tag)"
     config_get output_network_interface "settings" "output_network_interface"
     if [ -z "$output_network_interface" ]; then
-        config=$(sing_box_cm_configure_route "$config" "$SB_DIRECT_OUTBOUND_TAG" true "$SB_DNS_SERVER_TAG")
+        config=$(sing_box_cm_configure_route "$config" "$default_final_outbound_tag" true "$SB_DNS_SERVER_TAG")
     else
-        config=$(sing_box_cm_configure_route "$config" "$SB_DIRECT_OUTBOUND_TAG" false "$SB_DNS_SERVER_TAG" \
+        config=$(sing_box_cm_configure_route "$config" "$default_final_outbound_tag" false "$SB_DNS_SERVER_TAG" \
             "$output_network_interface")
     fi
 
@@ -2625,6 +2809,7 @@ sing_box_configure_route() {
     config=$(sing_box_cm_sniff_route_rule "$config" "inbound" "$sniff_inbounds")
 
     config=$(sing_box_cm_add_hijack_dns_route_rule "$config" "protocol" "dns")
+    config=$(sing_box_cm_add_reject_route_rule "$config" "$SB_DNS_REDIRECT_REJECT_RULE_TAG" "$SB_DNS_REDIRECT_INBOUND_TAG")
 
     local disable_quic
     config_get_bool disable_quic "settings" "disable_quic" 0
@@ -2862,6 +3047,38 @@ rule_has_primary_matchers() {
     return 1
 }
 
+rule_is_download_proxy_section() {
+    local section="$1"
+    local download_lists_via_proxy download_lists_via_proxy_section
+
+    config_get_bool download_lists_via_proxy "settings" "download_lists_via_proxy" 0
+    [ "$download_lists_via_proxy" -eq 1 ] || return 1
+
+    config_get download_lists_via_proxy_section "settings" "download_lists_via_proxy_section"
+    [ "$download_lists_via_proxy_section" = "$section" ]
+}
+
+proxy_rule_has_explicit_outbound_usage() {
+    local section="$1"
+
+    rule_is_download_proxy_section "$section" && return 0
+
+    return 1
+}
+
+action_context_should_configure_outbound() {
+    local section="$1"
+    local action
+
+    is_default_action_context "$section" && return 0
+    rule_has_primary_matchers "$section" && return 0
+
+    action="$(get_rule_action "$section")"
+    [ "$action" = "proxy" ] || return 1
+
+    proxy_rule_has_explicit_outbound_usage "$section"
+}
+
 configure_route_rule_handler() {
     local section="$1"
     local action route_rule_tag ip_values_json ip_values
@@ -2878,13 +3095,7 @@ configure_route_rule_handler() {
     log "Configuring route rule '$section' with action '$action'"
 
     if ! rule_has_primary_matchers "$section"; then
-        if [ "$action" != "proxy" ] && [ "$action" != "zapret" ]; then
-            log "Rule '$section' has no matchers and action '$action', skipping catch-all route creation" "warn"
-            return 0
-        fi
-
-        route_rule_tag="$(gen_id)"
-        create_route_rule_for_action "$section" "$action" "$route_rule_tag"
+        log "Rule '$section' has no matchers and action '$action', skipping route creation" "warn"
         return 0
     fi
 
@@ -3310,38 +3521,44 @@ sing_box_additional_inbounds() {
         )
     fi
 
+    configure_action_context_mixed_proxy "$SB_DEFAULT_ACTION_OUTBOUND_SECTION"
     config_foreach configure_section_mixed_proxy "rule"
 }
 
 configure_section_mixed_proxy() {
     local section="$1"
-    local action
 
-    rule_is_enabled "$section" || return 0
+    configure_action_context_mixed_proxy "$section"
+}
 
-    action="$(get_rule_action "$section")"
+configure_action_context_mixed_proxy() {
+    local section="$1"
+    local action mixed_inbound_enabled mixed_proxy_port mixed_inbound_tag mixed_outbound_tag mixed_proxy_address
+
+    action_context_is_enabled "$section" || return 0
+
+    action="$(get_action_context_action "$section")"
     [ "$action" = "proxy" ] || return 0
 
-    local mixed_inbound_enabled mixed_proxy_port mixed_inbound_tag mixed_outbound_tag mixed_proxy_address
-    config_get_bool mixed_inbound_enabled "$section" "mixed_proxy_enabled" 0
+    action_config_get_bool mixed_inbound_enabled "$section" "mixed_proxy_enabled" 0
+    [ "$mixed_inbound_enabled" -eq 1 ] || return 0
+
     mixed_proxy_address="$(get_service_listen_address)"
     if [ -z "$mixed_proxy_address" ]; then
         log "Could not determine the listening IP address for the Mixed Proxy. The proxy will not be created." "warn"
         return 1
     fi
-    config_get mixed_proxy_port "$section" "mixed_proxy_port"
-    if [ "$mixed_inbound_enabled" -eq 1 ]; then
-        mixed_inbound_tag="$(get_inbound_tag_by_section "$section-mixed")"
-        mixed_outbound_tag="$(get_outbound_tag_by_section "$section")"
-        config=$(
-            sing_box_cf_add_mixed_inbound_and_route_rule \
-                "$config" \
-                "$mixed_inbound_tag" \
-                "$mixed_proxy_address" \
-                "$mixed_proxy_port" \
-                "$mixed_outbound_tag"
-        )
-    fi
+    action_config_get mixed_proxy_port "$section" "mixed_proxy_port"
+    mixed_inbound_tag="$(get_inbound_tag_by_section "$section-mixed")"
+    mixed_outbound_tag="$(get_outbound_tag_by_section "$section")"
+    config=$(
+        sing_box_cf_add_mixed_inbound_and_route_rule \
+            "$config" \
+            "$mixed_inbound_tag" \
+            "$mixed_proxy_address" \
+            "$mixed_proxy_port" \
+            "$mixed_outbound_tag"
+    )
 }
 
 sing_box_save_config() {
@@ -3777,7 +3994,7 @@ _determine_first_outbound_section() {
     rule_is_enabled "$section" || return 0
 
     action="$(get_rule_action "$section")"
-    if [ "$action" = "proxy" ]; then
+    if [ "$action" = "proxy" ] && action_context_should_configure_outbound "$section"; then
         [ -z "$first_section" ] && first_section="$1"
     fi
 }

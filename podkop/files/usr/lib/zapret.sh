@@ -8,8 +8,7 @@ has_enabled_zapret_rules() {
 _count_zapret_rule_handler() {
     local section="$1"
 
-    rule_is_enabled "$section" || return 0
-    [ "$(get_rule_action "$section")" = "zapret" ] || return 0
+    action_context_uses_zapret_runtime "$section" || return 0
 
     ZAPRET_RULE_COUNT=$((ZAPRET_RULE_COUNT + 1))
 }
@@ -17,6 +16,9 @@ _count_zapret_rule_handler() {
 get_zapret_rule_count() {
     ZAPRET_RULE_COUNT=0
     config_foreach _count_zapret_rule_handler "rule"
+    if default_action_uses_zapret_runtime; then
+        ZAPRET_RULE_COUNT=$((ZAPRET_RULE_COUNT + 1))
+    fi
     echo "$ZAPRET_RULE_COUNT"
 }
 
@@ -24,8 +26,7 @@ _find_zapret_rule_index_handler() {
     local section="$1"
     local target_section="$2"
 
-    rule_is_enabled "$section" || return 0
-    [ "$(get_rule_action "$section")" = "zapret" ] || return 0
+    action_context_uses_zapret_runtime "$section" || return 0
 
     ZAPRET_RULE_INDEX_WALK=$((ZAPRET_RULE_INDEX_WALK + 1))
     if [ "$section" = "$target_section" ]; then
@@ -39,6 +40,12 @@ get_zapret_rule_index() {
     ZAPRET_RULE_INDEX_WALK=0
     ZAPRET_RULE_INDEX_RESULT=0
     config_foreach _find_zapret_rule_index_handler "rule" "$section"
+
+    if [ "$ZAPRET_RULE_INDEX_RESULT" -eq 0 ] &&
+        is_default_action_context "$section" &&
+        default_action_uses_zapret_runtime; then
+        ZAPRET_RULE_INDEX_RESULT=$((ZAPRET_RULE_INDEX_WALK + 1))
+    fi
 
     echo "$ZAPRET_RULE_INDEX_RESULT"
 }
@@ -71,7 +78,12 @@ get_rule_nfqws_opt() {
     local section="$1"
     local nfqws_opt
 
-    config_get nfqws_opt "$section" "nfqws_opt"
+    if is_default_action_context "$section"; then
+        config_get nfqws_opt "settings" "default_nfqws_opt"
+    else
+        config_get nfqws_opt "$section" "nfqws_opt"
+    fi
+
     if [ -n "$nfqws_opt" ]; then
         normalize_nfqws_strategy_whitespace "$nfqws_opt"
     else
@@ -599,10 +611,11 @@ validate_nfqws_strategy() {
 
 validate_rule_nfqws_opt() {
     local section="$1"
-    local raw_opt
+    local raw_opt context
 
     raw_opt="$(get_rule_nfqws_opt "$section")"
-    validate_nfqws_strategy "$raw_opt" "Zapret rule '$section'"
+    context="$(get_action_context_label "$section")"
+    validate_nfqws_strategy "$raw_opt" "Zapret $context"
 }
 
 _find_zapret_optional_file() {
@@ -1063,6 +1076,14 @@ zapret_rule_route_rule_present() {
 
     outbound_tag="$(get_outbound_tag_by_section "$section")"
 
+    if is_default_action_context "$section"; then
+        jq -e \
+            --arg outbound "$outbound_tag" \
+            '.route.final == $outbound' \
+            "$ZAPRET_SINGBOX_CONFIG_PATH" >/dev/null 2>&1
+        return $?
+    fi
+
     jq -e \
         --arg inbound "$SB_TPROXY_INBOUND_TAG" \
         --arg outbound "$outbound_tag" \
@@ -1075,8 +1096,7 @@ _collect_zapret_runtime_status_handler() {
     local section="$1"
     local index mark_value
 
-    rule_is_enabled "$section" || return 0
-    [ "$(get_rule_action "$section")" = "zapret" ] || return 0
+    action_context_uses_zapret_runtime "$section" || return 0
 
     ZAPRET_RUNTIME_RULES_CONFIGURED=1
     index="$(get_zapret_rule_index "$section")"
@@ -1101,6 +1121,7 @@ collect_zapret_runtime_status() {
     config_get sing_box_config_path "settings" "config_path"
     ZAPRET_SINGBOX_CONFIG_PATH="$sing_box_config_path"
     config_foreach _collect_zapret_runtime_status_handler "rule"
+    _collect_zapret_runtime_status_handler "$SB_DEFAULT_ACTION_OUTBOUND_SECTION"
 
     if [ "$ZAPRET_RUNTIME_RULES_CONFIGURED" -eq 0 ]; then
         ZAPRET_RUNTIME_OUTBOUNDS_CONFIGURED=0
@@ -1197,8 +1218,7 @@ _create_zapret_nft_rule_handler() {
     local section="$1"
     local index mark_hex queue_number
 
-    rule_is_enabled "$section" || return 0
-    [ "$(get_rule_action "$section")" = "zapret" ] || return 0
+    action_context_uses_zapret_runtime "$section" || return 0
 
     index="$(get_zapret_rule_index "$section")"
     mark_hex="$(get_zapret_rule_mark_hex "$index")"
@@ -1217,6 +1237,7 @@ create_zapret_nft_rules() {
     nft add rule inet "$NFT_TABLE_NAME" mangle_output meta mark \& "$ZAPRET_DESYNC_MARK" == "$ZAPRET_DESYNC_MARK" return
     nft add rule inet "$NFT_TABLE_NAME" mangle_output meta mark \& "$ZAPRET_DESYNC_MARK_POSTNAT" == "$ZAPRET_DESYNC_MARK_POSTNAT" return
     config_foreach _create_zapret_nft_rule_handler "rule"
+    _create_zapret_nft_rule_handler "$SB_DEFAULT_ACTION_OUTBOUND_SECTION"
 }
 
 stop_zapret_runtime() {
@@ -1237,10 +1258,9 @@ stop_zapret_runtime() {
 
 _start_zapret_runtime_handler() {
     local section="$1"
-    local index queue_number mark_hex raw_opt expanded_opt pidfile logfile pid
+    local index queue_number mark_hex raw_opt expanded_opt pidfile logfile pid context_label
 
-    rule_is_enabled "$section" || return 0
-    [ "$(get_rule_action "$section")" = "zapret" ] || return 0
+    action_context_uses_zapret_runtime "$section" || return 0
 
     index="$(get_zapret_rule_index "$section")"
     queue_number="$(get_zapret_rule_queue_number "$index")"
@@ -1249,8 +1269,9 @@ _start_zapret_runtime_handler() {
     expanded_opt="$(expand_zapret_nfqws_opt "$raw_opt" "$section")"
     pidfile="$ZAPRET_PID_DIR/$section.pid"
     logfile="$ZAPRET_LOG_DIR/$section.log"
+    context_label="$(get_action_context_label "$section")"
 
-    log "Starting nfqws for rule '$section' on queue $queue_number with mark $mark_hex"
+    log "Starting nfqws for $context_label on queue $queue_number with mark $mark_hex"
     (
         close_inherited_service_lock_fd
         # Split NFQWS_OPT into argv explicitly so shell environment changes do
@@ -1265,7 +1286,7 @@ _start_zapret_runtime_handler() {
     sleep 1
 
     if ! kill -0 "$pid" 2>/dev/null; then
-        log "nfqws failed to start for rule '$section'. Check $logfile. Aborted." "fatal"
+        log "nfqws failed to start for $context_label. Check $logfile. Aborted." "fatal"
         exit 1
     fi
 }
@@ -1278,4 +1299,5 @@ start_zapret_runtime() {
     check_zapret_requirements
     mkdir -p "$ZAPRET_PID_DIR" "$ZAPRET_LOG_DIR" "$ZAPRET_HOSTLIST_DIR"
     config_foreach _start_zapret_runtime_handler "rule"
+    _start_zapret_runtime_handler "$SB_DEFAULT_ACTION_OUTBOUND_SECTION"
 }

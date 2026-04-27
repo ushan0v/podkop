@@ -454,6 +454,28 @@ sing_box_cm_add_direct_outbound() {
 }
 
 #######################################
+# Add a Block outbound to the outbounds section of a sing-box JSON configuration.
+# Arguments:
+#   config: string (JSON), sing-box configuration to modify
+#   tag: string, identifier for the outbound
+# Outputs:
+#   Writes updated JSON configuration to stdout
+# Example:
+#   CONFIG=$(sing_box_cm_add_block_outbound "$CONFIG" "block-out")
+#######################################
+sing_box_cm_add_block_outbound() {
+    local config="$1"
+    local tag="$2"
+
+    echo "$config" | jq \
+        --arg tag "$tag" \
+        '.outbounds += [{
+            type: "block",
+            tag: $tag
+        }]'
+}
+
+#######################################
 # Add a SOCKS outbound to the outbounds section of a sing-box JSON configuration.
 # Arguments:
 #   config: string (JSON), sing-box configuration to modify
