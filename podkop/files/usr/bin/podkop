@@ -302,13 +302,15 @@ append_nft_rule_signature() {
 }
 
 build_nft_signature() {
-    local source_network_interfaces exclude_ntp
+    local source_network_interfaces exclude_ntp dont_touch_dhcp
 
     signature_begin
     config_get source_network_interfaces "settings" "source_network_interfaces" "br-lan"
     config_get_bool exclude_ntp "settings" "exclude_ntp" 0
+    config_get_bool dont_touch_dhcp "settings" "dont_touch_dhcp" 0
     signature_add "settings.source_network_interfaces" "$source_network_interfaces"
     signature_add "settings.exclude_ntp" "$exclude_ntp"
+    signature_add "settings.dont_touch_dhcp" "$dont_touch_dhcp"
     config_foreach append_nft_rule_signature "rule"
     signature_finish
 }
@@ -1538,6 +1540,43 @@ register_ruleset_tag() {
     fi
 }
 
+dns_route_rule_registered() {
+    local tag="$1"
+    echo ",$configured_dns_route_rules," | grep -q ",$tag,"
+}
+
+register_dns_route_rule_tag() {
+    local tag="$1"
+    if ! dns_route_rule_registered "$tag"; then
+        if [ -z "$configured_dns_route_rules" ]; then
+            configured_dns_route_rules="$tag"
+        else
+            configured_dns_route_rules="$configured_dns_route_rules,$tag"
+        fi
+    fi
+}
+
+ensure_fakeip_dns_route_rule() {
+    local tag="$1"
+    local rewrite_ttl
+
+    if ! dns_route_rule_registered "$tag"; then
+        config_get rewrite_ttl "settings" "dns_rewrite_ttl" "60"
+        config=$(sing_box_cm_add_dns_route_rule "$config" "$SB_FAKEIP_DNS_SERVER_TAG" "$tag")
+        config=$(sing_box_cm_patch_dns_route_rule "$config" "$tag" "rewrite_ttl" "$rewrite_ttl")
+        register_dns_route_rule_tag "$tag"
+    fi
+}
+
+patch_fakeip_dns_route_rule() {
+    local tag="$1"
+    local key="$2"
+    local value="$3"
+
+    ensure_fakeip_dns_route_rule "$tag"
+    config=$(sing_box_cm_patch_dns_route_rule "$config" "$tag" "$key" "$value")
+}
+
 ENSURED_RULESET_TAG=""
 ENSURED_RULESET_KIND="unknown"
 
@@ -1755,6 +1794,14 @@ create_nft_rules() {
     nft add chain inet "$NFT_TABLE_NAME" mangle_output '{ type route hook output priority -150; policy accept; }'
     nft add chain inet "$NFT_TABLE_NAME" proxy '{ type filter hook prerouting priority -100; policy accept; }'
 
+    local dont_touch_dhcp
+    config_get_bool dont_touch_dhcp "settings" "dont_touch_dhcp" "0"
+    if [ "$dont_touch_dhcp" -eq 0 ]; then
+        nft add chain inet "$NFT_TABLE_NAME" "$NFT_DNS_REDIRECT_CHAIN_NAME" '{ type nat hook prerouting priority dstnat; policy accept; }'
+        nft add rule inet "$NFT_TABLE_NAME" "$NFT_DNS_REDIRECT_CHAIN_NAME" iifname "@$NFT_INTERFACE_SET_NAME" meta nfproto ipv4 udp dport 53 counter redirect to :"$SB_DNS_REDIRECT_INBOUND_PORT"
+        nft add rule inet "$NFT_TABLE_NAME" "$NFT_DNS_REDIRECT_CHAIN_NAME" iifname "@$NFT_INTERFACE_SET_NAME" meta nfproto ipv4 tcp dport 53 counter redirect to :"$SB_DNS_REDIRECT_INBOUND_PORT"
+    fi
+
     nft add rule inet "$NFT_TABLE_NAME" mangle iifname "@$NFT_INTERFACE_SET_NAME" ip daddr "@$NFT_COMMON_SET_NAME" meta l4proto tcp meta mark set "$NFT_FAKEIP_MARK" counter
     nft add rule inet "$NFT_TABLE_NAME" mangle iifname "@$NFT_INTERFACE_SET_NAME" ip daddr "@$NFT_COMMON_SET_NAME" meta l4proto udp meta mark set "$NFT_FAKEIP_MARK" counter
     nft add rule inet "$NFT_TABLE_NAME" mangle iifname "@$NFT_INTERFACE_SET_NAME" ip daddr "$SB_FAKEIP_INET4_RANGE" meta l4proto tcp meta mark set "$NFT_FAKEIP_MARK" counter
@@ -1794,45 +1841,53 @@ dnsmasq_has_podkop_dns() {
     uci -q show dhcp | grep -F ".server='$SB_DNS_INBOUND_ADDRESS'" >/dev/null 2>&1
 }
 
+dnsmasq_has_podkop_backup() {
+    [ -n "$(uci_get "dhcp" "@dnsmasq[0]" "podkop_server")" ] ||
+        [ -n "$(uci_get "dhcp" "@dnsmasq[0]" "podkop_noresolv")" ] ||
+        [ -n "$(uci_get "dhcp" "@dnsmasq[0]" "podkop_cachesize")" ]
+}
+
+podkop_dns_redirect_rule_present() {
+    nft list chain inet "$NFT_TABLE_NAME" "$NFT_DNS_REDIRECT_CHAIN_NAME" 2>/dev/null |
+        grep -q "redirect to :$SB_DNS_REDIRECT_INBOUND_PORT"
+}
+
+podkop_dns_configured() {
+    dnsmasq_has_podkop_dns || podkop_dns_redirect_rule_present
+}
+
 dnsmasq_configure() {
     local force="${1:-0}"
     local shutdown_correctly
     config_get shutdown_correctly "settings" "shutdown_correctly"
     if [ "$force" != "force" ] && [ "$shutdown_correctly" -eq 0 ]; then
         if dnsmasq_has_podkop_dns; then
-            log "Previous shutdown of podkop was not correct, dnsmasq is already configured"
+            log "Previous shutdown of podkop was not correct, restoring legacy global dnsmasq forwarding"
+            dnsmasq_restore force
             return 0
         fi
 
-        log "Previous shutdown of podkop was not correct, but dnsmasq is not configured. Applying Podkop DNS settings"
+        log "Previous shutdown of podkop was not correct, but legacy global dnsmasq forwarding is not present"
     fi
 
-    log "Backup dnsmasq configuration"
-    current_servers="$(uci_get "dhcp" "@dnsmasq[0]" "server")"
-    if [ -n "$current_servers" ]; then
-        for server in $(uci_get "dhcp" "@dnsmasq[0]" "server"); do
-            if ! [ "$server" == "$SB_DNS_INBOUND_ADDRESS" ]; then
-                uci_add_list "dhcp" "@dnsmasq[0]" "podkop_server" "$server"
-            fi
-        done
-        uci_remove "dhcp" "@dnsmasq[0]" "server"
+    if dnsmasq_has_podkop_dns || dnsmasq_has_podkop_backup; then
+        log "Restoring dnsmasq before using scoped DNS redirect"
+        dnsmasq_restore force
+        return 0
     fi
 
-    backup_dnsmasq_config_option "noresolv" "podkop_noresolv"
-    backup_dnsmasq_config_option "cachesize" "podkop_cachesize"
-
-    log "Configure dnsmasq for sing-box"
-    uci_add_list "dhcp" "@dnsmasq[0]" "server" "$SB_DNS_INBOUND_ADDRESS"
-    uci_set "dhcp" "@dnsmasq[0]" "noresolv" 1
-    uci_set "dhcp" "@dnsmasq[0]" "cachesize" 0
-    uci_commit "dhcp"
-
-    /etc/init.d/dnsmasq restart
+    log "DNS redirect is handled by nft for selected source interfaces; dnsmasq is unchanged"
 }
 
 dnsmasq_restore() {
     local force="${1:-0}"
     log "Restoring the dnsmasq configuration"
+
+    if ! dnsmasq_has_podkop_dns && ! dnsmasq_has_podkop_backup; then
+        log "dnsmasq has no Podkop DNS settings, restore is not required"
+        return 0
+    fi
+
     local shutdown_correctly
     config_get shutdown_correctly "settings" "shutdown_correctly"
     if [ "$force" != "force" ] && [ "$shutdown_correctly" -eq 1 ]; then
@@ -2173,6 +2228,7 @@ sing_box_init_config() {
     local config='{"log":{},"dns":{},"ntp":{},"certificate":{},"endpoints":[],"inbounds":[],"outbounds":[],"route":{},"services":[],"experimental":{}}'
 
     configured_rulesets=""
+    configured_dns_route_rules=""
     sing_box_configure_log
     sing_box_configure_inbounds
     sing_box_configure_outbounds
@@ -2200,6 +2256,10 @@ sing_box_configure_inbounds() {
     )
     config=$(
         sing_box_cm_add_direct_inbound "$config" "$SB_DNS_INBOUND_TAG" "$SB_DNS_INBOUND_ADDRESS" "$SB_DNS_INBOUND_PORT"
+    )
+    config=$(
+        sing_box_cm_add_direct_inbound "$config" "$SB_DNS_REDIRECT_INBOUND_TAG" \
+            "$SB_DNS_REDIRECT_INBOUND_ADDRESS" "$SB_DNS_REDIRECT_INBOUND_PORT"
     )
 }
 
@@ -2546,10 +2606,6 @@ sing_box_configure_dns() {
     config=$(sing_box_cm_add_dns_route_rule "$config" "$SB_FAKEIP_DNS_SERVER_TAG" "$SB_SERVICE_FAKEIP_DNS_RULE_TAG")
     config=$(sing_box_cm_patch_dns_route_rule "$config" "$SB_SERVICE_FAKEIP_DNS_RULE_TAG" "rewrite_ttl" "$rewrite_ttl")
     config=$(sing_box_cm_patch_dns_route_rule "$config" "$SB_SERVICE_FAKEIP_DNS_RULE_TAG" "domain" "$service_domains")
-    config=$(sing_box_cm_add_dns_route_rule "$config" "$SB_FAKEIP_DNS_SERVER_TAG" "$SB_FAKEIP_DNS_RULE_TAG")
-    config=$(sing_box_cm_patch_dns_route_rule "$config" "$SB_FAKEIP_DNS_RULE_TAG" "rewrite_ttl" "$rewrite_ttl")
-    config=$(sing_box_cm_add_dns_route_rule "$config" "$SB_FAKEIP_DNS_SERVER_TAG" "$SB_FAKEIP_RULESET_DNS_RULE_TAG")
-    config=$(sing_box_cm_patch_dns_route_rule "$config" "$SB_FAKEIP_RULESET_DNS_RULE_TAG" "rewrite_ttl" "$rewrite_ttl")
 }
 
 sing_box_configure_route() {
@@ -2565,7 +2621,7 @@ sing_box_configure_route() {
     fi
 
     local sniff_inbounds
-    sniff_inbounds=$(comma_string_to_json_array "$SB_TPROXY_INBOUND_TAG,$SB_DNS_INBOUND_TAG")
+    sniff_inbounds=$(comma_string_to_json_array "$SB_TPROXY_INBOUND_TAG,$SB_DNS_INBOUND_TAG,$SB_DNS_REDIRECT_INBOUND_TAG")
     config=$(sing_box_cm_sniff_route_rule "$config" "inbound" "$sniff_inbounds")
 
     config=$(sing_box_cm_add_hijack_dns_route_rule "$config" "protocol" "dns")
@@ -2638,7 +2694,7 @@ patch_route_and_dns_rule_item_handler() {
     local key="$3"
 
     config=$(sing_box_cm_patch_route_rule "$config" "$rule_tag" "$key" "$value")
-    config=$(sing_box_cm_patch_dns_route_rule "$config" "$SB_FAKEIP_DNS_RULE_TAG" "$key" "$value")
+    patch_fakeip_dns_route_rule "$SB_FAKEIP_DNS_RULE_TAG" "$key" "$value"
 }
 
 configure_rule_set_reference_handler() {
@@ -2649,7 +2705,7 @@ configure_rule_set_reference_handler() {
     if [ -n "$ENSURED_RULESET_TAG" ]; then
         config=$(sing_box_cm_patch_route_rule "$config" "$route_rule_tag" "rule_set" "$ENSURED_RULESET_TAG")
         if [ "$ENSURED_RULESET_KIND" = "domains" ]; then
-            config=$(sing_box_cm_patch_dns_route_rule "$config" "$SB_FAKEIP_RULESET_DNS_RULE_TAG" "rule_set" "$ENSURED_RULESET_TAG")
+            patch_fakeip_dns_route_rule "$SB_FAKEIP_RULESET_DNS_RULE_TAG" "rule_set" "$ENSURED_RULESET_TAG"
         else
             log "Skip DNS FakeIP rule patch for '$reference' ruleset kind '$ENSURED_RULESET_KIND'" "debug"
         fi
@@ -2694,7 +2750,7 @@ ensure_domain_ip_list_rulesets() {
 
     config=$(sing_box_cm_add_local_ruleset "$config" "$domain_ruleset_tag" "source" "$domain_ruleset_filepath")
     config=$(sing_box_cm_patch_route_rule "$config" "$route_rule_tag" "rule_set" "$domain_ruleset_tag")
-    config=$(sing_box_cm_patch_dns_route_rule "$config" "$SB_FAKEIP_RULESET_DNS_RULE_TAG" "rule_set" "$domain_ruleset_tag")
+    patch_fakeip_dns_route_rule "$SB_FAKEIP_RULESET_DNS_RULE_TAG" "rule_set" "$domain_ruleset_tag"
 
     config=$(sing_box_cm_add_local_ruleset "$config" "$subnet_ruleset_tag" "source" "$subnet_ruleset_filepath")
     config=$(sing_box_cm_patch_route_rule "$config" "$route_rule_tag" "rule_set" "$subnet_ruleset_tag")
@@ -2837,20 +2893,28 @@ configure_route_rule_handler() {
 
     local domain_json domain_suffix_json domain_keyword_json domain_regex_json
     domain_json="$(get_rule_condition_json_array "$section" "domain" "domains")"
-    [ "$domain_json" != "[]" ] && config=$(sing_box_cm_patch_route_rule "$config" "$route_rule_tag" "domain" "$domain_json") && \
-        config=$(sing_box_cm_patch_dns_route_rule "$config" "$SB_FAKEIP_DNS_RULE_TAG" "domain" "$domain_json")
+    if [ "$domain_json" != "[]" ]; then
+        config=$(sing_box_cm_patch_route_rule "$config" "$route_rule_tag" "domain" "$domain_json")
+        patch_fakeip_dns_route_rule "$SB_FAKEIP_DNS_RULE_TAG" "domain" "$domain_json"
+    fi
 
     domain_suffix_json="$(get_rule_condition_json_array "$section" "domain_suffix" "domains")"
-    [ "$domain_suffix_json" != "[]" ] && config=$(sing_box_cm_patch_route_rule "$config" "$route_rule_tag" "domain_suffix" "$domain_suffix_json") && \
-        config=$(sing_box_cm_patch_dns_route_rule "$config" "$SB_FAKEIP_DNS_RULE_TAG" "domain_suffix" "$domain_suffix_json")
+    if [ "$domain_suffix_json" != "[]" ]; then
+        config=$(sing_box_cm_patch_route_rule "$config" "$route_rule_tag" "domain_suffix" "$domain_suffix_json")
+        patch_fakeip_dns_route_rule "$SB_FAKEIP_DNS_RULE_TAG" "domain_suffix" "$domain_suffix_json"
+    fi
 
     domain_keyword_json="$(get_rule_condition_json_array "$section" "domain_keyword" "generic")"
-    [ "$domain_keyword_json" != "[]" ] && config=$(sing_box_cm_patch_route_rule "$config" "$route_rule_tag" "domain_keyword" "$domain_keyword_json") && \
-        config=$(sing_box_cm_patch_dns_route_rule "$config" "$SB_FAKEIP_DNS_RULE_TAG" "domain_keyword" "$domain_keyword_json")
+    if [ "$domain_keyword_json" != "[]" ]; then
+        config=$(sing_box_cm_patch_route_rule "$config" "$route_rule_tag" "domain_keyword" "$domain_keyword_json")
+        patch_fakeip_dns_route_rule "$SB_FAKEIP_DNS_RULE_TAG" "domain_keyword" "$domain_keyword_json"
+    fi
 
     domain_regex_json="$(get_rule_condition_json_array "$section" "domain_regex" "generic")"
-    [ "$domain_regex_json" != "[]" ] && config=$(sing_box_cm_patch_route_rule "$config" "$route_rule_tag" "domain_regex" "$domain_regex_json") && \
-        config=$(sing_box_cm_patch_dns_route_rule "$config" "$SB_FAKEIP_DNS_RULE_TAG" "domain_regex" "$domain_regex_json")
+    if [ "$domain_regex_json" != "[]" ]; then
+        config=$(sing_box_cm_patch_route_rule "$config" "$route_rule_tag" "domain_regex" "$domain_regex_json")
+        patch_fakeip_dns_route_rule "$SB_FAKEIP_DNS_RULE_TAG" "domain_regex" "$domain_regex_json"
+    fi
 
     ip_values_json="$(get_rule_condition_json_array "$section" "ip_cidr" "subnets")"
     if [ "$ip_values_json" != "[]" ]; then
@@ -3036,7 +3100,7 @@ configure_community_list_handler() {
 
     config=$(sing_box_cm_add_remote_ruleset "$config" "$ruleset_tag" "$format" "$url" "$detour" "$update_interval")
     config=$(sing_box_cm_patch_route_rule "$config" "$route_rule_tag" "rule_set" "$ruleset_tag")
-    config=$(sing_box_cm_patch_dns_route_rule "$config" "$SB_FAKEIP_RULESET_DNS_RULE_TAG" "rule_set" "$ruleset_tag")
+    patch_fakeip_dns_route_rule "$SB_FAKEIP_RULESET_DNS_RULE_TAG" "rule_set" "$ruleset_tag"
 }
 
 prepare_source_ruleset() {
@@ -3055,7 +3119,7 @@ prepare_source_ruleset() {
         config=$(sing_box_cm_patch_route_rule "$config" "$route_rule_tag" "rule_set" "$ruleset_tag")
         case "$type" in
         domains)
-            config=$(sing_box_cm_patch_dns_route_rule "$config" "$SB_FAKEIP_RULESET_DNS_RULE_TAG" "rule_set" "$ruleset_tag")
+            patch_fakeip_dns_route_rule "$SB_FAKEIP_RULESET_DNS_RULE_TAG" "rule_set" "$ruleset_tag"
             ;;
         subnets) ;;
         *)
@@ -3171,7 +3235,7 @@ configure_remote_domain_or_subnet_list_handler() {
         config=$(sing_box_cm_patch_route_rule "$config" "$route_rule_tag" "rule_set" "$ruleset_tag")
         case "$type" in
         domains)
-            config=$(sing_box_cm_patch_dns_route_rule "$config" "$SB_FAKEIP_RULESET_DNS_RULE_TAG" "rule_set" "$ruleset_tag")
+            patch_fakeip_dns_route_rule "$SB_FAKEIP_RULESET_DNS_RULE_TAG" "rule_set" "$ruleset_tag"
             ;;
         subnets) ;;
         *) log "Unsupported remote rule set type: $type" "error" ;;
@@ -4254,7 +4318,7 @@ get_sing_box_status() {
     fi
 
     # Check DNS configuration
-    if dnsmasq_has_podkop_dns; then
+    if podkop_dns_configured; then
         dns_configured=1
     fi
 
@@ -4294,7 +4358,7 @@ get_status() {
         enabled=1
     fi
 
-    if dnsmasq_has_podkop_dns; then
+    if podkop_dns_configured; then
         dns_configured=1
     fi
 
@@ -4388,10 +4452,13 @@ check_dns_available() {
         fi
     fi
 
-    # Check if /etc/config/dhcp has server 127.0.0.42
-    config_load dhcp
-    config_foreach check_dhcp_has_podkop_dns dnsmasq
-    config_load "$PODKOP_CONFIG"
+    if podkop_dns_redirect_rule_present; then
+        dhcp_config_status=1
+    else
+        config_load dhcp
+        config_foreach check_dhcp_has_podkop_dns dnsmasq
+        config_load "$PODKOP_CONFIG"
+    fi
 
     echo "{\"dns_type\":\"$dns_type\",\"dns_server\":\"$display_dns_server\",\"dns_status\":$dns_status,\"dns_on_router\":$dns_on_router,\"bootstrap_dns_server\":\"$bootstrap_dns_server\",\"bootstrap_dns_status\":$bootstrap_dns_status,\"dhcp_config_status\":$dhcp_config_status}" | jq .
 }
@@ -4552,6 +4619,7 @@ check_sing_box() {
     # Check if sing-box is listening on required ports
     local port_53_ok=0
     local port_1602_ok=0
+    local port_dns_redirect_ok=0
 
     if netstat -ln 2> /dev/null | grep -q "127.0.0.42:53"; then
         port_53_ok=1
@@ -4561,8 +4629,12 @@ check_sing_box() {
         port_1602_ok=1
     fi
 
-    # Both ports must be listening
-    if [ "$port_53_ok" = "1" ] && [ "$port_1602_ok" = "1" ]; then
+    if netstat -ln 2> /dev/null | grep -q "0.0.0.0:$SB_DNS_REDIRECT_INBOUND_PORT"; then
+        port_dns_redirect_ok=1
+    fi
+
+    # Required sing-box ports must be listening
+    if [ "$port_53_ok" = "1" ] && [ "$port_1602_ok" = "1" ] && [ "$port_dns_redirect_ok" = "1" ]; then
         sing_box_ports_listening=1
     fi
 
