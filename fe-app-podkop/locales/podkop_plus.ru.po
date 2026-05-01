@@ -251,6 +251,7 @@ msgstr "Скачивать списки через выбранную секци
 msgid "Download Node"
 msgstr "Узел для скачивания"
 
+msgctxt "Rule row action"
 msgid "Edit"
 msgstr "Изменить"
 
