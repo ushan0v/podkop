@@ -163,6 +163,10 @@ export interface StoreType {
       singbox: number;
       podkopRunning: number;
       podkopEnabled: number;
+      podkopStatus: string;
+      podkopLifecycleState: string;
+      podkopLifecycleAction: string;
+      podkopLifecycleBusy: number;
       zapret: number;
       zapretInstalled: number;
     };
@@ -227,6 +231,10 @@ const initialStore: StoreType = {
       singbox: 0,
       podkopRunning: 0,
       podkopEnabled: 0,
+      podkopStatus: '',
+      podkopLifecycleState: 'unknown',
+      podkopLifecycleAction: 'none',
+      podkopLifecycleBusy: 0,
       zapret: 0,
       zapretInstalled: 0,
     },

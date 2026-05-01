@@ -45,9 +45,49 @@ export async function fetchServicesInfo() {
         singbox: singbox.success ? singbox.data.running : 0,
         podkopRunning: podkop.success ? podkop.data.running : 0,
         podkopEnabled: podkop.success ? podkop.data.enabled : 0,
+        podkopStatus: podkop.success ? podkop.data.status : '',
+        podkopLifecycleState: podkop.success
+          ? podkop.data.lifecycle_state || 'unknown'
+          : 'unknown',
+        podkopLifecycleAction: podkop.success
+          ? podkop.data.lifecycle_action || 'none'
+          : 'none',
+        podkopLifecycleBusy: podkop.success
+          ? podkop.data.lifecycle_busy || 0
+          : 0,
         zapret: zapret.success ? zapret.data.ready : 0,
         zapretInstalled: zapret.success ? zapret.data.installed : 0,
       },
     },
   });
+}
+
+export async function fetchPodkopStatus() {
+  const podkop = await PodkopShellMethods.getStatus();
+
+  const previous = store.get().servicesInfoWidget;
+
+  store.set({
+    servicesInfoWidget: {
+      loading: false,
+      failed: !podkop.success,
+      data: {
+        ...previous.data,
+        podkopRunning: podkop.success ? podkop.data.running : 0,
+        podkopEnabled: podkop.success ? podkop.data.enabled : 0,
+        podkopStatus: podkop.success ? podkop.data.status : '',
+        podkopLifecycleState: podkop.success
+          ? podkop.data.lifecycle_state || 'unknown'
+          : 'unknown',
+        podkopLifecycleAction: podkop.success
+          ? podkop.data.lifecycle_action || 'none'
+          : 'none',
+        podkopLifecycleBusy: podkop.success
+          ? podkop.data.lifecycle_busy || 0
+          : 0,
+      },
+    },
+  });
+
+  return podkop.success ? podkop.data : null;
 }

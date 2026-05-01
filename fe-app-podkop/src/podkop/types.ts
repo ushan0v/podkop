@@ -175,6 +175,12 @@ export namespace Podkop {
     running: number;
     enabled: number;
     status: string;
+    dns_configured?: number;
+    lifecycle_state?: string;
+    lifecycle_action?: string;
+    lifecycle_busy?: number;
+    lifecycle_updated_at?: number;
+    lifecycle_pid?: number;
   }
 
   export interface GetSingBoxStatus {
@@ -192,6 +198,7 @@ export namespace Podkop {
     zapret_installed: 0 | 1;
     openwrt_version: string;
     device_model: string;
+    generated_at?: number;
   }
 
   export interface GetZapretStatus {

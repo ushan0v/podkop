@@ -251,6 +251,9 @@ msgstr "Скачивать списки через выбранную секци
 msgid "Download Node"
 msgstr "Узел для скачивания"
 
+msgid "Edit"
+msgstr "Изменить"
+
 msgid "Downloading all lists via specific Proxy/VPN"
 msgstr "Загрузка всех списков через указанный прокси/VPN"
 

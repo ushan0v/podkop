@@ -35,6 +35,8 @@ check_required_file "$PODKOP_LIB/rulesets.sh"
 
 PODKOP_INTERNAL_CONFIG_TRIGGER_GUARD="/var/run/podkop-plus.internal-config-change"
 PODKOP_RUNTIME_STATE_DIR="/var/run/podkop-plus"
+PODKOP_RUNTIME_STATUS_FILE="$PODKOP_RUNTIME_STATE_DIR/status"
+PODKOP_SYSTEM_INFO_CACHE_FILE="$PODKOP_RUNTIME_STATE_DIR/system-info.json"
 PODKOP_RELOAD_STATE_FILE="$PODKOP_RUNTIME_STATE_DIR/reload-state"
 PODKOP_LIST_UPDATE_STATE_FILE="$PODKOP_RUNTIME_STATE_DIR/list-update.timestamp"
 PODKOP_LIST_UPDATE_CRON_MARKER="# podkop-plus-list-update"
@@ -42,6 +44,9 @@ PODKOP_LIST_UPDATE_CRON_MARKER="# podkop-plus-list-update"
 # duration to emulate disabled automatic refreshes for remote rule sets.
 SING_BOX_DISABLED_UPDATE_INTERVAL="876000h"
 PODKOP_RELOAD_STATE_FORMAT=1
+PODKOP_RUNTIME_STATUS_FORMAT=1
+PODKOP_RUNTIME_TRANSITION_MAX_AGE=300
+PODKOP_SYSTEM_INFO_CACHE_TTL=3600
 PODKOP_NFT_POPULATE_ENABLED=1
 PODKOP_ZAPRET_MISSING_WARNING_EMITTED=0
 
@@ -77,6 +82,107 @@ podkop_is_running() {
         nft list table inet "$NFT_TABLE_NAME" > /dev/null 2>&1 &&
         ip rule list | grep -q "lookup $RT_TABLE_NAME" &&
         ip route list table "$RT_TABLE_NAME" 2> /dev/null | grep -q "local default dev lo scope host"
+}
+
+runtime_status_write() {
+    local state="$1"
+    local action="${2:-none}"
+    local message="${3:-}"
+    local now tmpfile
+
+    ensure_runtime_dirs
+
+    now="$(date +%s 2>/dev/null)"
+    case "$now" in
+    '' | *[!0-9]*) now=0 ;;
+    esac
+
+    tmpfile="${PODKOP_RUNTIME_STATUS_FILE}.$$"
+    {
+        printf 'format=%s\n' "$PODKOP_RUNTIME_STATUS_FORMAT"
+        printf 'state=%s\n' "$state"
+        printf 'action=%s\n' "$action"
+        printf 'updated_at=%s\n' "$now"
+        printf 'pid=%s\n' "$$"
+        printf 'message=%s\n' "$message"
+    } > "$tmpfile" && mv "$tmpfile" "$PODKOP_RUNTIME_STATUS_FILE"
+}
+
+runtime_status_mark_failure() {
+    local action="${1:-unknown}"
+
+    if podkop_is_running; then
+        runtime_status_write "running" "$action"
+    else
+        runtime_status_write "failed" "$action" "operation did not complete"
+    fi
+}
+
+runtime_status_finish_action() {
+    local action="${1:-none}"
+    local status="${2:-0}"
+
+    trap - EXIT INT TERM
+
+    if [ "$status" -eq 0 ]; then
+        if podkop_is_running; then
+            runtime_status_write "running" "$action"
+        else
+            runtime_status_write "stopped" "$action"
+        fi
+        return 0
+    fi
+
+    runtime_status_mark_failure "$action"
+    return "$status"
+}
+
+runtime_status_read_value() {
+    local key="$1"
+
+    [ -f "$PODKOP_RUNTIME_STATUS_FILE" ] || return 1
+
+    awk -F= -v key="$key" '$1 == key { print substr($0, index($0, "=") + 1); exit }' "$PODKOP_RUNTIME_STATUS_FILE"
+}
+
+runtime_status_is_transition() {
+    case "$1" in
+    starting | stopping | restarting | reloading)
+        return 0
+        ;;
+    esac
+
+    return 1
+}
+
+runtime_status_transition_is_active() {
+    local state="$1"
+    local updated_at="$2"
+    local pid="$3"
+    local now age
+
+    runtime_status_is_transition "$state" || return 1
+
+    case "$updated_at" in
+    '' | *[!0-9]*) return 1 ;;
+    esac
+
+    now="$(date +%s 2>/dev/null)"
+    case "$now" in
+    '' | *[!0-9]*) now=0 ;;
+    esac
+
+    [ "$now" -gt 0 ] || return 0
+
+    age=$((now - updated_at))
+    [ "$age" -ge 0 ] || return 1
+    [ "$age" -le "$PODKOP_RUNTIME_TRANSITION_MAX_AGE" ] || return 1
+
+    case "$pid" in
+    '' | *[!0-9]*) return 0 ;;
+    esac
+
+    kill -0 "$pid" 2>/dev/null
 }
 
 clear_reload_state() {
@@ -1020,7 +1126,7 @@ stop_main() {
     /etc/init.d/sing-box stop
 }
 
-start() {
+start_impl() {
     start_main
 
     config_get_bool dont_touch_dhcp "settings" "dont_touch_dhcp" 0
@@ -1032,9 +1138,22 @@ start() {
     commit_podkop_config
     capture_reload_state
     write_reload_state
+    (refresh_system_info_cache) >/dev/null 2>&1 &
 }
 
-stop() {
+start() {
+    local status
+
+    runtime_status_write "starting" "start"
+    trap 'runtime_status_mark_failure "start"' EXIT INT TERM
+
+    start_impl
+    status="$?"
+
+    runtime_status_finish_action "start" "$status"
+}
+
+stop_impl() {
     local dont_touch_dhcp
     config_get_bool dont_touch_dhcp "settings" "dont_touch_dhcp" 0
     if [ "$dont_touch_dhcp" -eq 0 ]; then
@@ -1046,6 +1165,18 @@ stop() {
     uci_set "$PODKOP_CONFIG_NAME" "settings" "shutdown_correctly" 1
     commit_podkop_config
     clear_reload_state
+}
+
+stop() {
+    local status
+
+    runtime_status_write "stopping" "stop"
+    trap 'runtime_status_mark_failure "stop"' EXIT INT TERM
+
+    stop_impl
+    status="$?"
+
+    runtime_status_finish_action "stop" "$status"
 }
 
 restart_runtime_for_reload() {
@@ -1071,6 +1202,7 @@ restart_runtime_for_reload() {
 
 reload() {
     local reload_reason="${1:-}"
+    local status
     local force_runtime_reload=0
     local previous_restart_signature previous_dnsmasq_signature previous_sing_box_signature previous_nft_signature
     local previous_zapret_queue_signature previous_zapret_runtime_signature previous_list_signature previous_cron_signature
@@ -1078,6 +1210,8 @@ reload() {
     local needs_dnsmasq_configure needs_dnsmasq_restore needs_cron_refresh needs_list_update
 
     log "Podkop Plus reload"
+    runtime_status_write "reloading" "reload"
+    trap 'runtime_status_mark_failure "reload"' EXIT INT TERM
 
     [ "$reload_reason" = "on_config_change" ] || force_runtime_reload=1
 
@@ -1090,13 +1224,17 @@ reload() {
     if ! podkop_is_running; then
         log "Podkop runtime is incomplete, falling back to in-process restart"
         restart_runtime_for_reload
-        return $?
+        status="$?"
+        runtime_status_finish_action "reload" "$status"
+        return "$status"
     fi
 
     if ! reload_state_is_compatible; then
         log "Reload state is missing or incompatible, falling back to in-process restart"
         restart_runtime_for_reload
-        return $?
+        status="$?"
+        runtime_status_finish_action "reload" "$status"
+        return "$status"
     fi
 
     previous_restart_signature="$(read_reload_state_value "restart_signature")"
@@ -1124,7 +1262,9 @@ reload() {
     if [ "$needs_init_restart" -eq 1 ]; then
         log "Reload requires runtime restart; refreshing Podkop in-process"
         restart_runtime_for_reload
-        return $?
+        status="$?"
+        runtime_status_finish_action "reload" "$status"
+        return "$status"
     fi
 
     [ "$RELOAD_STATE_SING_BOX_SIGNATURE" != "$previous_sing_box_signature" ] && needs_sing_box_reload=1
@@ -1177,6 +1317,7 @@ reload() {
         [ "$needs_cron_refresh" -eq 0 ] &&
         [ "$needs_list_update" -eq 0 ]; then
         log "Reload skipped: runtime-relevant configuration is unchanged"
+        runtime_status_finish_action "reload" 0
         return 0
     fi
 
@@ -1223,12 +1364,27 @@ reload() {
     fi
 
     write_reload_state
+    runtime_status_finish_action "reload" 0
 }
 
 restart() {
+    local status
+
     log "Podkop Plus restart"
-    stop
-    start
+    runtime_status_write "restarting" "restart"
+    trap 'runtime_status_mark_failure "restart"' EXIT INT TERM
+
+    stop_impl
+    status="$?"
+    if [ "$status" -ne 0 ]; then
+        runtime_status_finish_action "restart" "$status"
+        return "$status"
+    fi
+
+    start_impl
+    status="$?"
+
+    runtime_status_finish_action "restart" "$status"
 }
 
 package_manager_remove_if_installed() {
@@ -4332,19 +4488,72 @@ get_podkop_latest_version() {
     echo "unknown"
 }
 
-get_system_info() {
+get_luci_app_version() {
+    if [ -f "$PODKOP_LUCI_VIEW_DIR/main.js" ]; then
+        grep 'var PODKOP_LUCI_APP_VERSION' "$PODKOP_LUCI_VIEW_DIR/main.js" | cut -d'"' -f2
+        return 0
+    fi
+
+    echo "not installed"
+}
+
+system_info_cache_is_valid() {
+    local now cached_at cached_latest latest_cache_value luci_app_version
+
+    [ -s "$PODKOP_SYSTEM_INFO_CACHE_FILE" ] || return 1
+    jq -e . "$PODKOP_SYSTEM_INFO_CACHE_FILE" >/dev/null 2>&1 || return 1
+
+    now="$(date +%s 2>/dev/null)"
+    case "$now" in
+    '' | *[!0-9]*) now=0 ;;
+    esac
+
+    cached_at="$(jq -r '.generated_at // 0' "$PODKOP_SYSTEM_INFO_CACHE_FILE" 2>/dev/null)"
+    case "$cached_at" in
+    '' | *[!0-9]*) cached_at=0 ;;
+    esac
+
+    if [ "$now" -gt 0 ] && [ "$cached_at" -gt 0 ] &&
+        [ $((now - cached_at)) -ge "$PODKOP_SYSTEM_INFO_CACHE_TTL" ]; then
+        return 1
+    fi
+
+    luci_app_version="$(get_luci_app_version)"
+    jq -e \
+        --arg podkop_version "$PODKOP_VERSION" \
+        --arg luci_app_version "$luci_app_version" \
+        '.podkop_version == $podkop_version and .luci_app_version == $luci_app_version' \
+        "$PODKOP_SYSTEM_INFO_CACHE_FILE" >/dev/null 2>&1 || return 1
+
+    cached_latest="$(jq -r '.podkop_latest_version // "unknown"' "$PODKOP_SYSTEM_INFO_CACHE_FILE" 2>/dev/null)"
+    latest_cache_value="$(sed -n '1p' /tmp/podkop-plus.latest-version.cache 2>/dev/null)"
+
+    if [ "$cached_latest" = "unknown" ] && [ -n "$latest_cache_value" ]; then
+        return 1
+    fi
+
+    return 0
+}
+
+write_system_info_cache() {
+    local tmpfile
+
+    ensure_runtime_dirs
+
+    tmpfile="${PODKOP_SYSTEM_INFO_CACHE_FILE}.$$"
+    cat > "$tmpfile" && mv "$tmpfile" "$PODKOP_SYSTEM_INFO_CACHE_FILE"
+}
+
+build_system_info() {
     local podkop_version podkop_latest_version luci_app_version sing_box_version zapret_version zapret_installed openwrt_version device_model
+    local generated_at
 
     podkop_version="$PODKOP_VERSION"
 
     podkop_latest_version="$(get_podkop_latest_version)"
     [ -n "$podkop_latest_version" ] || podkop_latest_version="unknown"
 
-    if [ -f "$PODKOP_LUCI_VIEW_DIR/main.js" ]; then
-        luci_app_version=$(grep 'var PODKOP_LUCI_APP_VERSION' "$PODKOP_LUCI_VIEW_DIR/main.js" | cut -d'"' -f2)
-    else
-        luci_app_version="not installed"
-    fi
+    luci_app_version="$(get_luci_app_version)"
 
     if command -v sing-box > /dev/null 2>&1; then
         sing_box_version=$(sing-box version 2> /dev/null | head -n 1 | awk '{print $3}')
@@ -4376,6 +4585,11 @@ get_system_info() {
         device_model="unknown"
     fi
 
+    generated_at="$(date +%s 2>/dev/null)"
+    case "$generated_at" in
+    '' | *[!0-9]*) generated_at=0 ;;
+    esac
+
     jq -cn \
         --arg podkop_version "$podkop_version" \
         --arg podkop_latest_version "$podkop_latest_version" \
@@ -4385,6 +4599,7 @@ get_system_info() {
         --argjson zapret_installed "$zapret_installed" \
         --arg openwrt_version "$openwrt_version" \
         --arg device_model "$device_model" \
+        --argjson generated_at "$generated_at" \
         '{
             podkop_version: $podkop_version,
             podkop_latest_version: $podkop_latest_version,
@@ -4393,8 +4608,33 @@ get_system_info() {
             zapret_version: $zapret_version,
             zapret_installed: $zapret_installed,
             openwrt_version: $openwrt_version,
-            device_model: $device_model
+            device_model: $device_model,
+            generated_at: $generated_at
         }'
+}
+
+refresh_system_info_cache() {
+    local system_info
+
+    system_info="$(build_system_info)" || return 1
+    [ -n "$system_info" ] || return 1
+
+    printf '%s\n' "$system_info" | write_system_info_cache
+}
+
+get_system_info() {
+    local system_info
+
+    if system_info_cache_is_valid; then
+        cat "$PODKOP_SYSTEM_INFO_CACHE_FILE"
+        return 0
+    fi
+
+    system_info="$(build_system_info)" || return 1
+    [ -n "$system_info" ] || return 1
+
+    printf '%s\n' "$system_info" | write_system_info_cache
+    printf '%s\n' "$system_info"
 }
 
 get_zapret_status() {
@@ -4455,11 +4695,10 @@ get_status() {
     local enabled=0
     local status=""
     local dns_configured=0
+    local lifecycle_state lifecycle_action lifecycle_busy lifecycle_updated_at lifecycle_pid
+    local stored_format stored_state stored_action stored_updated_at stored_pid
 
-    if pgrep -f "sing-box" > /dev/null 2>&1 &&
-        nft list table inet "$NFT_TABLE_NAME" > /dev/null 2>&1 &&
-        ip rule list | grep -q "lookup $RT_TABLE_NAME" &&
-        ip route list table "$RT_TABLE_NAME" 2> /dev/null | grep -q "local default dev lo scope host"; then
+    if podkop_is_running; then
         running=1
     fi
 
@@ -4472,7 +4711,54 @@ get_status() {
         dns_configured=1
     fi
 
-    if [ "$running" -eq 1 ]; then
+    lifecycle_state=""
+    lifecycle_action="none"
+    lifecycle_busy=0
+    lifecycle_updated_at=0
+    lifecycle_pid=0
+
+    stored_format="$(runtime_status_read_value "format" 2>/dev/null)"
+    if [ "$stored_format" = "$PODKOP_RUNTIME_STATUS_FORMAT" ]; then
+        stored_state="$(runtime_status_read_value "state" 2>/dev/null)"
+        stored_action="$(runtime_status_read_value "action" 2>/dev/null)"
+        stored_updated_at="$(runtime_status_read_value "updated_at" 2>/dev/null)"
+        stored_pid="$(runtime_status_read_value "pid" 2>/dev/null)"
+
+        case "$stored_updated_at" in
+        '' | *[!0-9]*) stored_updated_at=0 ;;
+        esac
+
+        case "$stored_pid" in
+        '' | *[!0-9]*) stored_pid=0 ;;
+        esac
+
+        if runtime_status_transition_is_active "$stored_state" "$stored_updated_at" "$stored_pid"; then
+            lifecycle_state="$stored_state"
+            lifecycle_action="${stored_action:-none}"
+            lifecycle_busy=1
+            lifecycle_updated_at="$stored_updated_at"
+            lifecycle_pid="$stored_pid"
+        elif [ "$stored_state" = "failed" ] && [ "$running" -eq 0 ]; then
+            lifecycle_state="failed"
+            lifecycle_action="${stored_action:-none}"
+            lifecycle_updated_at="$stored_updated_at"
+            lifecycle_pid="$stored_pid"
+        fi
+    fi
+
+    if [ -z "$lifecycle_state" ]; then
+        if [ "$running" -eq 1 ]; then
+            lifecycle_state="running"
+        else
+            lifecycle_state="stopped"
+        fi
+    fi
+
+    if [ "$lifecycle_busy" -eq 1 ]; then
+        status="$lifecycle_state"
+    elif [ "$lifecycle_state" = "failed" ]; then
+        status="failed"
+    elif [ "$running" -eq 1 ]; then
         if [ "$enabled" -eq 1 ]; then
             status="running & enabled"
         else
@@ -4486,7 +4772,27 @@ get_status() {
         fi
     fi
 
-    echo "{\"running\":$running,\"enabled\":$enabled,\"status\":\"$status\",\"dns_configured\":$dns_configured}"
+    jq -cn \
+        --argjson running "$running" \
+        --argjson enabled "$enabled" \
+        --arg status "$status" \
+        --argjson dns_configured "$dns_configured" \
+        --arg lifecycle_state "$lifecycle_state" \
+        --arg lifecycle_action "$lifecycle_action" \
+        --argjson lifecycle_busy "$lifecycle_busy" \
+        --argjson lifecycle_updated_at "$lifecycle_updated_at" \
+        --argjson lifecycle_pid "$lifecycle_pid" \
+        '{
+            running: $running,
+            enabled: $enabled,
+            status: $status,
+            dns_configured: $dns_configured,
+            lifecycle_state: $lifecycle_state,
+            lifecycle_action: $lifecycle_action,
+            lifecycle_busy: $lifecycle_busy,
+            lifecycle_updated_at: $lifecycle_updated_at,
+            lifecycle_pid: $lifecycle_pid
+        }'
 }
 
 validate_nfqws_strategy_json() {

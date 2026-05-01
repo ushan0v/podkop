@@ -1455,6 +1455,10 @@ var initialStore = {
       singbox: 0,
       podkopRunning: 0,
       podkopEnabled: 0,
+      podkopStatus: "",
+      podkopLifecycleState: "unknown",
+      podkopLifecycleAction: "none",
+      podkopLifecycleBusy: 0,
       zapret: 0,
       zapretInstalled: 0
     }
@@ -2090,11 +2094,35 @@ async function fetchServicesInfo() {
         singbox: singbox.success ? singbox.data.running : 0,
         podkopRunning: podkop.success ? podkop.data.running : 0,
         podkopEnabled: podkop.success ? podkop.data.enabled : 0,
+        podkopStatus: podkop.success ? podkop.data.status : "",
+        podkopLifecycleState: podkop.success ? podkop.data.lifecycle_state || "unknown" : "unknown",
+        podkopLifecycleAction: podkop.success ? podkop.data.lifecycle_action || "none" : "none",
+        podkopLifecycleBusy: podkop.success ? podkop.data.lifecycle_busy || 0 : 0,
         zapret: zapret.success ? zapret.data.ready : 0,
         zapretInstalled: zapret.success ? zapret.data.installed : 0
       }
     }
   });
+}
+async function fetchPodkopStatus() {
+  const podkop = await PodkopShellMethods.getStatus();
+  const previous = store.get().servicesInfoWidget;
+  store.set({
+    servicesInfoWidget: {
+      loading: false,
+      failed: !podkop.success,
+      data: {
+        ...previous.data,
+        podkopRunning: podkop.success ? podkop.data.running : 0,
+        podkopEnabled: podkop.success ? podkop.data.enabled : 0,
+        podkopStatus: podkop.success ? podkop.data.status : "",
+        podkopLifecycleState: podkop.success ? podkop.data.lifecycle_state || "unknown" : "unknown",
+        podkopLifecycleAction: podkop.success ? podkop.data.lifecycle_action || "none" : "none",
+        podkopLifecycleBusy: podkop.success ? podkop.data.lifecycle_busy || 0 : 0
+      }
+    }
+  });
+  return podkop.success ? podkop.data : null;
 }
 
 // src/podkop/tabs/dashboard/initController.ts
@@ -4347,9 +4375,51 @@ var UNKNOWN_DIAGNOSTICS_SYSTEM_INFO = {
   openwrt_version: _("unknown"),
   device_model: _("unknown")
 };
+var DIAGNOSTIC_STATUS_POLL_INTERVAL_MS = 2e3;
+var DIAGNOSTIC_STATUS_SETTLE_DELAY_MS = 1e3;
+var DIAGNOSTIC_STATUS_SETTLE_TIMEOUT_MS = 45e3;
 var latestSystemInfoRequestId = 0;
 var diagnosticLifecycleRegistered = false;
 var diagnosticControllerInitialized = false;
+var diagnosticStatusPollTimer = null;
+var restartStartStopSnapshot = null;
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+function setDiagnosticActionLoading(action, loading) {
+  const diagnosticsActions = store.get().diagnosticsActions;
+  store.set({
+    diagnosticsActions: {
+      ...diagnosticsActions,
+      [action]: { loading }
+    }
+  });
+}
+async function waitForPodkopStatusToSettle(desiredRunning) {
+  const startedAt = Date.now();
+  let sawBackendTransition = false;
+  while (Date.now() - startedAt < DIAGNOSTIC_STATUS_SETTLE_TIMEOUT_MS) {
+    const status = await fetchPodkopStatus();
+    if (!status) {
+      return;
+    }
+    if (status.lifecycle_busy) {
+      sawBackendTransition = true;
+      await sleep(DIAGNOSTIC_STATUS_SETTLE_DELAY_MS);
+      continue;
+    }
+    if (status.lifecycle_state === "failed") {
+      return;
+    }
+    if (desiredRunning === void 0 || Boolean(status.running) === desiredRunning) {
+      if (sawBackendTransition || Date.now() - startedAt > 1500) {
+        return;
+      }
+    }
+    await sleep(DIAGNOSTIC_STATUS_SETTLE_DELAY_MS);
+  }
+  await fetchPodkopStatus();
+}
 async function fetchSystemInfo() {
   const requestId = ++latestSystemInfoRequestId;
   try {
@@ -4402,120 +4472,63 @@ function renderDiagnosticRunActionWidget() {
   });
 }
 async function handleRestart() {
-  const diagnosticsActions = store.get().diagnosticsActions;
-  store.set({
-    diagnosticsActions: {
-      ...diagnosticsActions,
-      restart: { loading: true }
-    }
-  });
+  restartStartStopSnapshot = store.get().servicesInfoWidget.data.podkopRunning ? "stop" : "start";
+  setDiagnosticActionLoading("restart", true);
   try {
     await PodkopShellMethods.restart();
+    await waitForPodkopStatusToSettle(true);
   } catch (e) {
     logger.error("[DIAGNOSTIC]", "handleRestart - e", e);
   } finally {
-    setTimeout(async () => {
-      await fetchServicesInfo();
-      store.set({
-        diagnosticsActions: {
-          ...diagnosticsActions,
-          restart: { loading: false }
-        }
-      });
-      store.reset(["diagnosticsChecks"]);
-    }, 5e3);
+    restartStartStopSnapshot = null;
+    setDiagnosticActionLoading("restart", false);
+    store.reset(["diagnosticsChecks"]);
   }
 }
 async function handleStop() {
-  const diagnosticsActions = store.get().diagnosticsActions;
-  store.set({
-    diagnosticsActions: {
-      ...diagnosticsActions,
-      stop: { loading: true }
-    }
-  });
+  setDiagnosticActionLoading("stop", true);
   try {
     await PodkopShellMethods.stop();
+    await waitForPodkopStatusToSettle(false);
   } catch (e) {
     logger.error("[DIAGNOSTIC]", "handleStop - e", e);
   } finally {
-    await fetchServicesInfo();
-    store.set({
-      diagnosticsActions: {
-        ...diagnosticsActions,
-        stop: { loading: false }
-      }
-    });
+    setDiagnosticActionLoading("stop", false);
     store.reset(["diagnosticsChecks"]);
   }
 }
 async function handleStart() {
-  const diagnosticsActions = store.get().diagnosticsActions;
-  store.set({
-    diagnosticsActions: {
-      ...diagnosticsActions,
-      start: { loading: true }
-    }
-  });
+  setDiagnosticActionLoading("start", true);
   try {
     await PodkopShellMethods.start();
+    await waitForPodkopStatusToSettle(true);
   } catch (e) {
     logger.error("[DIAGNOSTIC]", "handleStart - e", e);
   } finally {
-    setTimeout(async () => {
-      await fetchServicesInfo();
-      store.set({
-        diagnosticsActions: {
-          ...diagnosticsActions,
-          start: { loading: false }
-        }
-      });
-      store.reset(["diagnosticsChecks"]);
-    }, 5e3);
+    setDiagnosticActionLoading("start", false);
+    store.reset(["diagnosticsChecks"]);
   }
 }
 async function handleEnable() {
-  const diagnosticsActions = store.get().diagnosticsActions;
-  store.set({
-    diagnosticsActions: {
-      ...diagnosticsActions,
-      enable: { loading: true }
-    }
-  });
+  setDiagnosticActionLoading("enable", true);
   try {
     await PodkopShellMethods.enable();
   } catch (e) {
     logger.error("[DIAGNOSTIC]", "handleEnable - e", e);
   } finally {
-    await fetchServicesInfo();
-    store.set({
-      diagnosticsActions: {
-        ...diagnosticsActions,
-        enable: { loading: false }
-      }
-    });
+    await fetchPodkopStatus();
+    setDiagnosticActionLoading("enable", false);
   }
 }
 async function handleDisable() {
-  const diagnosticsActions = store.get().diagnosticsActions;
-  store.set({
-    diagnosticsActions: {
-      ...diagnosticsActions,
-      disable: { loading: true }
-    }
-  });
+  setDiagnosticActionLoading("disable", true);
   try {
     await PodkopShellMethods.disable();
   } catch (e) {
     logger.error("[DIAGNOSTIC]", "handleDisable - e", e);
   } finally {
-    await fetchServicesInfo();
-    store.set({
-      diagnosticsActions: {
-        ...diagnosticsActions,
-        disable: { loading: false }
-      }
-    });
+    await fetchPodkopStatus();
+    setDiagnosticActionLoading("disable", false);
   }
 }
 async function handleShowGlobalCheck() {
@@ -4653,27 +4666,37 @@ function renderDiagnosticAvailableActionsWidget() {
   const servicesInfoWidget = store.get().servicesInfoWidget;
   logger.debug("[DIAGNOSTIC]", "renderDiagnosticAvailableActionsWidget");
   const podkopEnabled = Boolean(servicesInfoWidget.data.podkopEnabled);
-  const singBoxRunning = Boolean(servicesInfoWidget.data.singbox);
-  const atLeastOneMutatingActionLoading = diagnosticsActions.restart.loading || diagnosticsActions.start.loading || diagnosticsActions.stop.loading || diagnosticsActions.enable.loading || diagnosticsActions.disable.loading;
-  const serviceControlsDisabled = servicesInfoWidget.loading || atLeastOneMutatingActionLoading;
-  const utilityActionsDisabled = atLeastOneMutatingActionLoading;
+  const podkopRunning = Boolean(servicesInfoWidget.data.podkopRunning);
+  const lifecycleBusy = Boolean(servicesInfoWidget.data.podkopLifecycleBusy);
+  const lifecycleAction = servicesInfoWidget.data.podkopLifecycleAction;
+  const isStarting = lifecycleBusy && lifecycleAction === "start";
+  const isStopping = lifecycleBusy && lifecycleAction === "stop";
+  const isRestarting = lifecycleBusy && lifecycleAction === "restart";
+  const isReloading = lifecycleBusy && lifecycleAction === "reload";
+  const restartLoading = diagnosticsActions.restart.loading;
+  const atLeastOneMutatingActionLoading = restartLoading || diagnosticsActions.start.loading || diagnosticsActions.stop.loading || diagnosticsActions.enable.loading || diagnosticsActions.disable.loading;
+  const serviceControlsDisabled = servicesInfoWidget.loading || lifecycleBusy || atLeastOneMutatingActionLoading;
+  const utilityActionsDisabled = lifecycleBusy || atLeastOneMutatingActionLoading;
+  const startVisible = isStarting || !podkopRunning && !isStopping && !isRestarting && !isReloading;
+  const stopVisible = isStopping || podkopRunning && !isStarting && !isRestarting && !isReloading;
+  const frozenStartStop = restartLoading && (restartStartStopSnapshot || (podkopRunning ? "stop" : "start"));
   const container = document.getElementById("pdk_diagnostic-page-actions");
   const renderedActions = renderAvailableActions({
     restart: {
-      loading: diagnosticsActions.restart.loading,
+      loading: restartLoading || isRestarting || isReloading,
       visible: true,
       onClick: handleRestart,
       disabled: serviceControlsDisabled
     },
     start: {
-      loading: diagnosticsActions.start.loading,
-      visible: !singBoxRunning,
+      loading: frozenStartStop ? false : diagnosticsActions.start.loading || isStarting,
+      visible: frozenStartStop ? frozenStartStop === "start" : startVisible,
       onClick: handleStart,
       disabled: serviceControlsDisabled
     },
     stop: {
-      loading: diagnosticsActions.stop.loading,
-      visible: singBoxRunning,
+      loading: frozenStartStop ? false : diagnosticsActions.stop.loading || isStopping,
+      visible: frozenStartStop ? frozenStartStop === "stop" : stopVisible,
       onClick: handleStop,
       disabled: serviceControlsDisabled
     },
@@ -4827,11 +4850,24 @@ async function runChecks() {
   }
 }
 async function loadInitialDiagnosticData() {
-  await fetchServicesInfo();
   const diagnosticStatus = document.getElementById("diagnostic-status");
-  if (diagnosticStatus?.isConnected && diagnosticStatus.offsetParent !== null) {
+  if (diagnosticStatus?.isConnected && diagnosticStatus.offsetParent !== null && store.get().diagnosticsSystemInfo.loading) {
     await fetchSystemInfo();
   }
+}
+function startDiagnosticStatusPolling() {
+  stopDiagnosticStatusPolling();
+  void fetchPodkopStatus();
+  diagnosticStatusPollTimer = setInterval(() => {
+    void fetchPodkopStatus();
+  }, DIAGNOSTIC_STATUS_POLL_INTERVAL_MS);
+}
+function stopDiagnosticStatusPolling() {
+  if (diagnosticStatusPollTimer === null) {
+    return;
+  }
+  clearInterval(diagnosticStatusPollTimer);
+  diagnosticStatusPollTimer = null;
 }
 function onPageMount2() {
   onPageUnmount2();
@@ -4841,13 +4877,14 @@ function onPageMount2() {
   renderDiagnosticAvailableActionsWidget();
   renderDiagnosticSystemInfoWidget();
   renderWikiDisclaimerWidget();
+  startDiagnosticStatusPolling();
   void loadInitialDiagnosticData();
 }
 function onPageUnmount2() {
   store.unsubscribe(onStoreUpdate2);
+  stopDiagnosticStatusPolling();
   store.reset([
     "diagnosticsActions",
-    "diagnosticsSystemInfo",
     "diagnosticsChecks",
     "diagnosticsRunAction"
   ]);
