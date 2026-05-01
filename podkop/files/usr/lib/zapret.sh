@@ -436,14 +436,8 @@ run_nfqws_dry_run_validation() {
     local raw_opt="$1"
     local old_ifs output_file output summary needles rc
 
-    if ! is_zapret_installed; then
+    if ! is_zapret_provider_available; then
         return 0
-    fi
-
-    if ! prepare_zapret_runtime; then
-        set_nfqws_validation_failure \
-            "The Podkop Plus zapret runtime is unavailable. Install the upstream zapret package so $ZAPRET_SOURCE_NFQWS_BIN exists."
-        return 1
     fi
 
     raw_opt="$(expand_zapret_nfqws_opt "$raw_opt")"
@@ -629,46 +623,41 @@ escape_sed_replacement() {
     printf '%s' "$1" | sed 's/[\/&]/\\&/g'
 }
 
-prepare_zapret_runtime_dir() {
-    local source_dir="$1"
-    local target_dir="$2"
-
-    [ -d "$source_dir" ] || return 0
-
-    mkdir -p "$target_dir" || return 1
-    cp -R "$source_dir"/. "$target_dir"/ >/dev/null 2>&1 || return 1
+prepare_zapret_runtime() {
+    mkdir -p "$ZAPRET_STATE_DIR" "$ZAPRET_PID_DIR" "$ZAPRET_CHILD_PID_DIR" "$ZAPRET_LOG_DIR" "$ZAPRET_HOSTLIST_DIR"
 }
 
-prepare_zapret_runtime() {
-    mkdir -p "$ZAPRET_STATE_DIR" "$ZAPRET_PID_DIR" "$ZAPRET_LOG_DIR" "$ZAPRET_HOSTLIST_DIR" || return 1
-
-    [ -x "$ZAPRET_SOURCE_NFQWS_BIN" ] || return 1
-
-    mkdir -p "$ZAPRET_RUNTIME_BASE_DIR/nfq" "$ZAPRET_RUNTIME_FILES_DIR" "$ZAPRET_RUNTIME_IPSET_DIR" || return 1
-    cp -f "$ZAPRET_SOURCE_NFQWS_BIN" "$ZAPRET_NFQWS_BIN" >/dev/null 2>&1 || return 1
-    chmod 0755 "$ZAPRET_NFQWS_BIN" >/dev/null 2>&1 || true
-
-    prepare_zapret_runtime_dir "$ZAPRET_SOURCE_FILES_DIR" "$ZAPRET_RUNTIME_FILES_DIR" || return 1
-    prepare_zapret_runtime_dir "$ZAPRET_SOURCE_IPSET_DIR" "$ZAPRET_RUNTIME_IPSET_DIR" || return 1
-
-    return 0
+is_zapret_provider_available() {
+    [ -x "$ZAPRET_PROVIDER_NFQWS_BIN" ]
 }
 
 is_zapret_installed() {
-    [ -x "$ZAPRET_SOURCE_NFQWS_BIN" ]
+    is_zapret_provider_available
 }
 
-rewrite_zapret_runtime_paths() {
-    local source_path runtime_path
+zapret_package_installed() {
+    if command -v apk >/dev/null 2>&1 && apk info -e zapret >/dev/null 2>&1; then
+        return 0
+    fi
 
-    source_path="$(escape_sed_replacement "$ZAPRET_SOURCE_BASE_DIR")"
-    runtime_path="$(escape_sed_replacement "$ZAPRET_RUNTIME_BASE_DIR")"
+    if command -v opkg >/dev/null 2>&1 && opkg list-installed 2>/dev/null | grep -Eq '^zapret[[:space:]-]'; then
+        return 0
+    fi
 
-    printf '%s' "$1" | sed "s#${source_path}#${runtime_path}#g"
+    return 1
+}
+
+rewrite_legacy_zapret_runtime_paths() {
+    local provider_path legacy_path
+
+    provider_path="$(escape_sed_replacement "$ZAPRET_PROVIDER_BASE_DIR")"
+    legacy_path="$(escape_sed_replacement "$ZAPRET_LEGACY_RUNTIME_BASE_DIR")"
+
+    printf '%s' "$1" | sed "s#${legacy_path}#${provider_path}#g"
 }
 
 expand_zapret_nfqws_opt() {
-    rewrite_zapret_runtime_paths "$1"
+    rewrite_legacy_zapret_runtime_paths "$1"
 }
 
 get_zapret_rule_hostlist_path() {
@@ -878,13 +867,13 @@ build_generated_zapret_hostlist() {
 check_zapret_requirements() {
     has_enabled_zapret_rules || return 0
 
-    if ! is_zapret_installed; then
-        log "Zapret package is not installed. Rules with action 'zapret' will be skipped until zapret is installed." "error"
+    if ! is_zapret_provider_available; then
+        log "Zapret provider is not available at $ZAPRET_PROVIDER_NFQWS_BIN. Rules with action 'zapret' will be skipped until the zapret provider is installed." "error"
         return 0
     fi
 
     if ! prepare_zapret_runtime; then
-        log "Failed to prepare the Podkop Plus zapret runtime in $ZAPRET_RUNTIME_BASE_DIR. Aborted." "fatal"
+        log "Failed to prepare the Podkop Plus zapret state directory in $ZAPRET_STATE_DIR. Aborted." "fatal"
         exit 1
     fi
 }
@@ -898,8 +887,8 @@ get_zapret_package_version() {
         version="$(opkg list-installed 2>/dev/null | awk '$1 == "zapret" { print $3; exit }')"
     fi
 
-    if [ -z "$version" ] && [ -x "$ZAPRET_SOURCE_NFQWS_BIN" ]; then
-        version="$("$ZAPRET_SOURCE_NFQWS_BIN" --version 2>/dev/null | sed -n '1s/^.*version[[:space:]]*//p' | awk '{ print $1; exit }')"
+    if [ -z "$version" ] && [ -x "$ZAPRET_PROVIDER_NFQWS_BIN" ]; then
+        version="$("$ZAPRET_PROVIDER_NFQWS_BIN" --version 2>/dev/null | sed -n '1s/^.*version[[:space:]]*//p' | awk '{ print $1; exit }')"
     fi
 
     echo "$version"
@@ -938,13 +927,13 @@ zapret_standalone_defaults_active() {
 }
 
 sync_zapret_standalone_config() {
-    if [ -x "$ZAPRET_SOURCE_BASE_DIR/sync_config.sh" ]; then
-        "$ZAPRET_SOURCE_BASE_DIR/sync_config.sh" >/dev/null 2>&1
+    if [ -x "$ZAPRET_PROVIDER_BASE_DIR/sync_config.sh" ]; then
+        "$ZAPRET_PROVIDER_BASE_DIR/sync_config.sh" >/dev/null 2>&1
         return $?
     fi
 
-    if [ -x "$ZAPRET_SOURCE_BASE_DIR/renew-cfg.sh" ]; then
-        "$ZAPRET_SOURCE_BASE_DIR/renew-cfg.sh" sync >/dev/null 2>&1
+    if [ -x "$ZAPRET_PROVIDER_BASE_DIR/renew-cfg.sh" ]; then
+        "$ZAPRET_PROVIDER_BASE_DIR/renew-cfg.sh" sync >/dev/null 2>&1
         return $?
     fi
 
@@ -1122,7 +1111,7 @@ get_zapret_status_json() {
         configured=1
     fi
 
-    if [ -x "$ZAPRET_SOURCE_NFQWS_BIN" ]; then
+    if is_zapret_provider_available; then
         installed=1
         version="$(get_zapret_package_version)"
         [ -n "$version" ] || version="unknown"
@@ -1182,7 +1171,7 @@ get_zapret_status_json() {
 check_zapret_runtime_json() {
     local installed=0
 
-    if [ -x "$ZAPRET_SOURCE_NFQWS_BIN" ]; then
+    if is_zapret_provider_available; then
         installed=1
     fi
 
@@ -1232,7 +1221,7 @@ stop_zapret_runtime() {
         done
     fi
 
-    rm -rf "$ZAPRET_PID_DIR" "$ZAPRET_LOG_DIR" "$ZAPRET_HOSTLIST_DIR" "$ZAPRET_RUNTIME_BASE_DIR"
+    rm -rf "$ZAPRET_PID_DIR" "$ZAPRET_CHILD_PID_DIR" "$ZAPRET_LOG_DIR" "$ZAPRET_HOSTLIST_DIR" "$ZAPRET_LEGACY_RUNTIME_BASE_DIR"
 }
 
 _start_zapret_runtime_handler() {
@@ -1272,10 +1261,10 @@ _start_zapret_runtime_handler() {
 
 start_zapret_runtime() {
     has_enabled_zapret_rules || return 0
-    is_zapret_installed || return 0
+    is_zapret_provider_available || return 0
 
     stop_zapret_runtime
     check_zapret_requirements
-    mkdir -p "$ZAPRET_PID_DIR" "$ZAPRET_LOG_DIR" "$ZAPRET_HOSTLIST_DIR"
+    mkdir -p "$ZAPRET_PID_DIR" "$ZAPRET_CHILD_PID_DIR" "$ZAPRET_LOG_DIR" "$ZAPRET_HOSTLIST_DIR"
     config_foreach _start_zapret_runtime_handler "rule"
 }
