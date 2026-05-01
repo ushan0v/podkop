@@ -11,7 +11,7 @@ PKG_RELEASE:=
 PKG_PO_VERSION:=$(PODKOP_PACKAGE_VERSION)
 
 LUCI_TITLE:=LuCI Podkop Plus app
-LUCI_DEPENDS:=+luci-base +sing-box +curl +jq +kmod-nft-tproxy +coreutils-base64 +bind-dig +nftables +kmod-nft-nat +kmod-nft-offload +kmod-nft-queue +libnetfilter-queue +libmnl +libcap +zlib +gzip +coreutils +coreutils-sort +coreutils-sleep
+LUCI_DEPENDS:=+luci-base +sing-box +curl +jq +kmod-nft-tproxy +coreutils-base64 +coreutils-sort +bind-dig +nftables +kmod-nft-nat +kmod-nft-offload
 LUCI_PKGARCH:=all
 LUCI_LANG.ru:=Русский (Russian)
 LUCI_LANG.en:=English

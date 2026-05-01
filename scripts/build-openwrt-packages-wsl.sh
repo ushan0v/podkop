@@ -35,8 +35,8 @@ APP_DESCRIPTION="Rule-based Podkop Plus LuCI app with hybrid sing-box + zapret o
 I18N_DESCRIPTION="Translation for luci-app-podkop-plus - Русский (Russian)"
 MAINTAINER="ushan0v <ushan0v@users.noreply.github.com>"
 PROJECT_URL="https://github.com/ushan0v/podkop-plus"
-APP_DEPENDS_IPK="libc, luci-base, sing-box, curl, jq, kmod-nft-tproxy, coreutils-base64, bind-dig, nftables, kmod-nft-nat, kmod-nft-offload, kmod-nft-queue, libnetfilter-queue1, libmnl0, libcap, zlib, gzip, coreutils, coreutils-sort, coreutils-sleep"
-APP_DEPENDS_APK="bind-dig coreutils coreutils-base64 coreutils-sleep coreutils-sort curl gzip jq kmod-nft-nat kmod-nft-offload kmod-nft-queue kmod-nft-tproxy libc libcap libmnl0 libnetfilter-queue1 luci-base nftables sing-box zlib"
+APP_DEPENDS_IPK="libc, luci-base, sing-box, curl, jq, kmod-nft-tproxy, coreutils-base64, coreutils-sort, bind-dig, nftables, kmod-nft-nat, kmod-nft-offload"
+APP_DEPENDS_APK="bind-dig coreutils-base64 coreutils-sort curl jq kmod-nft-nat kmod-nft-offload kmod-nft-tproxy libc luci-base nftables sing-box"
 
 APT_PACKAGES=(
   build-essential
