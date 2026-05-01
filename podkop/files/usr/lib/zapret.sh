@@ -1205,6 +1205,8 @@ get_zapret_status_json() {
         status_message="action=zapret is configured, but the podkop-managed nfqws runtime is not ready"
     elif [ "$standalone_conflict" -eq 1 ]; then
         status_message="standalone zapret is active together with podkop action=zapret; queues are separate, but packet-level policy overlap is possible"
+    elif [ "$configured" -eq 0 ] && [ "$provider_available" -eq 0 ] && [ "$package_installed" -eq 1 ]; then
+        status_message="zapret package is installed, but the provider binary is not available at $ZAPRET_PROVIDER_NFQWS_BIN"
     elif [ "$configured" -eq 0 ] && [ "$provider_available" -eq 0 ]; then
         status_message="zapret provider is not installed; action=zapret is unavailable"
     else
