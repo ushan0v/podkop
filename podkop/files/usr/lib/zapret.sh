@@ -996,17 +996,34 @@ zapret_external_queue_overlap_present() {
         -v own_table="$NFT_TABLE_NAME" \
         -v range_start="$ZAPRET_QUEUE_BASE" \
         -v range_end="$range_end" '
+        function token_queue_overlap(token, first, last, parts) {
+            gsub(/[{},;]/, "", token)
+            if (token !~ /^[0-9]+(-[0-9]+)?$/) {
+                return 0
+            }
+
+            split(token, parts, "-")
+            first = parts[1] + 0
+            last = (parts[2] == "" ? first : parts[2] + 0)
+
+            return first <= range_end && last >= range_start
+        }
         $1 == "table" {
             in_own_table = ($2 == "inet" && $3 == own_table)
         }
         !in_own_table {
-            line = $0
-            while (match(line, /queue num [0-9]+/)) {
-                num = substr(line, RSTART + 10, RLENGTH - 10) + 0
-                if (num >= range_start && num <= range_end) {
-                    found = 1
+            for (i = 1; i <= NF; i++) {
+                if ($i != "queue") {
+                    continue
                 }
-                line = substr(line, RSTART + RLENGTH)
+
+                for (j = i + 1; j <= NF; j++) {
+                    if (($j == "num" || $j == "to") && token_queue_overlap($(j + 1))) {
+                        found = 1
+                    } else if (token_queue_overlap($j)) {
+                        found = 1
+                    }
+                }
             }
         }
         END { exit(found ? 0 : 1) }
