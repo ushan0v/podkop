@@ -2648,10 +2648,6 @@ sing_box_configure_dns() {
     config=$(sing_box_cm_add_dns_route_rule "$config" "$SB_FAKEIP_DNS_SERVER_TAG" "$SB_SERVICE_FAKEIP_DNS_RULE_TAG")
     config=$(sing_box_cm_patch_dns_route_rule "$config" "$SB_SERVICE_FAKEIP_DNS_RULE_TAG" "rewrite_ttl" "$rewrite_ttl")
     config=$(sing_box_cm_patch_dns_route_rule "$config" "$SB_SERVICE_FAKEIP_DNS_RULE_TAG" "domain" "$service_domains")
-    config=$(sing_box_cm_add_dns_route_rule "$config" "$SB_FAKEIP_DNS_SERVER_TAG" "$SB_FAKEIP_DNS_RULE_TAG")
-    config=$(sing_box_cm_patch_dns_route_rule "$config" "$SB_FAKEIP_DNS_RULE_TAG" "rewrite_ttl" "$rewrite_ttl")
-    config=$(sing_box_cm_add_dns_route_rule "$config" "$SB_FAKEIP_DNS_SERVER_TAG" "$SB_FAKEIP_RULESET_DNS_RULE_TAG")
-    config=$(sing_box_cm_patch_dns_route_rule "$config" "$SB_FAKEIP_RULESET_DNS_RULE_TAG" "rewrite_ttl" "$rewrite_ttl")
 }
 
 sing_box_configure_route() {
@@ -2740,7 +2736,28 @@ patch_route_and_dns_rule_item_handler() {
     local key="$3"
 
     config=$(sing_box_cm_patch_route_rule "$config" "$rule_tag" "$key" "$value")
+    ensure_fakeip_dns_route_rule "$SB_FAKEIP_DNS_RULE_TAG"
     config=$(sing_box_cm_patch_dns_route_rule "$config" "$SB_FAKEIP_DNS_RULE_TAG" "$key" "$value")
+}
+
+dns_route_rule_exists() {
+    local tag="$1"
+
+    echo "$config" | jq -e \
+        --arg service_tag "$SERVICE_TAG" \
+        --arg tag "$tag" \
+        '.dns.rules[]? | select(.[$service_tag] == $tag)' >/dev/null 2>&1
+}
+
+ensure_fakeip_dns_route_rule() {
+    local tag="$1"
+    local rewrite_ttl
+
+    dns_route_rule_exists "$tag" && return 0
+
+    config=$(sing_box_cm_add_dns_route_rule "$config" "$SB_FAKEIP_DNS_SERVER_TAG" "$tag")
+    config_get rewrite_ttl "settings" "dns_rewrite_ttl" "60"
+    config=$(sing_box_cm_patch_dns_route_rule "$config" "$tag" "rewrite_ttl" "$rewrite_ttl")
 }
 
 configure_rule_set_reference_handler() {
@@ -2751,6 +2768,7 @@ configure_rule_set_reference_handler() {
     if [ -n "$ENSURED_RULESET_TAG" ]; then
         config=$(sing_box_cm_patch_route_rule "$config" "$route_rule_tag" "rule_set" "$ENSURED_RULESET_TAG")
         if [ "$ENSURED_RULESET_KIND" = "domains" ]; then
+            ensure_fakeip_dns_route_rule "$SB_FAKEIP_RULESET_DNS_RULE_TAG"
             config=$(sing_box_cm_patch_dns_route_rule "$config" "$SB_FAKEIP_RULESET_DNS_RULE_TAG" "rule_set" "$ENSURED_RULESET_TAG")
         else
             log "Skip DNS FakeIP rule patch for '$reference' ruleset kind '$ENSURED_RULESET_KIND'" "debug"
@@ -2796,6 +2814,7 @@ ensure_domain_ip_list_rulesets() {
 
     config=$(sing_box_cm_add_local_ruleset "$config" "$domain_ruleset_tag" "source" "$domain_ruleset_filepath")
     config=$(sing_box_cm_patch_route_rule "$config" "$route_rule_tag" "rule_set" "$domain_ruleset_tag")
+    ensure_fakeip_dns_route_rule "$SB_FAKEIP_RULESET_DNS_RULE_TAG"
     config=$(sing_box_cm_patch_dns_route_rule "$config" "$SB_FAKEIP_RULESET_DNS_RULE_TAG" "rule_set" "$domain_ruleset_tag")
 
     config=$(sing_box_cm_add_local_ruleset "$config" "$subnet_ruleset_tag" "source" "$subnet_ruleset_filepath")
@@ -2924,13 +2943,7 @@ configure_route_rule_handler() {
     log "Configuring route rule '$section' with action '$action'"
 
     if ! rule_has_primary_matchers "$section"; then
-        if [ "$action" != "proxy" ] && [ "$action" != "zapret" ]; then
-            log "Rule '$section' has no matchers and action '$action', skipping catch-all route creation" "warn"
-            return 0
-        fi
-
-        route_rule_tag="$(gen_id)"
-        create_route_rule_for_action "$section" "$action" "$route_rule_tag"
+        log "Rule '$section' has no matchers and action '$action', skipping route creation" "warn"
         return 0
     fi
 
@@ -2940,18 +2953,22 @@ configure_route_rule_handler() {
     local domain_json domain_suffix_json domain_keyword_json domain_regex_json
     domain_json="$(get_rule_condition_json_array "$section" "domain" "domains")"
     [ "$domain_json" != "[]" ] && config=$(sing_box_cm_patch_route_rule "$config" "$route_rule_tag" "domain" "$domain_json") && \
+        ensure_fakeip_dns_route_rule "$SB_FAKEIP_DNS_RULE_TAG" && \
         config=$(sing_box_cm_patch_dns_route_rule "$config" "$SB_FAKEIP_DNS_RULE_TAG" "domain" "$domain_json")
 
     domain_suffix_json="$(get_rule_condition_json_array "$section" "domain_suffix" "domains")"
     [ "$domain_suffix_json" != "[]" ] && config=$(sing_box_cm_patch_route_rule "$config" "$route_rule_tag" "domain_suffix" "$domain_suffix_json") && \
+        ensure_fakeip_dns_route_rule "$SB_FAKEIP_DNS_RULE_TAG" && \
         config=$(sing_box_cm_patch_dns_route_rule "$config" "$SB_FAKEIP_DNS_RULE_TAG" "domain_suffix" "$domain_suffix_json")
 
     domain_keyword_json="$(get_rule_condition_json_array "$section" "domain_keyword" "generic")"
     [ "$domain_keyword_json" != "[]" ] && config=$(sing_box_cm_patch_route_rule "$config" "$route_rule_tag" "domain_keyword" "$domain_keyword_json") && \
+        ensure_fakeip_dns_route_rule "$SB_FAKEIP_DNS_RULE_TAG" && \
         config=$(sing_box_cm_patch_dns_route_rule "$config" "$SB_FAKEIP_DNS_RULE_TAG" "domain_keyword" "$domain_keyword_json")
 
     domain_regex_json="$(get_rule_condition_json_array "$section" "domain_regex" "generic")"
     [ "$domain_regex_json" != "[]" ] && config=$(sing_box_cm_patch_route_rule "$config" "$route_rule_tag" "domain_regex" "$domain_regex_json") && \
+        ensure_fakeip_dns_route_rule "$SB_FAKEIP_DNS_RULE_TAG" && \
         config=$(sing_box_cm_patch_dns_route_rule "$config" "$SB_FAKEIP_DNS_RULE_TAG" "domain_regex" "$domain_regex_json")
 
     ip_values_json="$(get_rule_condition_json_array "$section" "ip_cidr" "subnets")"
@@ -3138,6 +3155,7 @@ configure_community_list_handler() {
 
     config=$(sing_box_cm_add_remote_ruleset "$config" "$ruleset_tag" "$format" "$url" "$detour" "$update_interval")
     config=$(sing_box_cm_patch_route_rule "$config" "$route_rule_tag" "rule_set" "$ruleset_tag")
+    ensure_fakeip_dns_route_rule "$SB_FAKEIP_RULESET_DNS_RULE_TAG"
     config=$(sing_box_cm_patch_dns_route_rule "$config" "$SB_FAKEIP_RULESET_DNS_RULE_TAG" "rule_set" "$ruleset_tag")
 }
 
@@ -3157,6 +3175,7 @@ prepare_source_ruleset() {
         config=$(sing_box_cm_patch_route_rule "$config" "$route_rule_tag" "rule_set" "$ruleset_tag")
         case "$type" in
         domains)
+            ensure_fakeip_dns_route_rule "$SB_FAKEIP_RULESET_DNS_RULE_TAG"
             config=$(sing_box_cm_patch_dns_route_rule "$config" "$SB_FAKEIP_RULESET_DNS_RULE_TAG" "rule_set" "$ruleset_tag")
             ;;
         subnets) ;;
@@ -3273,6 +3292,7 @@ configure_remote_domain_or_subnet_list_handler() {
         config=$(sing_box_cm_patch_route_rule "$config" "$route_rule_tag" "rule_set" "$ruleset_tag")
         case "$type" in
         domains)
+            ensure_fakeip_dns_route_rule "$SB_FAKEIP_RULESET_DNS_RULE_TAG"
             config=$(sing_box_cm_patch_dns_route_rule "$config" "$SB_FAKEIP_RULESET_DNS_RULE_TAG" "rule_set" "$ruleset_tag")
             ;;
         subnets) ;;
