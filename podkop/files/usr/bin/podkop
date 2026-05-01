@@ -1927,6 +1927,7 @@ dnsmasq_configure_split_instance() {
     uci_set "dhcp" "$PODKOP_DNSMASQ_SECTION" "noresolv" 1
     uci_set "dhcp" "$PODKOP_DNSMASQ_SECTION" "cachesize" 0
     uci_add_list "dhcp" "$PODKOP_DNSMASQ_SECTION" "server" "$SB_DNS_INBOUND_ADDRESS"
+    uci_add_list "dhcp" "$PODKOP_DNSMASQ_SECTION" "notinterface" "lo"
 
     for interface in $source_network_interfaces; do
         uci_add_list "dhcp" "$PODKOP_DNSMASQ_SECTION" "interface" "$interface"
@@ -4496,7 +4497,7 @@ check_dns_available() {
 }
 
 check_dhcp_has_podkop_dns() {
-    local source_network_interfaces podkop_interfaces default_notinterfaces server_list cachesize noresolv
+    local source_network_interfaces podkop_interfaces podkop_notinterfaces default_notinterfaces server_list cachesize noresolv
     local server server_found interface
 
     source_network_interfaces="$(uci_get "$PODKOP_CONFIG_NAME" "settings" "source_network_interfaces")"
@@ -4506,6 +4507,7 @@ check_dhcp_has_podkop_dns() {
     cachesize="$(uci_get "dhcp" "$PODKOP_DNSMASQ_SECTION" "cachesize")"
     noresolv="$(uci_get "dhcp" "$PODKOP_DNSMASQ_SECTION" "noresolv")"
     podkop_interfaces="$(uci_get "dhcp" "$PODKOP_DNSMASQ_SECTION" "interface")"
+    podkop_notinterfaces="$(uci_get "dhcp" "$PODKOP_DNSMASQ_SECTION" "notinterface")"
     default_notinterfaces="$(uci_get "dhcp" "@dnsmasq[0]" "notinterface")"
 
     server_found=0
@@ -4520,6 +4522,11 @@ check_dhcp_has_podkop_dns() {
     fi
 
     if [ "$cachesize" != "0" ] || [ "$noresolv" != "1" ] || [ "$server_found" != "1" ]; then
+        dhcp_config_status=0
+        return 0
+    fi
+
+    if ! list_has_item "$podkop_notinterfaces" "lo"; then
         dhcp_config_status=0
         return 0
     fi
