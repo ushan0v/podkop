@@ -1197,6 +1197,10 @@ get_zapret_status_json() {
 
     if [ "$configured" -eq 1 ] && [ "$provider_available" -eq 0 ]; then
         status_message="action=zapret is configured, but zapret provider is not available at $ZAPRET_PROVIDER_NFQWS_BIN"
+    elif [ "$queue_overlap" -eq 1 ]; then
+        status_message="external NFQUEUE rules overlap with the Podkop Plus zapret range $ZAPRET_QUEUE_BASE-$queue_range_end"
+    elif [ "$legacy_runtime_present" -eq 1 ]; then
+        status_message="legacy zapret runtime paths are still present and should be migrated"
     elif [ "$configured" -eq 1 ] && [ "$ready" -eq 0 ]; then
         status_message="action=zapret is configured, but the podkop-managed nfqws runtime is not ready"
     elif [ "$standalone_conflict" -eq 1 ]; then
