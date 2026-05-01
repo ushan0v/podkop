@@ -647,6 +647,19 @@ zapret_package_installed() {
     return 1
 }
 
+luci_app_zapret_installed() {
+    if command -v apk >/dev/null 2>&1 && apk info -e luci-app-zapret >/dev/null 2>&1; then
+        return 0
+    fi
+
+    if command -v opkg >/dev/null 2>&1 && opkg list-installed 2>/dev/null | grep -Eq '^luci-app-zapret[[:space:]-]'; then
+        return 0
+    fi
+
+    [ -f /usr/share/luci/menu.d/luci-app-zapret.json ] ||
+        [ -f /usr/share/rpcd/acl.d/luci-app-zapret.json ]
+}
+
 zapret_legacy_runtime_path_present() {
     uci -q show "$PODKOP_CONFIG_NAME" 2>/dev/null | grep -Fq "$ZAPRET_LEGACY_RUNTIME_BASE_DIR" && return 0
     [ -d "$ZAPRET_LEGACY_RUNTIME_BASE_DIR" ]
@@ -1096,6 +1109,8 @@ get_zapret_status_json() {
 
     if zapret_package_installed; then
         package_installed=1
+        version="$(get_zapret_package_version)"
+        [ -n "$version" ] || version="unknown"
     fi
 
     if [ -d "$ZAPRET_PROVIDER_FILES_DIR" ]; then
@@ -1109,8 +1124,10 @@ get_zapret_status_json() {
     if is_zapret_provider_available; then
         provider_available=1
         installed=1
-        version="$(get_zapret_package_version)"
-        [ -n "$version" ] || version="unknown"
+        if [ "$package_installed" -eq 0 ]; then
+            version="$(get_zapret_package_version)"
+            [ -n "$version" ] || version="unknown"
+        fi
     fi
 
     if is_zapret_standalone_service_enabled; then
@@ -1137,9 +1154,7 @@ get_zapret_status_json() {
         legacy_runtime_present=1
     fi
 
-    if command -v apk >/dev/null 2>&1 && apk info -e luci-app-zapret >/dev/null 2>&1; then
-        luci_app_installed=1
-    elif command -v opkg >/dev/null 2>&1 && opkg list-installed 2>/dev/null | grep -Eq '^luci-app-zapret[[:space:]-]'; then
+    if luci_app_zapret_installed; then
         luci_app_installed=1
     fi
 
