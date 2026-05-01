@@ -915,103 +915,6 @@ zapret_standalone_uci_config_present() {
     uci -q get zapret.config >/dev/null 2>&1
 }
 
-zapret_standalone_defaults_active() {
-    local run_on_boot nfqws_enable
-
-    if is_zapret_standalone_service_running || is_zapret_standalone_service_enabled; then
-        return 0
-    fi
-
-    if ! zapret_standalone_uci_config_present; then
-        return 1
-    fi
-
-    run_on_boot="$(uci -q get zapret.config.run_on_boot)"
-    nfqws_enable="$(uci -q get zapret.config.NFQWS_ENABLE)"
-
-    [ "${run_on_boot:-0}" != "0" ] || [ "${nfqws_enable:-0}" != "0" ]
-}
-
-sync_zapret_standalone_config() {
-    if [ -x "$ZAPRET_PROVIDER_BASE_DIR/sync_config.sh" ]; then
-        "$ZAPRET_PROVIDER_BASE_DIR/sync_config.sh" >/dev/null 2>&1
-        return $?
-    fi
-
-    if [ -x "$ZAPRET_PROVIDER_BASE_DIR/renew-cfg.sh" ]; then
-        "$ZAPRET_PROVIDER_BASE_DIR/renew-cfg.sh" sync >/dev/null 2>&1
-        return $?
-    fi
-
-    return 0
-}
-
-neutralize_zapret_standalone_defaults() {
-    local config_dirty=0
-    local run_on_boot nfqws_enable
-
-    # remittor/zapret-openwrt enables and starts the main standalone profile
-    # in postinst. Podkop Plus only needs the package payload on fresh install,
-    # so make that default profile dormant until the user explicitly enables it.
-    if zapret_standalone_uci_config_present; then
-        run_on_boot="$(uci -q get zapret.config.run_on_boot)"
-        if [ "${run_on_boot:-0}" != "0" ]; then
-            uci -q set zapret.config.run_on_boot='0'
-            config_dirty=1
-        fi
-
-        nfqws_enable="$(uci -q get zapret.config.NFQWS_ENABLE)"
-        if [ "${nfqws_enable:-0}" != "0" ]; then
-            uci -q set zapret.config.NFQWS_ENABLE='0'
-            config_dirty=1
-        fi
-
-        if [ "$config_dirty" -eq 1 ]; then
-            log "Neutralizing the default standalone zapret NFQWS profile installed alongside Podkop Plus"
-            uci commit zapret >/dev/null 2>&1 || {
-                log "Failed to commit /etc/config/zapret while neutralizing the default standalone zapret profile. Aborted." "fatal"
-                return 1
-            }
-
-            sync_zapret_standalone_config || {
-                log "Failed to synchronize /opt/zapret/config after updating /etc/config/zapret. Aborted." "fatal"
-                return 1
-            }
-        fi
-    fi
-
-    if is_zapret_standalone_service_running; then
-        log "Stopping the default standalone zapret service installed alongside Podkop Plus"
-        /etc/init.d/zapret stop >/dev/null 2>&1 || true
-    fi
-
-    if is_zapret_standalone_service_enabled; then
-        log "Disabling the default standalone zapret autostart installed alongside Podkop Plus"
-        /etc/init.d/zapret disable >/dev/null 2>&1 || true
-    fi
-
-    if is_zapret_standalone_service_running || is_zapret_standalone_service_enabled; then
-        log "The standalone zapret service is still active after Podkop Plus tried to neutralize its default auto-started profile. Aborted." "fatal"
-        return 1
-    fi
-
-    if zapret_standalone_uci_config_present; then
-        run_on_boot="$(uci -q get zapret.config.run_on_boot)"
-        nfqws_enable="$(uci -q get zapret.config.NFQWS_ENABLE)"
-
-        if [ "${run_on_boot:-0}" != "0" ] || [ "${nfqws_enable:-0}" != "0" ]; then
-            log "The default standalone zapret profile remains active in /etc/config/zapret after Podkop Plus tried to neutralize it. Aborted." "fatal"
-            return 1
-        fi
-    fi
-
-    return 0
-}
-
-ensure_zapret_standalone_conflict_resolved() {
-    return 0
-}
-
 stop_legacy_zapret_runtime_processes() {
     local pid
 
@@ -1045,6 +948,61 @@ get_zapret_nfqws_process_count() {
     done
 
     echo "$count"
+}
+
+get_zapret_supervisor_process_count() {
+    local count=0 pidfile pid
+
+    [ -d "$ZAPRET_PID_DIR" ] || {
+        echo 0
+        return 0
+    }
+
+    for pidfile in "$ZAPRET_PID_DIR"/*.pid; do
+        [ -f "$pidfile" ] || continue
+        pid="$(cat "$pidfile" 2>/dev/null)"
+        if [ -n "$pid" ] && kill -0 "$pid" 2>/dev/null; then
+            count=$((count + 1))
+        else
+            rm -f "$pidfile"
+        fi
+    done
+
+    echo "$count"
+}
+
+get_zapret_queue_range_end() {
+    echo $((ZAPRET_QUEUE_BASE + ZAPRET_QUEUE_RANGE_SIZE - 1))
+}
+
+zapret_external_queue_overlap_present() {
+    local range_end
+
+    range_end="$(get_zapret_queue_range_end)"
+    nft list ruleset 2>/dev/null | awk \
+        -v own_table="$NFT_TABLE_NAME" \
+        -v range_start="$ZAPRET_QUEUE_BASE" \
+        -v range_end="$range_end" '
+        $1 == "table" {
+            in_own_table = ($2 == "inet" && $3 == own_table)
+        }
+        !in_own_table {
+            line = $0
+            while (match(line, /queue num [0-9]+/)) {
+                num = substr(line, RSTART + 10, RLENGTH - 10) + 0
+                if (num >= range_start && num <= range_end) {
+                    found = 1
+                }
+                line = substr(line, RSTART + RLENGTH)
+            }
+        }
+        END { exit(found ? 0 : 1) }
+    '
+}
+
+zapret_standalone_conflict_present() {
+    has_enabled_zapret_rules || return 1
+    is_zapret_standalone_service_running || is_zapret_standalone_service_enabled
 }
 
 zapret_rule_outbound_present() {
@@ -1118,20 +1076,38 @@ collect_zapret_runtime_status() {
 }
 
 get_zapret_status_json() {
-    local installed=0 configured=0 standalone_service_enabled=0 standalone_service_running=0 ready=0 conflict=0
-    local enabled_rule_count expected_process_count running_process_count version
+    local installed=0 package_installed=0 provider_available=0 files_available=0 ipset_available=0 configured=0
+    local standalone_service_enabled=0 standalone_service_running=0 standalone_config_present=0 ready=0 conflict=0
+    local queue_overlap=0 standalone_conflict=0 legacy_runtime_present=0 luci_app_installed=0
+    local enabled_rule_count expected_process_count running_process_count supervisor_process_count version queue_range_end status_message
     local outbounds_configured=0 routes_configured=0
 
     enabled_rule_count="$(get_zapret_rule_count)"
     expected_process_count="${enabled_rule_count:-0}"
     running_process_count="$(get_zapret_nfqws_process_count)"
+    supervisor_process_count="$(get_zapret_supervisor_process_count)"
+    queue_range_end="$(get_zapret_queue_range_end)"
     version="not installed"
+    status_message=""
 
     if [ "${enabled_rule_count:-0}" -gt 0 ]; then
         configured=1
     fi
 
+    if zapret_package_installed; then
+        package_installed=1
+    fi
+
+    if [ -d "$ZAPRET_PROVIDER_FILES_DIR" ]; then
+        files_available=1
+    fi
+
+    if [ -d "$ZAPRET_PROVIDER_IPSET_DIR" ]; then
+        ipset_available=1
+    fi
+
     if is_zapret_provider_available; then
+        provider_available=1
         installed=1
         version="$(get_zapret_package_version)"
         [ -n "$version" ] || version="unknown"
@@ -1145,16 +1121,40 @@ get_zapret_status_json() {
         standalone_service_running=1
     fi
 
+    if zapret_standalone_uci_config_present; then
+        standalone_config_present=1
+    fi
+
+    if zapret_external_queue_overlap_present; then
+        queue_overlap=1
+    fi
+
+    if zapret_standalone_conflict_present; then
+        standalone_conflict=1
+    fi
+
+    if zapret_legacy_runtime_path_present; then
+        legacy_runtime_present=1
+    fi
+
+    if command -v apk >/dev/null 2>&1 && apk info -e luci-app-zapret >/dev/null 2>&1; then
+        luci_app_installed=1
+    elif command -v opkg >/dev/null 2>&1 && opkg list-installed 2>/dev/null | grep -Eq '^luci-app-zapret[[:space:]-]'; then
+        luci_app_installed=1
+    fi
+
     collect_zapret_runtime_status
     outbounds_configured="${ZAPRET_RUNTIME_OUTBOUNDS_CONFIGURED:-0}"
     routes_configured="${ZAPRET_RUNTIME_ROUTES_CONFIGURED:-0}"
 
-    if [ "${running_process_count:-0}" -gt "${expected_process_count:-0}" ]; then
+    if [ "${running_process_count:-0}" -gt "${expected_process_count:-0}" ] ||
+        [ "$queue_overlap" -eq 1 ] ||
+        [ "$legacy_runtime_present" -eq 1 ]; then
         conflict=1
     fi
 
     if [ "$configured" -eq 1 ] &&
-        [ "$installed" -eq 1 ] &&
+        [ "$provider_available" -eq 1 ] &&
         [ "$conflict" -eq 0 ] &&
         [ "$outbounds_configured" -eq 1 ] &&
         [ "$routes_configured" -eq 1 ] &&
@@ -1163,42 +1163,90 @@ get_zapret_status_json() {
         ready=1
     fi
 
+    if [ "$configured" -eq 1 ] && [ "$provider_available" -eq 0 ]; then
+        status_message="action=zapret is configured, but zapret provider is not available at $ZAPRET_PROVIDER_NFQWS_BIN"
+    elif [ "$configured" -eq 1 ] && [ "$ready" -eq 0 ]; then
+        status_message="action=zapret is configured, but the podkop-managed nfqws runtime is not ready"
+    elif [ "$standalone_conflict" -eq 1 ]; then
+        status_message="standalone zapret is active together with podkop action=zapret; queues are separate, but packet-level policy overlap is possible"
+    elif [ "$configured" -eq 0 ] && [ "$provider_available" -eq 0 ]; then
+        status_message="zapret provider is not installed; action=zapret is unavailable"
+    else
+        status_message="zapret provider status is normal"
+    fi
+
     jq -cn \
         --arg version "$version" \
+        --arg provider_path "$ZAPRET_PROVIDER_NFQWS_BIN" \
+        --arg status_message "$status_message" \
         --argjson installed "$installed" \
+        --argjson package_installed "$package_installed" \
+        --argjson provider_available "$provider_available" \
+        --argjson files_available "$files_available" \
+        --argjson ipset_available "$ipset_available" \
         --argjson configured "$configured" \
         --argjson enabled_rule_count "${enabled_rule_count:-0}" \
         --argjson expected_process_count "${expected_process_count:-0}" \
         --argjson running_process_count "${running_process_count:-0}" \
+        --argjson supervisor_process_count "${supervisor_process_count:-0}" \
         --argjson standalone_service_enabled "$standalone_service_enabled" \
         --argjson standalone_service_running "$standalone_service_running" \
+        --argjson standalone_config_present "$standalone_config_present" \
+        --argjson standalone_conflict "$standalone_conflict" \
+        --argjson luci_app_installed "$luci_app_installed" \
+        --argjson queue_base "$ZAPRET_QUEUE_BASE" \
+        --argjson queue_range_end "$queue_range_end" \
+        --argjson queue_overlap "$queue_overlap" \
+        --argjson legacy_runtime_present "$legacy_runtime_present" \
         --argjson ready "$ready" \
         --argjson conflict "$conflict" \
         '{
             installed: $installed,
+            package_installed: $package_installed,
+            provider_available: $provider_available,
+            provider_path: $provider_path,
+            files_available: $files_available,
+            ipset_available: $ipset_available,
             version: $version,
             configured: $configured,
             enabled_rule_count: $enabled_rule_count,
             expected_process_count: $expected_process_count,
             running_process_count: $running_process_count,
+            supervisor_process_count: $supervisor_process_count,
             standalone_service_enabled: $standalone_service_enabled,
             standalone_service_running: $standalone_service_running,
+            standalone_config_present: $standalone_config_present,
+            standalone_conflict: $standalone_conflict,
+            luci_app_installed: $luci_app_installed,
+            queue_base: $queue_base,
+            queue_range_end: $queue_range_end,
+            queue_overlap: $queue_overlap,
+            legacy_runtime_present: $legacy_runtime_present,
             ready: $ready,
-            conflict: $conflict
+            conflict: $conflict,
+            status_message: $status_message
         }'
 }
 
 check_zapret_runtime_json() {
-    local installed=0
+    local installed=0 package_installed=0
 
     if is_zapret_provider_available; then
         installed=1
     fi
 
+    if zapret_package_installed; then
+        package_installed=1
+    fi
+
     jq -cn \
         --argjson zapret_installed "$installed" \
+        --argjson zapret_package_installed "$package_installed" \
+        --arg zapret_provider_path "$ZAPRET_PROVIDER_NFQWS_BIN" \
         '{
-            zapret_installed: $zapret_installed
+            zapret_installed: $zapret_installed,
+            zapret_package_installed: $zapret_package_installed,
+            zapret_provider_path: $zapret_provider_path
         }'
 }
 
