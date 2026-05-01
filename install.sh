@@ -16,6 +16,7 @@ ZAPRET_ARCH_CANDIDATES=""
 ZAPRET_ALREADY_PRESENT=0
 ZAPRET_REQUESTED=0
 ZAPRET_SKIPPED_REASON=""
+ZAPRET_INSTALL_CHOICE="${PODKOP_PLUS_INSTALL_ZAPRET:-${INSTALL_ZAPRET:-}}"
 PODKOP_PLUS_I18N_REQUESTED=0
 
 PODKOP_PLUS_RELEASE_JSON=""
@@ -49,6 +50,37 @@ warn() {
 fail() {
     printf '\033[31;1m%s\033[0m\n' "$1" >&2
     exit 1
+}
+
+usage() {
+    cat <<EOF
+Usage: $0 [--with-zapret|--without-zapret]
+
+Options:
+  --with-zapret       Install the optional external zapret provider package.
+  --without-zapret    Install Podkop Plus without the zapret provider.
+EOF
+}
+
+parse_args() {
+    while [ "$#" -gt 0 ]; do
+        case "$1" in
+            --with-zapret)
+                ZAPRET_INSTALL_CHOICE=1
+                ;;
+            --without-zapret)
+                ZAPRET_INSTALL_CHOICE=0
+                ;;
+            -h|--help)
+                usage
+                exit 0
+                ;;
+            *)
+                fail "Unknown installer option: $1"
+                ;;
+        esac
+        shift
+    done
 }
 
 cleanup() {
@@ -719,13 +751,13 @@ resolve_zapret_release() {
 
     ZAPRET_RELEASE_JSON="$(http_get "$url" 2>/dev/null || true)"
     if [ -z "$ZAPRET_RELEASE_JSON" ]; then
-        warn "Failed to query zapret release metadata. Continuing without zapret."
+        warn "Failed to query zapret release metadata. Continuing without zapret provider."
         ZAPRET_SKIPPED_REASON="release metadata unavailable"
         return 0
     fi
 
     if ! printf '%s' "$ZAPRET_RELEASE_JSON" | jq -e . >/dev/null 2>&1; then
-        warn "GitHub returned an invalid zapret release response. Continuing without zapret."
+        warn "GitHub returned an invalid zapret release response. Continuing without zapret provider."
         ZAPRET_SKIPPED_REASON="invalid release metadata"
         clear_zapret_download_state
         return 0
@@ -734,13 +766,13 @@ resolve_zapret_release() {
     message="$(printf '%s' "$ZAPRET_RELEASE_JSON" | jq -r '.message // empty')"
     case "$message" in
         *"API rate limit"*|*"rate limit exceeded"*)
-            warn "GitHub API rate limit reached while resolving zapret. Continuing without zapret."
+            warn "GitHub API rate limit reached while resolving zapret. Continuing without zapret provider."
             ZAPRET_SKIPPED_REASON="GitHub API rate limit"
             clear_zapret_download_state
             return 0
             ;;
         "Not Found")
-            warn "No published releases found for remittor/zapret-openwrt. Continuing without zapret."
+            warn "No published releases found for remittor/zapret-openwrt. Continuing without zapret provider."
             ZAPRET_SKIPPED_REASON="release not found"
             clear_zapret_download_state
             return 0
@@ -749,7 +781,7 @@ resolve_zapret_release() {
 
     ZAPRET_RELEASE_TAG_RESOLVED="$(printf '%s' "$ZAPRET_RELEASE_JSON" | jq -r '.tag_name // empty')"
     if [ -z "$ZAPRET_RELEASE_TAG_RESOLVED" ]; then
-        warn "Failed to detect the zapret release tag. Continuing without zapret."
+        warn "Failed to detect the zapret release tag. Continuing without zapret provider."
         ZAPRET_SKIPPED_REASON="release tag unavailable"
         clear_zapret_download_state
         return 0
@@ -766,7 +798,7 @@ resolve_zapret_release() {
     done
 
     if [ -z "$ZAPRET_BUNDLE_NAME" ]; then
-        warn "No zapret package was found for architecture: $TARGET_ARCH. Tried: $ZAPRET_ARCH_CANDIDATES. Continuing without zapret."
+        warn "No zapret package was found for architecture: $TARGET_ARCH. Tried: $ZAPRET_ARCH_CANDIDATES. Continuing without zapret provider."
         ZAPRET_SKIPPED_REASON="package not found for architecture"
         clear_zapret_download_state
         return 0
@@ -774,7 +806,7 @@ resolve_zapret_release() {
 
     ZAPRET_BUNDLE_URL="$(printf '%s' "$ZAPRET_RELEASE_JSON" | jq -r --arg name "$ZAPRET_BUNDLE_NAME" '.assets[] | select(.name == $name) | .browser_download_url' | sed -n '1p')"
     if [ -z "$ZAPRET_BUNDLE_URL" ]; then
-        warn "Failed to resolve the zapret download URL for $ZAPRET_BUNDLE_NAME. Continuing without zapret."
+        warn "Failed to resolve the zapret download URL for $ZAPRET_BUNDLE_NAME. Continuing without zapret provider."
         ZAPRET_SKIPPED_REASON="download URL unavailable"
         clear_zapret_download_state
         return 0
@@ -784,17 +816,35 @@ resolve_zapret_release() {
 decide_zapret_installation() {
     if is_zapret_present; then
         ZAPRET_ALREADY_PRESENT=1
-        msg "Detected an existing zapret installation. Skipping zapret installation."
+        msg "Detected an existing zapret provider. Skipping zapret installation."
         return 0
     fi
 
-    if confirm_prompt "Install optional zapret package?"; then
+    case "$ZAPRET_INSTALL_CHOICE" in
+        1|yes|YES|true|TRUE|y|Y)
+            ZAPRET_REQUESTED=1
+            return 0
+            ;;
+        0|no|NO|false|FALSE|n|N)
+            ZAPRET_SKIPPED_REASON="installation disabled by installer option"
+            warn "Continuing without zapret provider."
+            return 0
+            ;;
+    esac
+
+    if [ ! -t 0 ]; then
+        ZAPRET_SKIPPED_REASON="not requested; rerun with --with-zapret to install the optional provider"
+        warn "Continuing without zapret provider."
+        return 0
+    fi
+
+    if confirm_prompt "Install optional zapret external provider for action=zapret?"; then
         ZAPRET_REQUESTED=1
         return 0
     fi
 
     ZAPRET_SKIPPED_REASON="installation declined by user"
-    warn "Continuing without zapret."
+    warn "Continuing without zapret provider."
 }
 
 decide_i18n_installation() {
@@ -832,7 +882,7 @@ download_and_extract_zapret_package() {
 
     bundle_file="$TMP_DIR/$ZAPRET_BUNDLE_NAME"
     if ! download_with_retry "$ZAPRET_BUNDLE_URL" "$bundle_file" "$ZAPRET_BUNDLE_NAME"; then
-        warn "Failed to download $ZAPRET_BUNDLE_NAME. Continuing without zapret."
+        warn "Failed to download $ZAPRET_BUNDLE_NAME. Continuing without zapret provider."
         ZAPRET_SKIPPED_REASON="download failed"
         clear_zapret_download_state
         return 0
@@ -846,7 +896,7 @@ download_and_extract_zapret_package() {
     fi
 
     if [ -z "$inner_package_path" ]; then
-        warn "Failed to locate the zapret package inside $ZAPRET_BUNDLE_NAME. Continuing without zapret."
+        warn "Failed to locate the zapret package inside $ZAPRET_BUNDLE_NAME. Continuing without zapret provider."
         ZAPRET_SKIPPED_REASON="package archive layout is unsupported"
         clear_zapret_download_state
         return 0
@@ -857,14 +907,14 @@ download_and_extract_zapret_package() {
     ZAPRET_PACKAGE_VERSION="$(extract_package_version "$ZAPRET_PACKAGE_NAME")"
 
     if ! unzip -p "$bundle_file" "$inner_package_path" > "$ZAPRET_PACKAGE_FILE"; then
-        warn "Failed to extract $ZAPRET_PACKAGE_NAME. Continuing without zapret."
+        warn "Failed to extract $ZAPRET_PACKAGE_NAME. Continuing without zapret provider."
         ZAPRET_SKIPPED_REASON="package extraction failed"
         clear_zapret_download_state
         return 0
     fi
 
     if [ ! -s "$ZAPRET_PACKAGE_FILE" ]; then
-        warn "The extracted zapret package is empty. Continuing without zapret."
+        warn "The extracted zapret package is empty. Continuing without zapret provider."
         ZAPRET_SKIPPED_REASON="empty package archive"
         clear_zapret_download_state
         return 0
@@ -893,11 +943,25 @@ post_install() {
     if [ "$PODKOP_WAS_ENABLED" -eq 1 ] && [ -x /etc/init.d/podkop-plus ]; then
         /etc/init.d/podkop-plus enable >/dev/null 2>&1 || true
     fi
+
+    if [ -n "$ZAPRET_PACKAGE_FILE" ]; then
+        warn "The zapret provider was installed as an external upstream package."
+        warn "Podkop Plus does not modify /etc/config/zapret or luci-app-zapret settings."
+
+        if [ -x /etc/init.d/zapret ] && /etc/init.d/zapret enabled >/dev/null 2>&1; then
+            warn "Standalone /etc/init.d/zapret autostart is enabled by the upstream package."
+        fi
+
+        if [ -x /etc/init.d/zapret ] && /etc/init.d/zapret status >/dev/null 2>&1; then
+            warn "Standalone /etc/init.d/zapret is currently running. Podkop diagnostics will report possible overlap if action=zapret is used."
+        fi
+    fi
 }
 
 main() {
     trap cleanup EXIT HUP INT TERM
 
+    parse_args "$@"
     check_root
     init_tmp_dir
     detect_fetcher
@@ -948,4 +1012,4 @@ main() {
     warn "Open LuCI and review your rules before enabling Podkop Plus"
 }
 
-main
+main "$@"
