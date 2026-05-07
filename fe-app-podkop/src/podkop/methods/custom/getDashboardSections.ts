@@ -195,6 +195,83 @@ export async function getDashboardSections(): Promise<IGetDashboardSectionsRespo
         };
       }
 
+      if (proxyConfigType === 'subscription') {
+        const selector = proxies.find(
+          (proxy) => proxy.code === `${section['.name']}-out`,
+        );
+        const fallbackUrltest = proxies.find(
+          (proxy) => proxy.code === `${section['.name']}-urltest-out`,
+        );
+
+        const selectorOutbounds = (selector?.value?.all ?? []).flatMap(
+          (code) => {
+            const item = proxies.find((proxy) => proxy.code === code);
+            if (!item) {
+              return [];
+            }
+
+            const isDefaultFastest =
+              item.code === `${section['.name']}-urltest-out`;
+
+            return [
+              {
+                code: item.code,
+                displayName: isDefaultFastest
+                  ? _('Fastest')
+                  : item?.value?.name || '',
+                latency: item?.value?.history?.[0]?.delay || 0,
+                type: item?.value?.type || '',
+                selected: selector?.value?.now === item.code,
+              },
+            ];
+          },
+        );
+
+        const outbounds = [
+          ...selectorOutbounds.filter(
+            (item) => item.type?.toLowerCase() === 'urltest',
+          ),
+          ...selectorOutbounds.filter(
+            (item) => item.type?.toLowerCase() !== 'urltest',
+          ),
+        ];
+
+        if (outbounds.length === 0 && fallbackUrltest) {
+          const fallbackOutbounds = (fallbackUrltest?.value?.all ?? [])
+            .map((code) => proxies.find((item) => item.code === code))
+            .map((item) => ({
+              code: item?.code || '',
+              displayName: item?.value?.name || '',
+              latency: item?.value?.history?.[0]?.delay || 0,
+              type: item?.value?.type || '',
+              selected: selector?.value?.now === item?.code,
+            }));
+
+          return {
+            withTagSelect: true,
+            code: selector?.code || section['.name'],
+            displayName,
+            outbounds: [
+              {
+                code: fallbackUrltest?.code || '',
+                displayName: _('Fastest'),
+                latency: fallbackUrltest?.value?.history?.[0]?.delay || 0,
+                type: fallbackUrltest?.value?.type || '',
+                selected: selector?.value?.now === fallbackUrltest?.code,
+              },
+              ...fallbackOutbounds,
+            ],
+          };
+        }
+
+        return {
+          withTagSelect: true,
+          code: selector?.code || section['.name'],
+          displayName,
+          outbounds,
+        };
+      }
+
       if (proxyConfigType === 'interface') {
         const outbound = proxies.find(
           (proxy) => proxy.code === `${section['.name']}-out`,

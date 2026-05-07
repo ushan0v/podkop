@@ -275,6 +275,149 @@ download_to_file() {
     done
 }
 
+get_device_model() {
+    local model=""
+
+    if [ -f /tmp/sysinfo/model ]; then
+        model="$(cat /tmp/sysinfo/model 2>/dev/null)"
+    fi
+
+    echo "${model:-OpenWrt Router}"
+}
+
+get_kernel_version() {
+    uname -r
+}
+
+get_sing_box_version() {
+    local version=""
+
+    if command -v sing-box >/dev/null 2>&1; then
+        version="$(sing-box version 2>/dev/null | head -1 | awk '{print $NF}')"
+    fi
+
+    echo "${version:-1.0}"
+}
+
+generate_hwid() {
+    local mac="" model="" raw_hash=""
+
+    if [ -f /sys/class/net/eth0/address ]; then
+        mac="$(cat /sys/class/net/eth0/address 2>/dev/null)"
+    elif [ -f /sys/class/net/br-lan/address ]; then
+        mac="$(cat /sys/class/net/br-lan/address 2>/dev/null)"
+    fi
+
+    model="$(get_device_model)"
+    raw_hash="$(printf '%s-%s' "$mac" "$model" | md5sum | cut -c1-16)"
+
+    printf '%s-%s-%s-%s' \
+        "$(echo "$raw_hash" | cut -c1-4)" \
+        "$(echo "$raw_hash" | cut -c5-8)" \
+        "$(echo "$raw_hash" | cut -c9-12)" \
+        "$(echo "$raw_hash" | cut -c13-16)"
+}
+
+download_subscription() {
+    local url="$1"
+    local filepath="$2"
+    local http_proxy_address="$3"
+    local retries="${4:-3}"
+    local wait="${5:-2}"
+    local timeout="${6:-10}"
+    local tmpfile attempt
+
+    tmpfile="${filepath}.part.$$"
+    rm -f "$tmpfile"
+
+    for attempt in $(seq 1 "$retries"); do
+        if [ -n "$http_proxy_address" ]; then
+            http_proxy="http://$http_proxy_address" https_proxy="http://$http_proxy_address" \
+                wget -T "$timeout" -O "$tmpfile" \
+                    --header "User-Agent: singbox/$(get_sing_box_version)" \
+                    --header "X-HWID: $(generate_hwid)" \
+                    --header "X-Device-OS: OpenWrt Linux" \
+                    --header "X-Device-Model: $(get_device_model)" \
+                    --header "X-Ver-OS: $(get_kernel_version)" \
+                    --header "Accept-Language: ru-RU,en,*" \
+                    --header "X-Device-Locale: EN" \
+                    "$url"
+        else
+            wget -T "$timeout" -O "$tmpfile" \
+                --header "User-Agent: singbox/$(get_sing_box_version)" \
+                --header "X-HWID: $(generate_hwid)" \
+                --header "X-Device-OS: OpenWrt Linux" \
+                --header "X-Device-Model: $(get_device_model)" \
+                --header "X-Ver-OS: $(get_kernel_version)" \
+                --header "Accept-Language: ru-RU,en,*" \
+                --header "X-Device-Locale: EN" \
+                "$url"
+        fi
+
+        if [ $? -eq 0 ] && [ -s "$tmpfile" ]; then
+            mv "$tmpfile" "$filepath"
+            return 0
+        fi
+
+        rm -f "$tmpfile"
+        log "Attempt $attempt/$retries to download subscription failed" "warn"
+        sleep "$wait"
+    done
+
+    rm -f "$tmpfile"
+    return 1
+}
+
+check_subscription_connectivity() {
+    local url="$1"
+    local http_proxy_address="$2"
+    local retries="${3:-3}"
+    local wait="${4:-2}"
+    local timeout="${5:-5}"
+    local attempt
+
+    for attempt in $(seq 1 "$retries"); do
+        if [ -n "$http_proxy_address" ]; then
+            http_proxy="http://$http_proxy_address" https_proxy="http://$http_proxy_address" \
+                wget -q -T "$timeout" -O /dev/null \
+                    --header "User-Agent: singbox/$(get_sing_box_version)" \
+                    --header "X-HWID: $(generate_hwid)" \
+                    --header "X-Device-OS: OpenWrt Linux" \
+                    --header "X-Device-Model: $(get_device_model)" \
+                    --header "X-Ver-OS: $(get_kernel_version)" \
+                    --header "Accept-Language: ru-RU,en,*" \
+                    --header "X-Device-Locale: EN" \
+                    "$url" && return 0
+        else
+            wget -q -T "$timeout" -O /dev/null \
+                --header "User-Agent: singbox/$(get_sing_box_version)" \
+                --header "X-HWID: $(generate_hwid)" \
+                --header "X-Device-OS: OpenWrt Linux" \
+                --header "X-Device-Model: $(get_device_model)" \
+                --header "X-Ver-OS: $(get_kernel_version)" \
+                --header "Accept-Language: ru-RU,en,*" \
+                --header "X-Device-Locale: EN" \
+                "$url" && return 0
+        fi
+
+        [ "$attempt" -lt "$retries" ] && sleep "$wait"
+    done
+
+    return 1
+}
+
+validate_subscription_file() {
+    local filepath="$1"
+
+    [ -s "$filepath" ] || return 1
+
+    jq -e '
+        type == "object" and
+        (.outbounds | type == "array") and
+        ((.outbounds | length) > 0)
+    ' "$filepath" > /dev/null 2>&1
+}
+
 # Converts Windows-style line endings (CRLF) to Unix-style (LF)
 convert_crlf_to_lf() {
     local filepath="$1"

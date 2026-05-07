@@ -68,7 +68,7 @@ function validateUrl(url, protocols = ["http:", "https:"]) {
       message: _("URL must use one of the following protocols:") + " " + protocols.join(", ")
     };
   const regex = new RegExp(
-    `^(?:${protocols.map((p) => p.replace(":", "")).join("|")})://(?:[A-Za-z0-9-]+\\.)+[A-Za-z]{2,}(?::\\d+)?(?:/[^\\s]*)?$`
+    `^(?:${protocols.map((p) => p.replace(":", "")).join("|")})://(?:(?:[A-Za-z0-9-]+\\.)+[A-Za-z]{2,}|(?:25[0-5]|2[0-4]\\d|1\\d\\d|[1-9]?\\d)(?:\\.(?:25[0-5]|2[0-4]\\d|1\\d\\d|[1-9]?\\d)){3}|localhost)(?::\\d+)?(?:/[^\\s]*)?$`
   );
   if (regex.test(url)) {
     return { valid: true, message: _("Valid") };
@@ -745,6 +745,7 @@ var Podkop;
     AvailableMethods2["CHECK_LOGS"] = "check_logs";
     AvailableMethods2["CHECK_SING_BOX_LOGS"] = "check_sing_box_logs";
     AvailableMethods2["GET_SYSTEM_INFO"] = "get_system_info";
+    AvailableMethods2["SUBSCRIPTION_UPDATE"] = "subscription_update";
   })(AvailableMethods = Podkop2.AvailableMethods || (Podkop2.AvailableMethods = {}));
   let AvailableClashAPIMethods;
   ((AvailableClashAPIMethods2) => {
@@ -826,7 +827,8 @@ var PodkopShellMethods = {
   checkSingBoxLogs: async () => callBaseMethod(Podkop.AvailableMethods.CHECK_SING_BOX_LOGS),
   getSystemInfo: async () => callBaseMethod(
     Podkop.AvailableMethods.GET_SYSTEM_INFO
-  )
+  ),
+  subscriptionUpdate: async () => callBaseMethod(Podkop.AvailableMethods.SUBSCRIPTION_UPDATE)
 };
 
 // src/podkop/methods/custom/getDashboardSections.ts
@@ -977,6 +979,70 @@ async function getDashboardSections() {
           },
           ...outbounds
         ]
+      };
+    }
+    if (proxyConfigType === "subscription") {
+      const selector = proxies.find(
+        (proxy) => proxy.code === `${section[".name"]}-out`
+      );
+      const fallbackUrltest = proxies.find(
+        (proxy) => proxy.code === `${section[".name"]}-urltest-out`
+      );
+      const selectorOutbounds = (selector?.value?.all ?? []).flatMap(
+        (code) => {
+          const item = proxies.find((proxy) => proxy.code === code);
+          if (!item) {
+            return [];
+          }
+          const isDefaultFastest = item.code === `${section[".name"]}-urltest-out`;
+          return [
+            {
+              code: item.code,
+              displayName: isDefaultFastest ? _("Fastest") : item?.value?.name || "",
+              latency: item?.value?.history?.[0]?.delay || 0,
+              type: item?.value?.type || "",
+              selected: selector?.value?.now === item.code
+            }
+          ];
+        }
+      );
+      const outbounds = [
+        ...selectorOutbounds.filter(
+          (item) => item.type?.toLowerCase() === "urltest"
+        ),
+        ...selectorOutbounds.filter(
+          (item) => item.type?.toLowerCase() !== "urltest"
+        )
+      ];
+      if (outbounds.length === 0 && fallbackUrltest) {
+        const fallbackOutbounds = (fallbackUrltest?.value?.all ?? []).map((code) => proxies.find((item) => item.code === code)).map((item) => ({
+          code: item?.code || "",
+          displayName: item?.value?.name || "",
+          latency: item?.value?.history?.[0]?.delay || 0,
+          type: item?.value?.type || "",
+          selected: selector?.value?.now === item?.code
+        }));
+        return {
+          withTagSelect: true,
+          code: selector?.code || section[".name"],
+          displayName,
+          outbounds: [
+            {
+              code: fallbackUrltest?.code || "",
+              displayName: _("Fastest"),
+              latency: fallbackUrltest?.value?.history?.[0]?.delay || 0,
+              type: fallbackUrltest?.value?.type || "",
+              selected: selector?.value?.now === fallbackUrltest?.code
+            },
+            ...fallbackOutbounds
+          ]
+        };
+      }
+      return {
+        withTagSelect: true,
+        code: selector?.code || section[".name"],
+        displayName,
+        outbounds
       };
     }
     if (proxyConfigType === "interface") {

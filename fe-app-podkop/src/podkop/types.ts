@@ -69,6 +69,7 @@ export namespace Podkop {
     CHECK_LOGS = 'check_logs',
     CHECK_SING_BOX_LOGS = 'check_sing_box_logs',
     GET_SYSTEM_INFO = 'get_system_info',
+    SUBSCRIPTION_UPDATE = 'subscription_update',
   }
 
   export enum AvailableClashAPIMethods {
@@ -100,7 +101,8 @@ export namespace Podkop {
     | 'selector'
     | 'url'
     | 'outbound'
-    | 'interface';
+    | 'interface'
+    | 'subscription';
 
   export interface ConfigSection {
     '.name': string;
@@ -117,6 +119,11 @@ export namespace Podkop {
     nfqws_opt?: string;
     selector_proxy_links?: string[];
     urltest_proxy_links?: string[];
+    subscription_url?: string;
+    subscription_update_interval?: string;
+    subscription_update_interval_disabled?: '0' | '1';
+    subscription_group_by_countries?: '0' | '1';
+    urltest_check_interval_disabled?: '0' | '1';
     outbound_json?: string;
     interface?: string;
     yacd_secret_key?: string;

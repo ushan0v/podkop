@@ -8,6 +8,9 @@ const validUrls = [
   ['With query', 'https://example.com/?q=test'],
   ['With port', 'http://example.com:8080'],
   ['With subdomain', 'https://sub.example.com'],
+  ['IPv4 host', 'http://127.0.0.1/podkop-subscription-test.json'],
+  ['IPv4 host with port', 'http://192.168.1.1:8080/sub'],
+  ['localhost host', 'http://localhost/sub'],
 ];
 
 const invalidUrls = [
@@ -17,6 +20,7 @@ const invalidUrls = [
   ['Unsupported protocol (ws)', 'ws://example.com'],
   ['Empty string', ''],
   ['Without tld', 'https://google'],
+  ['Invalid IPv4 host', 'http://999.0.0.1/sub'],
 ];
 
 describe('validateUrl', () => {

@@ -55,6 +55,12 @@ function renderSectionAdd(sectionRef, extra_class) {
   return el;
 }
 
+function getRuleEditButtonText() {
+  const label = _("Edit rule action");
+
+  return label === "Edit rule action" ? "Edit" : label;
+}
+
 function repaintRuleRowColors() {
   const container = document.getElementById(`cbi-${CBI_PREFIX}-rule`);
   if (!container) {
@@ -363,7 +369,7 @@ function configureGridSection(sectionRef, type, title, addTitle) {
       return form.TableSection.prototype.renderRowActions.call(
         this,
         section_id,
-        _("Edit", "Rule row action"),
+        getRuleEditButtonText(),
       );
     };
 

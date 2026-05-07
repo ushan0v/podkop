@@ -325,6 +325,86 @@ function validateKeyword(_section_id, value) {
   return true;
 }
 
+function isSingBoxDuration(value) {
+  return /^([0-9]+(?:\.[0-9]+)?(?:ns|us|ms|s|m|h|d))+$/.test(value);
+}
+
+function readDurationOptionWithDefault(section_id, key, defaultValue) {
+  if (uci.get(UCI_PACKAGE, section_id, `${key}_disabled`) === "1") {
+    return "";
+  }
+
+  const rawValue = uci.get(UCI_PACKAGE, section_id, key);
+
+  if (rawValue == null) {
+    return defaultValue;
+  }
+
+  return `${rawValue}`;
+}
+
+function writeOptionalDurationOption(section_id, key, value) {
+  const normalized = value ? `${value}`.trim() : "";
+  const disabledKey = `${key}_disabled`;
+
+  if (normalized.length) {
+    uci.set(UCI_PACKAGE, section_id, key, normalized);
+    uci.unset(UCI_PACKAGE, section_id, disabledKey);
+  } else {
+    uci.unset(UCI_PACKAGE, section_id, key);
+    uci.set(UCI_PACKAGE, section_id, disabledKey, "1");
+  }
+}
+
+function removeOptionalDurationOption(section_id, key) {
+  writeOptionalDurationOption(section_id, key, "");
+}
+
+function validateOptionalSingBoxDuration(value) {
+  const normalized = value ? `${value}`.trim() : "";
+
+  if (!normalized.length) {
+    return true;
+  }
+
+  if (isSingBoxDuration(normalized)) {
+    return true;
+  }
+
+  return _("Use sing-box duration format like 1d, 12h or 30m");
+}
+
+function parseRequiredValueOnSave(section_id) {
+  const active = this.isActive(section_id);
+
+  if (active && !this.isValid(section_id)) {
+    const title = this.stripTags(this.title).trim();
+    const error = this.getValidationError(section_id);
+    return Promise.reject(
+      new TypeError(
+        `${_("Option \"%s\" contains an invalid input value.").format(title || this.option)} ${error}`,
+      ),
+    );
+  }
+
+  if (active) {
+    const formValue = this.formvalue(section_id);
+    const normalized = formValue ? `${formValue}`.trim() : "";
+
+    if (!normalized.length) {
+      return Promise.reject(new TypeError(_("Subscription URL cannot be empty")));
+    }
+
+    return Promise.resolve(this.write(section_id, normalized));
+  }
+
+  if (!this.retain) {
+    return Promise.resolve(this.remove(section_id));
+  }
+
+  return Promise.resolve();
+}
+
 function getDuplicateTextListErrors(values, normalizeValue, duplicateMessage) {
   const seen = new Set();
   const duplicates = [];
@@ -472,12 +552,35 @@ function applyTextareaInputAttributes(textarea) {
   textarea.style.resize = "vertical";
   textarea.style.maxWidth = "100%";
 
+  const getRowsMinHeight = () => {
+    const rows = Number.parseInt(textarea.getAttribute("rows") || "0", 10);
+    if (!rows || typeof window === "undefined") {
+      return 0;
+    }
+
+    const style = window.getComputedStyle(textarea);
+    const fontSize = Number.parseFloat(style.fontSize) || 16;
+    const lineHeight =
+      Number.parseFloat(style.lineHeight) || Math.ceil(fontSize * 1.2);
+    const verticalPadding =
+      (Number.parseFloat(style.paddingTop) || 0) +
+      (Number.parseFloat(style.paddingBottom) || 0);
+    const verticalBorder =
+      (Number.parseFloat(style.borderTopWidth) || 0) +
+      (Number.parseFloat(style.borderBottomWidth) || 0);
+
+    return Math.ceil(rows * lineHeight + verticalPadding + verticalBorder);
+  };
+
   const applyMinHeight = () => {
     const storedMinHeight = Number.parseFloat(
       textarea.getAttribute("data-pdk-default-min-height") || "0",
     );
-    const nextMinHeight =
-      storedMinHeight > 0 ? storedMinHeight : textarea.offsetHeight;
+    const nextMinHeight = Math.max(
+      storedMinHeight,
+      textarea.offsetHeight,
+      getRowsMinHeight(),
+    );
 
     if (nextMinHeight > 0) {
       if (storedMinHeight <= 0) {
@@ -500,9 +603,14 @@ function applyTextareaInputAttributes(textarea) {
     typeof window.requestAnimationFrame === "function"
   ) {
     window.requestAnimationFrame(() => {
-      applyMinHeight();
+      if (!applyMinHeight()) {
+        window.setTimeout(applyMinHeight, 0);
+      }
     });
   }
+
+  textarea.addEventListener("focus", applyMinHeight);
+  textarea.addEventListener("pointerdown", applyMinHeight);
 }
 
 function syncAnnotatedTextareaOverlay(textarea, wrapper, overlay) {
@@ -1654,6 +1762,7 @@ function createSectionContent(section) {
   o.value("url", _("Connection URL"));
   o.value("selector", "Selector");
   o.value("urltest", "URLTest");
+  o.value("subscription", _("Subscription"));
   o.value("outbound", _("Outbound JSON"));
   o.value("interface", _("Interface"));
   o.default = "url";
@@ -1707,6 +1816,73 @@ function createSectionContent(section) {
 
   o = section.taboption(
     "settings",
+    form.Value,
+    "subscription_url",
+    _("Subscription URL"),
+    _("Enter the subscription URL to fetch proxy configurations from your provider"),
+  );
+  o.depends({ action: "proxy", proxy_config_type: "subscription" });
+  o.rmempty = true;
+  o.modalonly = true;
+  o.parse = parseRequiredValueOnSave;
+  o.validate = function (_section_id, value) {
+    if (!value || value.length === 0) {
+      return true;
+    }
+
+    const validation = main.validateUrl(value);
+    return validation.valid ? true : validation.message;
+  };
+
+  o = section.taboption(
+    "settings",
+    form.Value,
+    "subscription_update_interval",
+    _("Subscription update interval"),
+    _("Use sing-box duration format. Leave empty to disable automatic updates."),
+  );
+  o.default = "1h";
+  o.placeholder = "1h";
+  o.rmempty = true;
+  o.forcewrite = true;
+  o.retain = true;
+  o.depends({ action: "proxy", proxy_config_type: "subscription" });
+  o.modalonly = true;
+  o.cfgvalue = function (section_id) {
+    return readDurationOptionWithDefault(
+      section_id,
+      "subscription_update_interval",
+      "1h",
+    );
+  };
+  o.write = function (section_id, value) {
+    writeOptionalDurationOption(
+      section_id,
+      "subscription_update_interval",
+      value,
+    );
+  };
+  o.remove = function (section_id) {
+    removeOptionalDurationOption(section_id, "subscription_update_interval");
+  };
+  o.validate = function (_section_id, value) {
+    return validateOptionalSingBoxDuration(value);
+  };
+
+  o = section.taboption(
+    "settings",
+    form.Flag,
+    "subscription_group_by_countries",
+    _("Group subscription proxies by country"),
+    _("Group subscription proxies by the country flag at the beginning of the outbound tag"),
+  );
+  o.default = "0";
+  o.rmempty = false;
+  o.depends({ action: "proxy", proxy_config_type: "subscription" });
+  o.modalonly = true;
+
+  o = section.taboption(
+    "settings",
     form.DynamicList,
     "selector_proxy_links",
     _("Selector connections"),
@@ -1743,18 +1919,35 @@ function createSectionContent(section) {
 
   o = section.taboption(
     "settings",
-    form.ListValue,
+    form.Value,
     "urltest_check_interval",
     _("URLTest interval"),
+    _("Use sing-box duration format. Leave empty to disable periodic URLTest checks."),
   );
-  o.value("30s", _("Every 30 seconds"));
-  o.value("1m", _("Every minute"));
-  o.value("3m", _("Every 3 minutes"));
-  o.value("5m", _("Every 5 minutes"));
   o.default = "3m";
-  o.rmempty = false;
+  o.placeholder = "3m";
+  o.rmempty = true;
+  o.forcewrite = true;
+  o.retain = true;
   o.depends({ action: "proxy", proxy_config_type: "urltest" });
+  o.depends({ action: "proxy", proxy_config_type: "subscription" });
   o.modalonly = true;
+  o.cfgvalue = function (section_id) {
+    return readDurationOptionWithDefault(
+      section_id,
+      "urltest_check_interval",
+      "3m",
+    );
+  };
+  o.write = function (section_id, value) {
+    writeOptionalDurationOption(section_id, "urltest_check_interval", value);
+  };
+  o.remove = function (section_id) {
+    removeOptionalDurationOption(section_id, "urltest_check_interval");
+  };
+  o.validate = function (_section_id, value) {
+    return validateOptionalSingBoxDuration(value);
+  };
 
   o = section.taboption(
     "settings",
@@ -1766,6 +1959,7 @@ function createSectionContent(section) {
   o.default = "50";
   o.rmempty = false;
   o.depends({ action: "proxy", proxy_config_type: "urltest" });
+  o.depends({ action: "proxy", proxy_config_type: "subscription" });
   o.modalonly = true;
   o.validate = function (_section_id, value) {
     if (!value || value.length === 0) {
@@ -1808,6 +2002,7 @@ function createSectionContent(section) {
   o.default = "https://www.gstatic.com/generate_204";
   o.rmempty = false;
   o.depends({ action: "proxy", proxy_config_type: "urltest" });
+  o.depends({ action: "proxy", proxy_config_type: "subscription" });
   o.modalonly = true;
   o.validate = function (_section_id, value) {
     if (!value || value.length === 0) {

@@ -21,7 +21,14 @@ export function validateUrl(
 
   const regex = new RegExp(
     `^(?:${protocols.map((p) => p.replace(':', '')).join('|')})://` +
-      `(?:[A-Za-z0-9-]+\\.)+[A-Za-z]{2,}(?::\\d+)?(?:/[^\\s]*)?$`,
+      `(?:` +
+      `(?:[A-Za-z0-9-]+\\.)+[A-Za-z]{2,}` +
+      `|` +
+      `(?:25[0-5]|2[0-4]\\d|1\\d\\d|[1-9]?\\d)(?:\\.(?:25[0-5]|2[0-4]\\d|1\\d\\d|[1-9]?\\d)){3}` +
+      `|` +
+      `localhost` +
+      `)` +
+      `(?::\\d+)?(?:/[^\\s]*)?$`,
   );
 
   if (regex.test(url)) {
