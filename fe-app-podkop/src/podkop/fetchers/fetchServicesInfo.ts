@@ -3,6 +3,7 @@ import { logger, store } from '../services';
 import { Podkop } from '../types';
 
 let latestServicesInfoRequestId = 0;
+let latestPodkopStatusRequestId = 0;
 
 function getSettledMethodResponse<T>(
   scope: string,
@@ -63,19 +64,31 @@ export async function fetchServicesInfo() {
 }
 
 export async function fetchPodkopStatus() {
+  const requestId = ++latestPodkopStatusRequestId;
   const podkop = await PodkopShellMethods.getStatus();
 
+  if (requestId !== latestPodkopStatusRequestId) {
+    return podkop.success ? podkop.data : null;
+  }
+
   const previous = store.get().servicesInfoWidget;
+  const previousData = previous.data;
 
   store.set({
     servicesInfoWidget: {
       loading: false,
       failed: !podkop.success,
       data: {
-        ...previous.data,
-        podkopRunning: podkop.success ? podkop.data.running : 0,
-        podkopEnabled: podkop.success ? podkop.data.enabled : 0,
-        podkopStatus: podkop.success ? podkop.data.status : '',
+        ...previousData,
+        podkopRunning: podkop.success
+          ? podkop.data.running
+          : previousData.podkopRunning,
+        podkopEnabled: podkop.success
+          ? podkop.data.enabled
+          : previousData.podkopEnabled,
+        podkopStatus: podkop.success
+          ? podkop.data.status
+          : previousData.podkopStatus || 'unknown',
         podkopLifecycleState: podkop.success
           ? podkop.data.lifecycle_state || 'unknown'
           : 'unknown',

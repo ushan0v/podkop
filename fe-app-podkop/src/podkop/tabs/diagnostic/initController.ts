@@ -21,6 +21,10 @@ import { PODKOP_LUCI_APP_VERSION } from '../../../constants';
 import { showToast } from '../../../helpers/showToast';
 import { renderWikiDisclaimer } from './partials/renderWikiDisclaimer';
 import { runSectionsCheck } from './checks/runSectionsCheck';
+import {
+  compareReleaseVersions,
+  isDevVersion,
+} from '../../../helpers/compareReleaseVersions';
 
 const UNKNOWN_DIAGNOSTICS_SYSTEM_INFO = {
   podkop_version: _('unknown'),
@@ -235,13 +239,7 @@ async function handleDisable() {
 }
 
 async function handleShowGlobalCheck() {
-  const diagnosticsActions = store.get().diagnosticsActions;
-  store.set({
-    diagnosticsActions: {
-      ...diagnosticsActions,
-      globalCheck: { loading: true },
-    },
-  });
+  setDiagnosticActionLoading('globalCheck', true);
 
   try {
     const globalCheck = await PodkopShellMethods.globalCheck();
@@ -259,23 +257,12 @@ async function handleShowGlobalCheck() {
     logger.error('[DIAGNOSTIC]', 'handleShowGlobalCheck - e', e);
     showToast(_('Failed to execute!'), 'error');
   } finally {
-    store.set({
-      diagnosticsActions: {
-        ...diagnosticsActions,
-        globalCheck: { loading: false },
-      },
-    });
+    setDiagnosticActionLoading('globalCheck', false);
   }
 }
 
 async function handleViewLogs() {
-  const diagnosticsActions = store.get().diagnosticsActions;
-  store.set({
-    diagnosticsActions: {
-      ...diagnosticsActions,
-      viewLogs: { loading: true },
-    },
-  });
+  setDiagnosticActionLoading('viewLogs', true);
 
   try {
     const viewLogs = await PodkopShellMethods.checkLogs();
@@ -309,23 +296,12 @@ async function handleViewLogs() {
     logger.error('[DIAGNOSTIC]', 'handleViewLogs - e', e);
     showToast(_('Failed to execute!'), 'error');
   } finally {
-    store.set({
-      diagnosticsActions: {
-        ...diagnosticsActions,
-        viewLogs: { loading: false },
-      },
-    });
+    setDiagnosticActionLoading('viewLogs', false);
   }
 }
 
 async function handleShowSingBoxConfig() {
-  const diagnosticsActions = store.get().diagnosticsActions;
-  store.set({
-    diagnosticsActions: {
-      ...diagnosticsActions,
-      showSingBoxConfig: { loading: true },
-    },
-  });
+  setDiagnosticActionLoading('showSingBoxConfig', true);
 
   try {
     const showSingBoxConfig = await PodkopShellMethods.showSingBoxConfig();
@@ -350,12 +326,7 @@ async function handleShowSingBoxConfig() {
     logger.error('[DIAGNOSTIC]', 'handleShowSingBoxConfig - e', e);
     showToast(_('Failed to execute!'), 'error');
   } finally {
-    store.set({
-      diagnosticsActions: {
-        ...diagnosticsActions,
-        showSingBoxConfig: { loading: false },
-      },
-    });
+    setDiagnosticActionLoading('showSingBoxConfig', false);
   }
 }
 
@@ -407,7 +378,8 @@ function renderDiagnosticAvailableActionsWidget() {
     servicesInfoWidget.loading ||
     lifecycleBusy ||
     atLeastOneMutatingActionLoading;
-  const utilityActionsDisabled = lifecycleBusy || atLeastOneMutatingActionLoading;
+  const utilityActionsDisabled =
+    lifecycleBusy || atLeastOneMutatingActionLoading;
   const startVisible =
     isStarting ||
     (!podkopRunning && !isStopping && !isRestarting && !isReloading);
@@ -415,7 +387,8 @@ function renderDiagnosticAvailableActionsWidget() {
     isStopping ||
     (podkopRunning && !isStarting && !isRestarting && !isReloading);
   const frozenStartStop =
-    restartLoading && (restartStartStopSnapshot || (podkopRunning ? 'stop' : 'start'));
+    restartLoading &&
+    (restartStartStopSnapshot || (podkopRunning ? 'stop' : 'start'));
 
   const container = document.getElementById('pdk_diagnostic-page-actions');
 
@@ -427,13 +400,17 @@ function renderDiagnosticAvailableActionsWidget() {
       disabled: serviceControlsDisabled,
     },
     start: {
-      loading: frozenStartStop ? false : diagnosticsActions.start.loading || isStarting,
+      loading: frozenStartStop
+        ? false
+        : diagnosticsActions.start.loading || isStarting,
       visible: frozenStartStop ? frozenStartStop === 'start' : startVisible,
       onClick: handleStart,
       disabled: serviceControlsDisabled,
     },
     stop: {
-      loading: frozenStartStop ? false : diagnosticsActions.stop.loading || isStopping,
+      loading: frozenStartStop
+        ? false
+        : diagnosticsActions.stop.loading || isStopping,
       visible: frozenStartStop ? frozenStartStop === 'stop' : stopVisible,
       onClick: handleStop,
       disabled: serviceControlsDisabled,
@@ -492,16 +469,54 @@ function renderDiagnosticSystemInfoWidget() {
     );
     const latestVersion =
       `${diagnosticsSystemInfo.podkop_latest_version || ''}`.replace(/^v/, '');
-    const isDevVersion = version === 'dev';
 
-    if (loading || unknown || !hasActualVersion || isDevVersion) {
+    if (loading) {
       return {
         key: 'Podkop Plus',
         value: version,
+        tag: {
+          label: _('Checking'),
+          kind: 'neutral',
+        },
       };
     }
 
-    if (`${version}`.replace(/^v/, '') !== latestVersion) {
+    if (isDevVersion(version)) {
+      return {
+        key: 'Podkop Plus',
+        value: version,
+        tag: {
+          label: _('Dev'),
+          kind: 'neutral',
+        },
+      };
+    }
+
+    if (unknown || !hasActualVersion) {
+      return {
+        key: 'Podkop Plus',
+        value: version,
+        tag: {
+          label: _('Check unavailable'),
+          kind: 'neutral',
+        },
+      };
+    }
+
+    const versionCompareResult = compareReleaseVersions(version, latestVersion);
+
+    if (versionCompareResult === null) {
+      return {
+        key: 'Podkop Plus',
+        value: version,
+        tag: {
+          label: _('Check unavailable'),
+          kind: 'neutral',
+        },
+      };
+    }
+
+    if (versionCompareResult < 0) {
       logger.debug(
         '[DIAGNOSTIC]',
         'diagnosticsSystemInfo',
@@ -513,6 +528,17 @@ function renderDiagnosticSystemInfoWidget() {
         tag: {
           label: _('Outdated'),
           kind: 'warning',
+        },
+      };
+    }
+
+    if (versionCompareResult > 0) {
+      return {
+        key: 'Podkop Plus',
+        value: version,
+        tag: {
+          label: _('Dev'),
+          kind: 'neutral',
         },
       };
     }
@@ -543,8 +569,8 @@ function renderDiagnosticSystemInfoWidget() {
         value: diagnosticsSystemInfo.loading
           ? 'loading'
           : diagnosticsSystemInfo.zapret_installed
-          ? diagnosticsSystemInfo.zapret_version
-          : _('not installed'),
+            ? diagnosticsSystemInfo.zapret_version
+            : _('not installed'),
       },
       {
         key: 'OS',

@@ -2129,6 +2129,7 @@ function prettyBytes(n) {
 
 // src/podkop/fetchers/fetchServicesInfo.ts
 var latestServicesInfoRequestId = 0;
+var latestPodkopStatusRequestId = 0;
 function getSettledMethodResponse(scope, result) {
   if (result.status === "fulfilled") {
     return result.value;
@@ -2171,17 +2172,22 @@ async function fetchServicesInfo() {
   });
 }
 async function fetchPodkopStatus() {
+  const requestId = ++latestPodkopStatusRequestId;
   const podkop = await PodkopShellMethods.getStatus();
+  if (requestId !== latestPodkopStatusRequestId) {
+    return podkop.success ? podkop.data : null;
+  }
   const previous = store.get().servicesInfoWidget;
+  const previousData = previous.data;
   store.set({
     servicesInfoWidget: {
       loading: false,
       failed: !podkop.success,
       data: {
-        ...previous.data,
-        podkopRunning: podkop.success ? podkop.data.running : 0,
-        podkopEnabled: podkop.success ? podkop.data.enabled : 0,
-        podkopStatus: podkop.success ? podkop.data.status : "",
+        ...previousData,
+        podkopRunning: podkop.success ? podkop.data.running : previousData.podkopRunning,
+        podkopEnabled: podkop.success ? podkop.data.enabled : previousData.podkopEnabled,
+        podkopStatus: podkop.success ? podkop.data.status : previousData.podkopStatus || "unknown",
         podkopLifecycleState: podkop.success ? podkop.data.lifecycle_state || "unknown" : "unknown",
         podkopLifecycleAction: podkop.success ? podkop.data.lifecycle_action || "none" : "none",
         podkopLifecycleBusy: podkop.success ? podkop.data.lifecycle_busy || 0 : 0
@@ -4266,6 +4272,9 @@ function renderSystemInfo({ items }) {
     ...items.map((item) => {
       const tagClass = [
         "pdk_diagnostic-page__right-bar__system-info__row__tag",
+        ...insertIf(item.tag?.kind === "neutral", [
+          "pdk_diagnostic-page__right-bar__system-info__row__tag--neutral"
+        ]),
         ...insertIf(item.tag?.kind === "warning", [
           "pdk_diagnostic-page__right-bar__system-info__row__tag--warning"
         ]),
@@ -4428,6 +4437,44 @@ async function runSectionsCheck() {
   if (!atLeastOneGood) {
     throw new Error("Rule outbounds checks failed");
   }
+}
+
+// src/helpers/compareReleaseVersions.ts
+function normalizeReleaseVersion(version) {
+  return version.trim().replace(/^v/i, "");
+}
+function parseReleaseVersion(version) {
+  const normalized = normalizeReleaseVersion(version);
+  const match = normalized.match(/^(\d+(?:\.\d+)*)(?:-(\d+))?$/);
+  if (!match) {
+    return null;
+  }
+  const baseParts = match[1].split(".").map((part) => Number(part));
+  const releasePart = match[2] ? Number(match[2]) : 0;
+  const parts = [...baseParts, releasePart];
+  return parts.every((part) => Number.isSafeInteger(part)) ? parts : null;
+}
+function compareReleaseVersions(currentVersion, latestVersion) {
+  const currentParts = parseReleaseVersion(currentVersion);
+  const latestParts = parseReleaseVersion(latestVersion);
+  if (!currentParts || !latestParts) {
+    return null;
+  }
+  const length = Math.max(currentParts.length, latestParts.length);
+  for (let index = 0; index < length; index += 1) {
+    const currentPart = currentParts[index] ?? 0;
+    const latestPart = latestParts[index] ?? 0;
+    if (currentPart < latestPart) {
+      return -1;
+    }
+    if (currentPart > latestPart) {
+      return 1;
+    }
+  }
+  return 0;
+}
+function isDevVersion(version) {
+  return version === "dev" || /(?:^|[.+-])dev(?:$|[.+-])/i.test(version) || version.includes("COMPILED");
 }
 
 // src/podkop/tabs/diagnostic/initController.ts
@@ -4598,13 +4645,7 @@ async function handleDisable() {
   }
 }
 async function handleShowGlobalCheck() {
-  const diagnosticsActions = store.get().diagnosticsActions;
-  store.set({
-    diagnosticsActions: {
-      ...diagnosticsActions,
-      globalCheck: { loading: true }
-    }
-  });
+  setDiagnosticActionLoading("globalCheck", true);
   try {
     const globalCheck = await PodkopShellMethods.globalCheck();
     if (globalCheck.success) {
@@ -4620,22 +4661,11 @@ async function handleShowGlobalCheck() {
     logger.error("[DIAGNOSTIC]", "handleShowGlobalCheck - e", e);
     showToast(_("Failed to execute!"), "error");
   } finally {
-    store.set({
-      diagnosticsActions: {
-        ...diagnosticsActions,
-        globalCheck: { loading: false }
-      }
-    });
+    setDiagnosticActionLoading("globalCheck", false);
   }
 }
 async function handleViewLogs() {
-  const diagnosticsActions = store.get().diagnosticsActions;
-  store.set({
-    diagnosticsActions: {
-      ...diagnosticsActions,
-      viewLogs: { loading: true }
-    }
-  });
+  setDiagnosticActionLoading("viewLogs", true);
   try {
     const viewLogs = await PodkopShellMethods.checkLogs();
     if (viewLogs.success) {
@@ -4664,22 +4694,11 @@ async function handleViewLogs() {
     logger.error("[DIAGNOSTIC]", "handleViewLogs - e", e);
     showToast(_("Failed to execute!"), "error");
   } finally {
-    store.set({
-      diagnosticsActions: {
-        ...diagnosticsActions,
-        viewLogs: { loading: false }
-      }
-    });
+    setDiagnosticActionLoading("viewLogs", false);
   }
 }
 async function handleShowSingBoxConfig() {
-  const diagnosticsActions = store.get().diagnosticsActions;
-  store.set({
-    diagnosticsActions: {
-      ...diagnosticsActions,
-      showSingBoxConfig: { loading: true }
-    }
-  });
+  setDiagnosticActionLoading("showSingBoxConfig", true);
   try {
     const showSingBoxConfig = await PodkopShellMethods.showSingBoxConfig();
     if (showSingBoxConfig.success) {
@@ -4702,12 +4721,7 @@ async function handleShowSingBoxConfig() {
     logger.error("[DIAGNOSTIC]", "handleShowSingBoxConfig - e", e);
     showToast(_("Failed to execute!"), "error");
   } finally {
-    store.set({
-      diagnosticsActions: {
-        ...diagnosticsActions,
-        showSingBoxConfig: { loading: false }
-      }
-    });
+    setDiagnosticActionLoading("showSingBoxConfig", false);
   }
 }
 function renderWikiDisclaimerWidget() {
@@ -4813,14 +4827,48 @@ function renderDiagnosticSystemInfoWidget() {
       diagnosticsSystemInfo.podkop_version
     );
     const latestVersion = `${diagnosticsSystemInfo.podkop_latest_version || ""}`.replace(/^v/, "");
-    const isDevVersion = version === "dev";
-    if (loading || unknown || !hasActualVersion || isDevVersion) {
+    if (loading) {
       return {
         key: "Podkop Plus",
-        value: version
+        value: version,
+        tag: {
+          label: _("Checking"),
+          kind: "neutral"
+        }
       };
     }
-    if (`${version}`.replace(/^v/, "") !== latestVersion) {
+    if (isDevVersion(version)) {
+      return {
+        key: "Podkop Plus",
+        value: version,
+        tag: {
+          label: _("Dev"),
+          kind: "neutral"
+        }
+      };
+    }
+    if (unknown || !hasActualVersion) {
+      return {
+        key: "Podkop Plus",
+        value: version,
+        tag: {
+          label: _("Check unavailable"),
+          kind: "neutral"
+        }
+      };
+    }
+    const versionCompareResult = compareReleaseVersions(version, latestVersion);
+    if (versionCompareResult === null) {
+      return {
+        key: "Podkop Plus",
+        value: version,
+        tag: {
+          label: _("Check unavailable"),
+          kind: "neutral"
+        }
+      };
+    }
+    if (versionCompareResult < 0) {
       logger.debug(
         "[DIAGNOSTIC]",
         "diagnosticsSystemInfo",
@@ -4832,6 +4880,16 @@ function renderDiagnosticSystemInfoWidget() {
         tag: {
           label: _("Outdated"),
           kind: "warning"
+        }
+      };
+    }
+    if (versionCompareResult > 0) {
+      return {
+        key: "Podkop Plus",
+        value: version,
+        tag: {
+          label: _("Dev"),
+          kind: "neutral"
         }
       };
     }
@@ -5090,6 +5148,11 @@ var styles4 = `
     border: 1px transparent solid;
     border-radius: 4px;
     margin-left: 5px;
+}
+
+.pdk_diagnostic-page__right-bar__system-info__row__tag--neutral {
+    border: 1px var(--background-color-high, gray) solid;
+    color: var(--text-color-medium, gray);
 }
 
 .pdk_diagnostic-page__right-bar__system-info__row__tag--warning {

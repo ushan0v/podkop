@@ -93,6 +93,11 @@ export const styles = `
     margin-left: 5px;
 }
 
+.pdk_diagnostic-page__right-bar__system-info__row__tag--neutral {
+    border: 1px var(--background-color-high, gray) solid;
+    color: var(--text-color-medium, gray);
+}
+
 .pdk_diagnostic-page__right-bar__system-info__row__tag--warning {
     border: 1px var(--warn-color-medium, orange) solid;
     color: var(--warn-color-medium, orange);

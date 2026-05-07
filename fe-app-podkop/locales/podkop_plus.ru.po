@@ -1,15 +1,15 @@
 # RU translations for PODKOP PLUS package.
 # Copyright (C) 2026 THE PODKOP PLUS COPYRIGHT HOLDER
 # This file is distributed under the same license as the PODKOP PLUS package.
-# Automatically generated, 2026.
+# ushan0v, 2026.
 #
 msgid ""
 msgstr ""
 "Project-Id-Version: PODKOP PLUS\n"
 "Report-Msgid-Bugs-To: \n"
-"POT-Creation-Date: 2026-05-07 12:30+0300\n"
-"PO-Revision-Date: 2026-05-07 12:30+0300\n"
-"Last-Translator: Automatically generated\n"
+"POT-Creation-Date: 2026-05-07 15:24+0300\n"
+"PO-Revision-Date: 2026-05-07 15:24+0300\n"
+"Last-Translator: ushan0v\n"
 "Language-Team: none\n"
 "Language: ru\n"
 "MIME-Version: 1.0\n"
@@ -107,6 +107,9 @@ msgstr "Путь к файлу кэша не может быть пустым"
 msgid "Cannot receive checks result"
 msgstr "Не удалось получить результаты проверки"
 
+msgid "Checking"
+msgstr "Проверка"
+
 msgid "Checking, please wait"
 msgstr "Проверяем, пожалуйста подождите"
 
@@ -163,6 +166,9 @@ msgstr "Задержка в миллисекундах перед перезап
 
 msgid "Delay value cannot be empty"
 msgstr "Значение задержки не может быть пустым"
+
+msgid "Dev"
+msgstr "Dev"
 
 msgid "DHCP has DNS server"
 msgstr "DHCP содержит DNS сервер"
@@ -997,6 +1003,9 @@ msgstr "Валидно"
 
 msgid "Validation errors:"
 msgstr "Ошибки валидации:"
+
+msgid "Check unavailable"
+msgstr "Проверка недоступна"
 
 msgid "View logs"
 msgstr "Посмотреть логи"

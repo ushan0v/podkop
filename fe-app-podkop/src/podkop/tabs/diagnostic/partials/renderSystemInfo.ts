@@ -5,7 +5,7 @@ export interface IRenderSystemInfoRow {
   value: string;
   tag?: {
     label: string;
-    kind: 'warning' | 'success';
+    kind: 'neutral' | 'warning' | 'success';
   };
 }
 
@@ -23,6 +23,9 @@ export function renderSystemInfo({ items }: IRenderSystemInfoProps) {
     ...items.map((item) => {
       const tagClass = [
         'pdk_diagnostic-page__right-bar__system-info__row__tag',
+        ...insertIf(item.tag?.kind === 'neutral', [
+          'pdk_diagnostic-page__right-bar__system-info__row__tag--neutral',
+        ]),
         ...insertIf(item.tag?.kind === 'warning', [
           'pdk_diagnostic-page__right-bar__system-info__row__tag--warning',
         ]),

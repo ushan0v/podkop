@@ -5134,7 +5134,7 @@ show_system_info() {
 fetch_latest_podkop_version() {
     command -v curl >/dev/null 2>&1 || return 1
 
-    curl --connect-timeout 1 -m 2 -fsSL "https://api.github.com/repos/$PODKOP_RELEASE_REPO/releases/latest" 2>/dev/null |
+    curl --connect-timeout 2 -m 5 -fsSL "https://api.github.com/repos/$PODKOP_RELEASE_REPO/releases/latest" 2>/dev/null |
         sed -n 's/^[[:space:]]*"tag_name":[[:space:]]*"\([^"]*\)".*/\1/p' |
         head -n 1
 }
@@ -5169,7 +5169,7 @@ refresh_podkop_latest_version_cache() {
 get_podkop_latest_version() {
     local cache_file="/tmp/podkop-plus.latest-version.cache"
     local cache_ttl=21600
-    local now cache_value cache_timestamp cache_is_recent
+    local now cache_value cache_timestamp cache_is_recent fetched_value
 
     now="$(date +%s 2>/dev/null)"
     cache_value="$(sed -n '1p' "$cache_file" 2>/dev/null)"
@@ -5189,16 +5189,20 @@ get_podkop_latest_version() {
         cache_is_recent=1
     fi
 
-    if [ "$cache_is_recent" -eq 1 ] &&
-        is_min_package_version "$cache_value" "$PODKOP_VERSION"; then
+    if [ "$cache_is_recent" -eq 1 ]; then
         echo "$cache_value"
         return 0
     fi
 
-    (refresh_podkop_latest_version_cache) >/dev/null 2>&1 &
+    fetched_value="$(fetch_latest_podkop_version)"
+    if [ -n "$fetched_value" ]; then
+        now="$(date +%s 2>/dev/null)"
+        case "$now" in
+        '' | *[!0-9]*) now=0 ;;
+        esac
 
-    if [ "$cache_is_recent" -eq 1 ] && [ -n "$cache_value" ]; then
-        echo "$PODKOP_VERSION"
+        write_podkop_latest_version_cache "$fetched_value" "$now"
+        echo "$fetched_value"
         return 0
     fi
 
@@ -5220,7 +5224,7 @@ get_luci_app_version() {
 }
 
 system_info_cache_is_valid() {
-    local now cached_at cached_latest latest_cache_value luci_app_version
+    local now cached_at cached_latest luci_app_version
 
     [ -s "$PODKOP_SYSTEM_INFO_CACHE_FILE" ] || return 1
     jq -e . "$PODKOP_SYSTEM_INFO_CACHE_FILE" >/dev/null 2>&1 || return 1
@@ -5248,11 +5252,7 @@ system_info_cache_is_valid() {
         "$PODKOP_SYSTEM_INFO_CACHE_FILE" >/dev/null 2>&1 || return 1
 
     cached_latest="$(jq -r '.podkop_latest_version // "unknown"' "$PODKOP_SYSTEM_INFO_CACHE_FILE" 2>/dev/null)"
-    latest_cache_value="$(sed -n '1p' /tmp/podkop-plus.latest-version.cache 2>/dev/null)"
-
-    if [ "$cached_latest" = "unknown" ] && [ -n "$latest_cache_value" ]; then
-        return 1
-    fi
+    [ "$cached_latest" = "unknown" ] && return 1
 
     return 0
 }
@@ -5461,6 +5461,11 @@ get_status() {
             lifecycle_updated_at="$stored_updated_at"
             lifecycle_pid="$stored_pid"
         elif [ "$stored_state" = "failed" ] && [ "$running" -eq 0 ]; then
+            lifecycle_state="failed"
+            lifecycle_action="${stored_action:-none}"
+            lifecycle_updated_at="$stored_updated_at"
+            lifecycle_pid="$stored_pid"
+        elif [ "$stored_state" = "running" ] && [ "$running" -eq 0 ]; then
             lifecycle_state="failed"
             lifecycle_action="${stored_action:-none}"
             lifecycle_updated_at="$stored_updated_at"
@@ -5747,17 +5752,8 @@ check_sing_box() {
         version=$(sing-box version 2> /dev/null | head -n 1 | awk '{print $3}')
         if [ -n "$version" ]; then
             version=$(echo "$version" | sed 's/^v//')
-            local major
-            local minor
-            local patch
-            major=$(echo "$version" | cut -d. -f1)
-            minor=$(echo "$version" | cut -d. -f2)
-            patch=$(echo "$version" | cut -d. -f3)
 
-            # Compare version: must be >= 1.12.4
-            if [ "$major" -gt 1 ] ||
-                [ "$major" -eq 1 ] && [ "$minor" -gt 12 ] ||
-                [ "$major" -eq 1 ] && [ "$minor" -eq 12 ] && [ "$patch" -ge 4 ]; then
+            if is_min_package_version "$version" "1.12.4"; then
                 sing_box_version_ok=1
             fi
         fi
