@@ -7,8 +7,8 @@ msgid ""
 msgstr ""
 "Project-Id-Version: PODKOP PLUS\n"
 "Report-Msgid-Bugs-To: \n"
-"POT-Creation-Date: 2026-05-07 15:24+0300\n"
-"PO-Revision-Date: 2026-05-07 15:24+0300\n"
+"POT-Creation-Date: 2026-05-11 00:41+0300\n"
+"PO-Revision-Date: 2026-05-11 00:41+0300\n"
 "Last-Translator: ushan0v\n"
 "Language-Team: none\n"
 "Language: ru\n"
@@ -107,6 +107,9 @@ msgstr "Путь к файлу кэша не может быть пустым"
 msgid "Cannot receive checks result"
 msgstr "Не удалось получить результаты проверки"
 
+msgid "Check unavailable"
+msgstr "Проверка недоступна"
+
 msgid "Checking"
 msgstr "Проверка"
 
@@ -151,6 +154,9 @@ msgstr "URL подключения"
 
 msgid "Copy"
 msgstr "Копировать"
+
+msgid "Copy proxy link"
+msgstr "Скопировать ссылку прокси"
 
 msgid "Currently unavailable"
 msgstr "Временно недоступно"
@@ -296,8 +302,8 @@ msgstr "Включить доступ YACD WAN"
 msgid "Enter a complete sing-box outbound object"
 msgstr "Введите полный объект outbound sing-box"
 
-msgid "Enter the subscription URL to fetch proxy configurations from your provider"
-msgstr "Введите URL подписки для получения конфигураций прокси от провайдера"
+msgid "Enter the subscription URL"
+msgstr "Введите URL подписки"
 
 msgid "Every 3 minutes"
 msgstr "Каждые 3 минуты"
@@ -674,6 +680,9 @@ msgstr "Порт локального смешанного прокси для �
 msgid "Proxy Configuration URL"
 msgstr "URL конфигурации прокси"
 
+msgid "Proxy link is unavailable"
+msgstr "Ссылка прокси недоступна"
+
 msgid "Proxy traffic is not routed via FakeIP"
 msgstr "Прокси-трафик не маршрутизируется через FakeIP"
 
@@ -1003,9 +1012,6 @@ msgstr "Валидно"
 
 msgid "Validation errors:"
 msgstr "Ошибки валидации:"
-
-msgid "Check unavailable"
-msgstr "Проверка недоступна"
 
 msgid "View logs"
 msgstr "Посмотреть логи"

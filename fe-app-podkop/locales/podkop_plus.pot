@@ -7,8 +7,8 @@ msgid ""
 msgstr ""
 "Project-Id-Version: PODKOP PLUS\n"
 "Report-Msgid-Bugs-To: \n"
-"POT-Creation-Date: 2026-05-07 12:24+0300\n"
-"PO-Revision-Date: 2026-05-07 12:24+0300\n"
+"POT-Creation-Date: 2026-05-11 21:41+0300\n"
+"PO-Revision-Date: 2026-05-11 21:41+0300\n"
 "Last-Translator: ushan0v <142658494+ushan0v@users.noreply.github.com>\n"
 "Language-Team: LANGUAGE <LL@li.org>\n"
 "Language: \n"
@@ -16,19 +16,19 @@ msgstr ""
 "Content-Type: text/plain; charset=UTF-8\n"
 "Content-Transfer-Encoding: 8bit\n"
 
-#: src/podkop/tabs/dashboard/initController.ts:345
-#: src/podkop/tabs/dashboard/initController.ts:356
-#: src/podkop/tabs/dashboard/initController.ts:369
+#: src/podkop/tabs/dashboard/initController.ts:387
+#: src/podkop/tabs/dashboard/initController.ts:398
+#: src/podkop/tabs/dashboard/initController.ts:411
 msgid "✔ Running"
 msgstr ""
 
-#: src/podkop/tabs/dashboard/initController.ts:367
+#: src/podkop/tabs/dashboard/initController.ts:409
 msgid "✘ Not installed"
 msgstr ""
 
-#: src/podkop/tabs/dashboard/initController.ts:346
-#: src/podkop/tabs/dashboard/initController.ts:357
-#: src/podkop/tabs/dashboard/initController.ts:370
+#: src/podkop/tabs/dashboard/initController.ts:388
+#: src/podkop/tabs/dashboard/initController.ts:399
+#: src/podkop/tabs/dashboard/initController.ts:412
 msgid "✘ Stopped"
 msgstr ""
 
@@ -53,7 +53,7 @@ msgstr ""
 msgid "Action"
 msgstr ""
 
-#: src/podkop/tabs/dashboard/initController.ts:307
+#: src/podkop/tabs/dashboard/initController.ts:349
 msgid "Active Connections"
 msgstr ""
 
@@ -146,7 +146,12 @@ msgstr ""
 msgid "Cannot receive checks result"
 msgstr ""
 
-#: src/podkop/tabs/diagnostic/initController.ts:472
+#: src/podkop/tabs/diagnostic/initController.ts:503
+#: src/podkop/tabs/diagnostic/initController.ts:516
+msgid "Check unavailable"
+msgstr ""
+
+#: src/podkop/tabs/diagnostic/initController.ts:481
 msgid "Checking"
 msgstr ""
 
@@ -216,6 +221,11 @@ msgstr ""
 msgid "Copy"
 msgstr ""
 
+#: src/podkop/tabs/dashboard/partials/renderSections.ts:93
+#: src/podkop/tabs/dashboard/partials/renderSections.ts:94
+msgid "Copy proxy link"
+msgstr ""
+
 #: src/podkop/tabs/dashboard/partials/renderWidget.ts:22
 msgid "Currently unavailable"
 msgstr ""
@@ -224,7 +234,7 @@ msgstr ""
 msgid "Dashboard"
 msgstr ""
 
-#: src/podkop/tabs/dashboard/partials/renderSections.ts:19
+#: src/podkop/tabs/dashboard/partials/renderSections.ts:24
 msgid "Dashboard currently unavailable"
 msgstr ""
 
@@ -236,8 +246,8 @@ msgstr ""
 msgid "Delay value cannot be empty"
 msgstr ""
 
-#: src/podkop/tabs/diagnostic/initController.ts:483
-#: src/podkop/tabs/diagnostic/initController.ts:534
+#: src/podkop/tabs/diagnostic/initController.ts:492
+#: src/podkop/tabs/diagnostic/initController.ts:543
 msgid "Dev"
 msgstr ""
 
@@ -339,8 +349,8 @@ msgstr ""
 msgid "Dont Touch My DHCP!"
 msgstr ""
 
-#: src/podkop/tabs/dashboard/initController.ts:241
-#: src/podkop/tabs/dashboard/initController.ts:275
+#: src/podkop/tabs/dashboard/initController.ts:283
+#: src/podkop/tabs/dashboard/initController.ts:317
 msgid "Downlink"
 msgstr ""
 
@@ -422,7 +432,7 @@ msgid "Enter a complete sing-box outbound object"
 msgstr ""
 
 #: ../luci-app-podkop-plus/htdocs/luci-static/resources/view/podkop/section.js:1822
-msgid "Enter the subscription URL to fetch proxy configurations from your provider"
+msgid "Enter the subscription URL"
 msgstr ""
 
 #: ../luci-app-podkop-plus/htdocs/luci-static/resources/view/podkop/node.js:103
@@ -478,9 +488,9 @@ msgstr ""
 msgid "Failed to execute!"
 msgstr ""
 
-#: src/podkop/methods/custom/getDashboardSections.ts:188
-#: src/podkop/methods/custom/getDashboardSections.ts:220
-#: src/podkop/methods/custom/getDashboardSections.ts:257
+#: src/podkop/methods/custom/getDashboardSections.ts:193
+#: src/podkop/methods/custom/getDashboardSections.ts:225
+#: src/podkop/methods/custom/getDashboardSections.ts:263
 #: src/podkop/tabs/diagnostic/checks/runSectionsCheck.ts:59
 msgid "Fastest"
 msgstr ""
@@ -733,7 +743,7 @@ msgstr ""
 msgid "Keyword must not contain spaces"
 msgstr ""
 
-#: src/podkop/tabs/diagnostic/initController.ts:544
+#: src/podkop/tabs/diagnostic/initController.ts:553
 msgid "Latest"
 msgstr ""
 
@@ -790,7 +800,7 @@ msgstr ""
 msgid "Maximum response time delta in milliseconds"
 msgstr ""
 
-#: src/podkop/tabs/dashboard/initController.ts:311
+#: src/podkop/tabs/dashboard/initController.ts:353
 msgid "Memory Usage"
 msgstr ""
 
@@ -839,7 +849,7 @@ msgstr ""
 msgid "Not implement yet"
 msgstr ""
 
-#: src/podkop/tabs/diagnostic/initController.ts:567
+#: src/podkop/tabs/diagnostic/initController.ts:576
 msgid "not installed"
 msgstr ""
 
@@ -885,7 +895,7 @@ msgstr ""
 msgid "Outbound JSON"
 msgstr ""
 
-#: src/podkop/tabs/diagnostic/initController.ts:523
+#: src/podkop/tabs/diagnostic/initController.ts:532
 msgid "Outdated"
 msgstr ""
 
@@ -956,6 +966,10 @@ msgstr ""
 
 #: ../luci-app-podkop-plus/htdocs/luci-static/resources/view/podkop/node.js:31
 msgid "Proxy Configuration URL"
+msgstr ""
+
+#: src/podkop/tabs/dashboard/initController.ts:202
+msgid "Proxy link is unavailable"
 msgstr ""
 
 #: src/podkop/tabs/diagnostic/checks/runFakeIPCheck.ts:68
@@ -1114,7 +1128,7 @@ msgstr ""
 msgid "Service list"
 msgstr ""
 
-#: src/podkop/tabs/dashboard/initController.ts:340
+#: src/podkop/tabs/dashboard/initController.ts:382
 msgid "Services info"
 msgstr ""
 
@@ -1216,7 +1230,7 @@ msgstr ""
 msgid "Successfully copied!"
 msgstr ""
 
-#: src/podkop/tabs/dashboard/initController.ts:304
+#: src/podkop/tabs/dashboard/initController.ts:346
 msgid "System info"
 msgstr ""
 
@@ -1228,7 +1242,7 @@ msgstr ""
 msgid "Table exist"
 msgstr ""
 
-#: src/podkop/tabs/dashboard/partials/renderSections.ts:108
+#: src/podkop/tabs/dashboard/partials/renderSections.ts:139
 msgid "Test latency"
 msgstr ""
 
@@ -1268,11 +1282,11 @@ msgstr ""
 msgid "Time in seconds for DNS record caching (default: 60)"
 msgstr ""
 
-#: src/podkop/tabs/dashboard/initController.ts:238
+#: src/podkop/tabs/dashboard/initController.ts:280
 msgid "Traffic"
 msgstr ""
 
-#: src/podkop/tabs/dashboard/initController.ts:268
+#: src/podkop/tabs/dashboard/initController.ts:310
 msgid "Traffic Total"
 msgstr ""
 
@@ -1324,7 +1338,7 @@ msgstr ""
 #: src/podkop/tabs/diagnostic/initController.ts:34
 #: src/podkop/tabs/diagnostic/initController.ts:36
 #: src/podkop/tabs/diagnostic/initController.ts:37
-#: src/podkop/tabs/diagnostic/initController.ts:457
+#: src/podkop/tabs/diagnostic/initController.ts:466
 msgid "unknown"
 msgstr ""
 
@@ -1340,8 +1354,8 @@ msgstr ""
 msgid "Update interval"
 msgstr ""
 
-#: src/podkop/tabs/dashboard/initController.ts:240
-#: src/podkop/tabs/dashboard/initController.ts:271
+#: src/podkop/tabs/dashboard/initController.ts:282
+#: src/podkop/tabs/dashboard/initController.ts:313
 msgid "Uplink"
 msgstr ""
 
@@ -1425,11 +1439,6 @@ msgstr ""
 #: ../luci-app-podkop-plus/htdocs/luci-static/resources/view/podkop/section.js:476
 #: ../luci-app-podkop-plus/htdocs/luci-static/resources/view/podkop/section.js:480
 msgid "Validation errors:"
-msgstr ""
-
-#: src/podkop/tabs/diagnostic/initController.ts:494
-#: src/podkop/tabs/diagnostic/initController.ts:507
-msgid "Check unavailable"
 msgstr ""
 
 #: src/podkop/tabs/diagnostic/initController.ts:282

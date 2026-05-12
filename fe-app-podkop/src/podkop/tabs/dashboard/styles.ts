@@ -9,7 +9,7 @@ export const styles = `
 #cbi-${PODKOP_CBI_PREFIX}-dashboard > h3 {
     display: none;
 }
-    
+
 .pdk_dashboard-page {
     width: 100%;
     --dashboard-grid-columns: 4;
@@ -92,6 +92,37 @@ export const styles = `
 
 .pdk_dashboard-page__outbound-grid__item--active {
     border-color: var(--success-color-medium, green);
+}
+
+.pdk_dashboard-page__outbound-grid__item__header {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 8px;
+}
+
+.pdk_dashboard-page__outbound-grid__item__header b {
+    min-width: 0;
+    line-height: 1.25;
+    overflow-wrap: anywhere;
+}
+
+.pdk_dashboard-page__outbound-grid__item__copy-button {
+    width: 22px;
+    height: 22px;
+    min-width: 22px;
+    min-height: 22px;
+    padding: 1px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    flex: 0 0 auto;
+    line-height: 1;
+}
+
+.pdk_dashboard-page__outbound-grid__item__copy-button svg {
+    width: 13px;
+    height: 13px;
 }
 
 .pdk_dashboard-page__outbound-grid__item__footer {

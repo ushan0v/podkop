@@ -19,6 +19,7 @@ check_required_file "$PODKOP_LIB/helpers.sh"
 check_required_file "$PODKOP_LIB/zapret.sh"
 check_required_file "$PODKOP_LIB/sing_box_config_manager.sh"
 check_required_file "$PODKOP_LIB/sing_box_config_facade.sh"
+check_required_file "$PODKOP_LIB/subscription_parser.sh"
 check_required_file "$PODKOP_LIB/logging.sh"
 check_required_file "$PODKOP_LIB/rulesets.sh"
 . /lib/functions.sh
@@ -30,6 +31,7 @@ check_required_file "$PODKOP_LIB/rulesets.sh"
 . "$PODKOP_LIB/zapret.sh"
 . "$PODKOP_LIB/sing_box_config_manager.sh"
 . "$PODKOP_LIB/sing_box_config_facade.sh"
+. "$PODKOP_LIB/subscription_parser.sh"
 . "$PODKOP_LIB/logging.sh"
 . "$PODKOP_LIB/rulesets.sh"
 
@@ -38,8 +40,12 @@ PODKOP_RUNTIME_STATE_DIR="/var/run/podkop-plus"
 PODKOP_RUNTIME_STATUS_FILE="$PODKOP_RUNTIME_STATE_DIR/status"
 PODKOP_SYSTEM_INFO_CACHE_FILE="$PODKOP_RUNTIME_STATE_DIR/system-info.json"
 PODKOP_RELOAD_STATE_FILE="$PODKOP_RUNTIME_STATE_DIR/reload-state"
+PODKOP_PENDING_RELOAD_FILE="$PODKOP_RUNTIME_STATE_DIR/reload.pending"
 PODKOP_LIST_UPDATE_STATE_FILE="$PODKOP_RUNTIME_STATE_DIR/list-update.timestamp"
 PODKOP_SUBSCRIPTION_UPDATE_STATE_DIR="$PODKOP_RUNTIME_STATE_DIR/subscription-update"
+PODKOP_SUBSCRIPTION_LINKS_DIR="$PODKOP_RUNTIME_STATE_DIR/subscription-links"
+PODKOP_SUBSCRIPTION_UPDATE_LOCK_DIR="$PODKOP_RUNTIME_STATE_DIR/subscription-update.lock"
+PODKOP_RELOAD_LOCK_DIR="/var/run/podkop-plus.reload.lock"
 PODKOP_LIST_UPDATE_CRON_MARKER="# podkop-plus-list-update"
 PODKOP_SUBSCRIPTION_UPDATE_CRON_MARKER="# podkop-plus-subscription-update"
 # sing-box falls back to 1d when update_interval is empty, so use a large
@@ -60,6 +66,7 @@ ensure_runtime_dirs() {
     mkdir -p "$TMP_SUBSCRIPTION_FOLDER"
     mkdir -p "$PODKOP_RUNTIME_STATE_DIR"
     mkdir -p "$PODKOP_SUBSCRIPTION_UPDATE_STATE_DIR"
+    mkdir -p "$PODKOP_SUBSCRIPTION_LINKS_DIR"
 }
 
 get_subscription_json_path() {
@@ -80,6 +87,37 @@ get_subscription_update_timestamp_path() {
     echo "$PODKOP_SUBSCRIPTION_UPDATE_STATE_DIR/${section}.timestamp"
 }
 
+get_subscription_links_path() {
+    local section="$1"
+
+    echo "$PODKOP_SUBSCRIPTION_LINKS_DIR/${section}.json"
+}
+
+write_subscription_outbound_links() {
+    local section="$1"
+    local links_json="$2"
+    local links_path tmpfile
+
+    mkdir -p "$PODKOP_SUBSCRIPTION_LINKS_DIR"
+    links_path="$(get_subscription_links_path "$section")"
+    tmpfile="${links_path}.$$"
+
+    if [ -n "$links_json" ] && printf '%s' "$links_json" | jq -e 'type == "object"' >/dev/null 2>&1; then
+        printf '%s\n' "$links_json" > "$tmpfile" && mv "$tmpfile" "$links_path"
+    else
+        rm -f "$links_path" "$tmpfile"
+    fi
+}
+
+subscription_url_is_current() {
+    local section="$1"
+    local subscription_url="$2"
+    local current_subscription_url
+
+    current_subscription_url="$(uci -q get "$PODKOP_CONFIG_NAME.$section.subscription_url" 2>/dev/null)"
+    [ "$current_subscription_url" = "$subscription_url" ]
+}
+
 subscription_cache_is_usable() {
     local subscription_json_path="$1"
 
@@ -92,7 +130,7 @@ wait_for_subscription_connectivity() {
     local section="$1"
     local subscription_url="$2"
     local service_proxy_address="$3"
-    local attempts="${4:-12}"
+    local attempts="${4:-3}"
     local wait="${5:-5}"
     local timeout="${6:-5}"
     local attempt
@@ -117,34 +155,51 @@ download_subscription_into_cache() {
     local subscription_json_path="$3"
     local subscription_url_cache_path="$4"
     local service_proxy_address="$5"
-    local tmpfile
+    local raw_tmpfile normalized_tmpfile
 
     mkdir -p "$TMP_SUBSCRIPTION_FOLDER"
-    tmpfile="$(mktemp "$TMP_SUBSCRIPTION_FOLDER/${section}.download.XXXXXX")" || return 1
+    raw_tmpfile="$(mktemp "$TMP_SUBSCRIPTION_FOLDER/${section}.download.XXXXXX")" || return 1
+    normalized_tmpfile="$(mktemp "$TMP_SUBSCRIPTION_FOLDER/${section}.normalized.XXXXXX")" || {
+        rm -f "$raw_tmpfile"
+        return 1
+    }
 
-    if ! download_subscription "$subscription_url" "$tmpfile" "$service_proxy_address" 3 2 10; then
-        rm -f "$tmpfile"
+    if ! download_subscription "$subscription_url" "$raw_tmpfile" "$service_proxy_address" 3 2 10; then
+        rm -f "$raw_tmpfile" "$normalized_tmpfile"
         return 1
     fi
 
-    if ! validate_subscription_file "$tmpfile"; then
+    if ! normalize_subscription_file "$raw_tmpfile" "$normalized_tmpfile" "$section"; then
         log "Downloaded subscription for rule '$section' is invalid" "error"
-        rm -f "$tmpfile"
+        rm -f "$raw_tmpfile" "$normalized_tmpfile"
         return 1
     fi
 
-    if [ -f "$subscription_json_path" ] && cmp -s "$tmpfile" "$subscription_json_path"; then
-        rm -f "$tmpfile"
+    if ! validate_subscription_file "$normalized_tmpfile"; then
+        log "Normalized subscription for rule '$section' is invalid" "error"
+        rm -f "$raw_tmpfile" "$normalized_tmpfile"
+        return 1
+    fi
+
+    if ! subscription_url_is_current "$section" "$subscription_url"; then
+        log "Subscription URL changed while updating rule '$section'; discarding superseded download" "warn"
+        rm -f "$raw_tmpfile" "$normalized_tmpfile"
+        return 4
+    fi
+
+    if [ -f "$subscription_json_path" ] && cmp -s "$normalized_tmpfile" "$subscription_json_path"; then
+        rm -f "$raw_tmpfile" "$normalized_tmpfile"
         printf '%s' "$subscription_url" > "$subscription_url_cache_path"
         log "Subscription for rule '$section' is unchanged" "info"
         return 2
     fi
 
-    mv "$tmpfile" "$subscription_json_path" || {
-        rm -f "$tmpfile"
+    mv "$normalized_tmpfile" "$subscription_json_path" || {
+        rm -f "$raw_tmpfile" "$normalized_tmpfile"
         return 1
     }
 
+    rm -f "$raw_tmpfile"
     printf '%s' "$subscription_url" > "$subscription_url_cache_path"
     return 0
 }
@@ -165,7 +220,7 @@ rule_is_subscription_proxy() {
 prepare_subscription_cache_for_startup() {
     local section="$1"
     local subscription_url subscription_json_path subscription_url_cache_path cached_subscription_url
-    local service_proxy_address had_usable_cache cache_needs_refresh
+    local had_usable_cache cache_needs_refresh
 
     rule_is_subscription_proxy "$section" || return 0
 
@@ -197,17 +252,13 @@ prepare_subscription_cache_for_startup() {
 
     [ "$cache_needs_refresh" -eq 0 ] && return 0
 
-    service_proxy_address="$(get_service_proxy_address 2>/dev/null || echo '')"
+    download_subscription_into_cache \
+        "$section" "$subscription_url" "$subscription_json_path" "$subscription_url_cache_path" ""
+    case "$?" in
+    0 | 2) return 0 ;;
+    esac
 
-    if wait_for_subscription_connectivity "$section" "$subscription_url" "$service_proxy_address"; then
-        download_subscription_into_cache \
-            "$section" "$subscription_url" "$subscription_json_path" "$subscription_url_cache_path" "$service_proxy_address"
-        case "$?" in
-        0 | 2) return 0 ;;
-        esac
-    fi
-
-    if [ "$had_usable_cache" -eq 1 ]; then
+    if [ "$had_usable_cache" -eq 1 ] && [ "$cached_subscription_url" = "$subscription_url" ]; then
         log "Keeping cached subscription for rule '$section' until a fresh download succeeds" "warn"
         return 0
     fi
@@ -226,6 +277,60 @@ prepare_subscription_caches_for_startup() {
 
 close_inherited_service_lock_fd() {
     exec 1000>&- 2>/dev/null || true
+}
+
+acquire_runtime_dir_lock() {
+    local lock_dir="$1"
+    local owner_pid
+
+    if mkdir "$lock_dir" 2>/dev/null; then
+        printf '%s\n' "$$" > "$lock_dir/pid"
+        return 0
+    fi
+
+    owner_pid="$(sed -n '1p' "$lock_dir/pid" 2>/dev/null)"
+    if [ -n "$owner_pid" ] && kill -0 "$owner_pid" 2>/dev/null; then
+        return 1
+    fi
+
+    rm -f "$lock_dir/pid" 2>/dev/null
+    rmdir "$lock_dir" 2>/dev/null || return 1
+    mkdir "$lock_dir" 2>/dev/null || return 1
+    printf '%s\n' "$$" > "$lock_dir/pid"
+}
+
+release_runtime_dir_lock() {
+    local lock_dir="$1"
+
+    rm -f "$lock_dir/pid" 2>/dev/null
+    rmdir "$lock_dir" 2>/dev/null
+}
+
+mark_pending_reload() {
+    local reason="${1:-pending}"
+    local now
+
+    ensure_runtime_dirs
+    now="$(date +%s 2>/dev/null)"
+    case "$now" in
+    '' | *[!0-9]*) now=0 ;;
+    esac
+
+    {
+        printf 'reason=%s\n' "$reason"
+        printf 'updated_at=%s\n' "$now"
+    } > "$PODKOP_PENDING_RELOAD_FILE"
+}
+
+consume_pending_reload() {
+    [ -f "$PODKOP_PENDING_RELOAD_FILE" ] || return 1
+    rm -f "$PODKOP_PENDING_RELOAD_FILE" 2>/dev/null
+}
+
+run_pending_reload_if_requested() {
+    consume_pending_reload || return 0
+    echolog "Applying pending Podkop reload"
+    "$PODKOP_SERVICE_INIT" reload pending >/dev/null 2>&1 &
 }
 
 sync_time_if_needed() {
@@ -313,7 +418,7 @@ runtime_status_read_value() {
 
 runtime_status_is_transition() {
     case "$1" in
-    starting | stopping | restarting | reloading)
+    starting | stopping | restarting | reloading | updating_subscription)
         return 0
         ;;
     esac
@@ -338,8 +443,19 @@ runtime_status_transition_is_active() {
     '' | *[!0-9]*) now=0 ;;
     esac
 
-    [ "$now" -gt 0 ] || return 0
+    case "$pid" in
+    '' | *[!0-9]*)
+        [ "$now" -gt 0 ] || return 0
+        ;;
+    *)
+        if [ "$state" = "updating_subscription" ]; then
+            kill -0 "$pid" 2>/dev/null
+            return "$?"
+        fi
+        ;;
+    esac
 
+    [ "$now" -gt 0 ] || return 0
     age=$((now - updated_at))
     [ "$age" -ge 0 ] || return 1
     [ "$age" -le "$PODKOP_RUNTIME_TRANSITION_MAX_AGE" ] || return 1
@@ -2505,7 +2621,77 @@ build_list_update_cron_job() {
 }
 
 build_subscription_update_cron_job() {
-    printf '* * * * * %s subscription_update_if_due %s\n' "$PODKOP_BIN" "$PODKOP_SUBSCRIPTION_UPDATE_CRON_MARKER"
+    local min_interval_seconds cron_schedule
+
+    SUBSCRIPTION_MIN_UPDATE_INTERVAL_SECONDS=0
+    config_foreach collect_subscription_update_interval_seconds "rule"
+
+    [ "$SUBSCRIPTION_MIN_UPDATE_INTERVAL_SECONDS" -gt 0 ] || return 1
+
+    min_interval_seconds="$SUBSCRIPTION_MIN_UPDATE_INTERVAL_SECONDS"
+    cron_schedule="$(seconds_to_subscription_cron_schedule "$min_interval_seconds")"
+    printf '%s %s subscription_update_if_due %s\n' "$cron_schedule" "$PODKOP_BIN" "$PODKOP_SUBSCRIPTION_UPDATE_CRON_MARKER"
+}
+
+collect_subscription_update_interval_seconds() {
+    local section="$1"
+    local subscription_update_interval interval_seconds
+
+    rule_is_subscription_proxy "$section" || return 0
+
+    subscription_update_interval="$(get_subscription_update_interval_for_rule "$section")"
+    [ -n "$subscription_update_interval" ] || return 0
+
+    interval_seconds="$(duration_to_seconds "$subscription_update_interval")" || {
+        log "Invalid subscription_update_interval value for rule '$section': $subscription_update_interval" "error"
+        return 0
+    }
+
+    if [ "$SUBSCRIPTION_MIN_UPDATE_INTERVAL_SECONDS" -eq 0 ] ||
+        [ "$interval_seconds" -lt "$SUBSCRIPTION_MIN_UPDATE_INTERVAL_SECONDS" ]; then
+        SUBSCRIPTION_MIN_UPDATE_INTERVAL_SECONDS="$interval_seconds"
+    fi
+}
+
+seconds_to_subscription_cron_schedule() {
+    local seconds="$1"
+    local minutes hours
+
+    if [ "$seconds" -le 60 ]; then
+        printf '* * * * *\n'
+        return 0
+    fi
+
+    if [ $((seconds % 86400)) -eq 0 ]; then
+        printf '0 0 * * *\n'
+        return 0
+    fi
+
+    if [ $((seconds % 3600)) -eq 0 ]; then
+        hours=$((seconds / 3600))
+        if [ "$hours" -ge 1 ] && [ "$hours" -le 23 ]; then
+            if [ "$hours" -eq 1 ]; then
+                printf '0 * * * *\n'
+            else
+                printf '0 */%s * * *\n' "$hours"
+            fi
+            return 0
+        fi
+    fi
+
+    if [ $((seconds % 60)) -eq 0 ]; then
+        minutes=$((seconds / 60))
+        if [ "$minutes" -ge 1 ] && [ "$minutes" -le 59 ]; then
+            if [ "$minutes" -eq 1 ]; then
+                printf '* * * * *\n'
+            else
+                printf '*/%s * * * *\n' "$minutes"
+            fi
+            return 0
+        fi
+    fi
+
+    printf '* * * * *\n'
 }
 
 remove_cron_job() {
@@ -2786,7 +2972,7 @@ subscription_update_section_is_due() {
 subscription_update_section() {
     local section="$1"
     local force="$2"
-    local subscription_url subscription_json_path subscription_url_cache_path service_proxy_address update_result
+    local subscription_url subscription_json_path subscription_url_cache_path update_result
     local outbounds_count now
 
     rule_is_subscription_proxy "$section" || return 3
@@ -2809,27 +2995,21 @@ subscription_update_section() {
     mkdir -p "$TMP_SUBSCRIPTION_FOLDER"
     subscription_json_path="$(get_subscription_json_path "$section")"
     subscription_url_cache_path="$(get_subscription_url_cache_path "$section")"
-    service_proxy_address="$(get_service_proxy_address 2>/dev/null || echo '')"
 
     echolog "Updating subscription for rule '$section'..."
 
-    if ! wait_for_subscription_connectivity "$section" "$subscription_url" "$service_proxy_address" 6 5 5; then
-        echolog "Failed to download subscription for rule '$section'"
-        return 1
-    fi
-
     download_subscription_into_cache \
-        "$section" "$subscription_url" "$subscription_json_path" "$subscription_url_cache_path" "$service_proxy_address"
+        "$section" "$subscription_url" "$subscription_json_path" "$subscription_url_cache_path" ""
     update_result=$?
-
-    now="$(date +%s 2>/dev/null)"
-    case "$now" in
-    '' | *[!0-9]*) ;;
-    *) write_subscription_update_timestamp "$section" "$now" ;;
-    esac
 
     case "$update_result" in
     0)
+        now="$(date +%s 2>/dev/null)"
+        case "$now" in
+        '' | *[!0-9]*) ;;
+        *) write_subscription_update_timestamp "$section" "$now" ;;
+        esac
+
         outbounds_count=$(jq -r '[.outbounds[] | select(
             .type != "selector" and
             .type != "urltest" and
@@ -2841,8 +3021,18 @@ subscription_update_section() {
         return 0
         ;;
     2)
+        now="$(date +%s 2>/dev/null)"
+        case "$now" in
+        '' | *[!0-9]*) ;;
+        *) write_subscription_update_timestamp "$section" "$now" ;;
+        esac
+
         echolog "Subscription for rule '$section' is unchanged"
         return 2
+        ;;
+    4)
+        echolog "Subscription update for rule '$section' was superseded by a newer URL"
+        return 4
         ;;
     *)
         echolog "Failed to download subscription for rule '$section'"
@@ -2862,24 +3052,28 @@ subscription_update_handler() {
     0) SUBSCRIPTION_UPDATED_SECTIONS=$((SUBSCRIPTION_UPDATED_SECTIONS + 1)) ;;
     1) SUBSCRIPTION_FAILED_SECTIONS=$((SUBSCRIPTION_FAILED_SECTIONS + 1)) ;;
     2) SUBSCRIPTION_UNCHANGED_SECTIONS=$((SUBSCRIPTION_UNCHANGED_SECTIONS + 1)) ;;
+    4) SUBSCRIPTION_SUPERSEDED_SECTIONS=$((SUBSCRIPTION_SUPERSEDED_SECTIONS + 1)) ;;
     3) ;;
     esac
 }
 
-subscription_update_common() {
+subscription_update_common_locked() {
     local force="$1"
-
-    config_load "$PODKOP_CONFIG_NAME"
-    ensure_runtime_dirs
 
     SUBSCRIPTION_UPDATE_FORCE="$force"
     SUBSCRIPTION_UPDATED_SECTIONS=0
     SUBSCRIPTION_FAILED_SECTIONS=0
     SUBSCRIPTION_UNCHANGED_SECTIONS=0
+    SUBSCRIPTION_SUPERSEDED_SECTIONS=0
 
     config_foreach subscription_update_handler "rule"
 
     if [ "$SUBSCRIPTION_UPDATED_SECTIONS" -eq 0 ]; then
+        if [ "$SUBSCRIPTION_SUPERSEDED_SECTIONS" -gt 0 ]; then
+            echolog "Subscription update was superseded by newer configuration"
+            return 0
+        fi
+
         if [ "$SUBSCRIPTION_FAILED_SECTIONS" -gt 0 ]; then
             echolog "Subscription update finished with errors; keeping the last working cache"
             return 1
@@ -2894,6 +3088,7 @@ subscription_update_common() {
     fi
 
     echolog "Reloading sing-box to apply updated subscriptions..."
+    config_load "$PODKOP_CONFIG_NAME"
     sing_box_configure_service
     PODKOP_NFT_POPULATE_ENABLED=0
     sing_box_init_config
@@ -2907,6 +3102,41 @@ subscription_update_common() {
     else
         echolog "Subscription update completed"
     fi
+}
+
+subscription_update_common() {
+    local force="$1"
+    local result
+
+    config_load "$PODKOP_CONFIG_NAME"
+    ensure_runtime_dirs
+
+    if ! acquire_runtime_dir_lock "$PODKOP_SUBSCRIPTION_UPDATE_LOCK_DIR"; then
+        echolog "Subscription update is already running"
+        [ "$force" -eq 1 ] && mark_pending_reload "subscription_update_busy"
+        return 0
+    fi
+
+    if ! acquire_runtime_dir_lock "$PODKOP_RELOAD_LOCK_DIR"; then
+        release_runtime_dir_lock "$PODKOP_SUBSCRIPTION_UPDATE_LOCK_DIR"
+        echolog "Podkop reload is already running; skipping subscription update"
+        [ "$force" -eq 1 ] && mark_pending_reload "reload_busy"
+        return 0
+    fi
+
+    runtime_status_write "updating_subscription" "subscription_update"
+    trap 'runtime_status_mark_failure "subscription_update"' EXIT INT TERM
+
+    subscription_update_common_locked "$force"
+    result=$?
+
+    trap - EXIT INT TERM
+    runtime_status_finish_action "subscription_update" "$result"
+
+    release_runtime_dir_lock "$PODKOP_RELOAD_LOCK_DIR"
+    release_runtime_dir_lock "$PODKOP_SUBSCRIPTION_UPDATE_LOCK_DIR"
+    run_pending_reload_if_requested
+    return "$result"
 }
 
 subscription_update_if_due() {
@@ -2956,11 +3186,11 @@ sing_box_init_config() {
     configured_rulesets=""
     sing_box_configure_log
     sing_box_configure_inbounds
-    sing_box_configure_outbounds
     sing_box_configure_dns
     sing_box_configure_route
     sing_box_configure_experimental
     sing_box_additional_inbounds
+    sing_box_configure_outbounds
     sing_box_save_config
 }
 
@@ -3036,6 +3266,57 @@ sing_box_build_subscription_country_groups() {
               end
         )
     ' 2>/dev/null
+}
+
+json_array_append_string() {
+    local array_json="$1"
+    local value="$2"
+    local array_tmp result jq_status
+
+    array_tmp="$(mktemp)" || return 1
+    printf '%s' "$array_json" > "$array_tmp" || {
+        rm -f "$array_tmp"
+        return 1
+    }
+
+    result="$(jq -cn --slurpfile array "$array_tmp" --arg value "$value" \
+        '($array[0] // []) + [$value]' 2>/dev/null)"
+    jq_status=$?
+    rm -f "$array_tmp"
+
+    [ "$jq_status" -eq 0 ] || return 1
+    [ -n "$result" ] || return 1
+    printf '%s\n' "$result"
+}
+
+json_arrays_concat() {
+    local first_json="$1"
+    local second_json="$2"
+    local first_tmp second_tmp result jq_status
+
+    first_tmp="$(mktemp)" || return 1
+    second_tmp="$(mktemp)" || {
+        rm -f "$first_tmp"
+        return 1
+    }
+
+    printf '%s' "$first_json" > "$first_tmp" || {
+        rm -f "$first_tmp" "$second_tmp"
+        return 1
+    }
+    printf '%s' "$second_json" > "$second_tmp" || {
+        rm -f "$first_tmp" "$second_tmp"
+        return 1
+    }
+
+    result="$(jq -cn --slurpfile first "$first_tmp" --slurpfile second "$second_tmp" \
+        '($first[0] // []) + ($second[0] // [])' 2>/dev/null)"
+    jq_status=$?
+    rm -f "$first_tmp" "$second_tmp"
+
+    [ "$jq_status" -eq 0 ] || return 1
+    [ -n "$result" ] || return 1
+    printf '%s\n' "$result"
 }
 
 is_truthy_option() {
@@ -3190,7 +3471,7 @@ configure_outbound_handler() {
             ;;
         subscription)
             local subscription_url subscription_json_path subscription_url_cache_path cached_subscription_url \
-                should_download had_usable_cache service_proxy_address urltest_tag selector_tag urltest_outbounds \
+                should_download had_usable_cache urltest_tag selector_tag urltest_outbounds \
                 selector_outbounds urltest_check_interval urltest_idle_timeout urltest_tolerance urltest_testing_url \
                 subscription_group_by_countries_raw subscription_group_by_countries subscription_outbound_tags_json \
                 update_result
@@ -3239,29 +3520,19 @@ configure_outbound_handler() {
                     log "Subscription URL changed for rule '$section'" "warn"
                 fi
 
-                if [ "$had_usable_cache" -eq 0 ]; then
-                    should_download=1
-                else
-                    log "Using cached subscription for rule '$section' until a fresh download succeeds" "warn"
-                fi
+                should_download=1
             fi
 
             if [ "$should_download" -eq 1 ]; then
                 log "Downloading subscription for rule '$section'"
-                service_proxy_address="$(get_service_proxy_address 2>/dev/null || echo '')"
-
-                if wait_for_subscription_connectivity "$section" "$subscription_url" "$service_proxy_address" 6 5 5; then
-                    download_subscription_into_cache \
-                        "$section" "$subscription_url" "$subscription_json_path" "$subscription_url_cache_path" "$service_proxy_address"
-                    update_result="$?"
-                else
-                    update_result=1
-                fi
+                download_subscription_into_cache \
+                    "$section" "$subscription_url" "$subscription_json_path" "$subscription_url_cache_path" ""
+                update_result="$?"
 
                 case "$update_result" in
                 0 | 2) ;;
                 *)
-                    if [ "$had_usable_cache" -eq 1 ]; then
+                    if [ "$had_usable_cache" -eq 1 ] && [ "$cached_subscription_url" = "$subscription_url" ]; then
                         log "Failed to refresh subscription for rule '$section', continuing with cached data" "warn"
                     else
                         log "Failed to download subscription for rule '$section'. Aborted." "fatal"
@@ -3276,6 +3547,7 @@ configure_outbound_handler() {
                 exit 1
             fi
             config="$SING_BOX_CF_LAST_CONFIG"
+            write_subscription_outbound_links "$section" "$SUBSCRIPTION_OUTBOUND_LINKS_JSON"
 
             if [ -z "$SUBSCRIPTION_OUTBOUND_TAGS" ]; then
                 log "No proxy outbounds found in subscription for rule '$section'. Aborted." "fatal"
@@ -3310,19 +3582,14 @@ configure_outbound_handler() {
                     config="$(sing_box_cm_add_urltest_outbound "$config" "$country_group_tag" "$country_group_outbounds" \
                         "$urltest_testing_url" "$urltest_check_interval" "$urltest_tolerance" "$urltest_idle_timeout")"
 
-                    selector_outbounds_json=$(
-                        printf '%s' "$selector_outbounds_json" | jq -ac --arg tag "$country_group_tag" '. + [$tag]' 2>/dev/null
-                    )
+                    selector_outbounds_json="$(json_array_append_string "$selector_outbounds_json" "$country_group_tag")"
                 done
 
                 [ -n "$selector_outbounds_json" ] || selector_outbounds_json="[]"
 
                 ungrouped_outbounds_json="$(echo "$grouping_json" | jq -c '.ungrouped // []' 2>/dev/null)"
                 if [ -n "$ungrouped_outbounds_json" ] && [ "$ungrouped_outbounds_json" != "[]" ]; then
-                    selector_outbounds_json=$(
-                        jq -acn --argjson selector "$selector_outbounds_json" --argjson ungrouped "$ungrouped_outbounds_json" \
-                            '$selector + $ungrouped' 2>/dev/null
-                    )
+                    selector_outbounds_json="$(json_arrays_concat "$selector_outbounds_json" "$ungrouped_outbounds_json")"
                 fi
 
                 if [ -z "$selector_outbounds_json" ] || [ "$selector_outbounds_json" = "[]" ]; then
@@ -3340,10 +3607,7 @@ configure_outbound_handler() {
             else
                 urltest_tag="$(get_outbound_tag_by_section "$section-urltest")"
                 urltest_outbounds="$subscription_outbound_tags_json"
-                selector_outbounds=$(
-                    jq -acn --argjson outbounds "$subscription_outbound_tags_json" --arg tag "$urltest_tag" \
-                        '$outbounds + [$tag]' 2>/dev/null
-                )
+                selector_outbounds="$(json_array_append_string "$subscription_outbound_tags_json" "$urltest_tag")"
                 if [ -z "$selector_outbounds" ]; then
                     log "Failed to build selector outbounds for subscription rule '$section'. Aborted." "fatal"
                     exit 1
@@ -5522,6 +5786,22 @@ get_status() {
         }'
 }
 
+get_outbound_link() {
+    local section="$1"
+    local outbound_tag="$2"
+    local links_path link
+
+    ensure_runtime_dirs
+    links_path="$(get_subscription_links_path "$section")"
+    link=""
+
+    if [ -f "$links_path" ]; then
+        link="$(jq -r --arg tag "$outbound_tag" '.[$tag] // empty' "$links_path" 2>/dev/null)"
+    fi
+
+    jq -cn --arg link "$link" '{link: $link}'
+}
+
 validate_nfqws_strategy_json() {
     local raw_opt="${1:-}"
 
@@ -6312,6 +6592,7 @@ Available commands:
     show_sing_box_version   Show sing-box version
     show_system_info        Show system information
     get_status              Get Podkop Plus service status
+    get_outbound_link       Get source proxy link for a generated outbound
     get_sing_box_status     Get sing-box service status
     get_zapret_status       Get zapret provider and Podkop-managed nfqws status
     get_system_info         Get system information in JSON format
@@ -6406,6 +6687,9 @@ show_system_info)
     ;;
 get_status)
     get_status
+    ;;
+get_outbound_link)
+    get_outbound_link "$2" "$3"
     ;;
 get_sing_box_status)
     get_sing_box_status

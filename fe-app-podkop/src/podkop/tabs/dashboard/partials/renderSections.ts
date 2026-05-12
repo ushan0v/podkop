@@ -1,3 +1,4 @@
+import { renderCopyIcon24 } from '../../../../icons';
 import { Podkop } from '../../../types';
 
 interface IRenderSectionsProps {
@@ -6,6 +7,10 @@ interface IRenderSectionsProps {
   section: Podkop.OutboundGroup;
   onTestLatency: (tag: string) => void;
   onChooseOutbound: (selector: string, tag: string) => void;
+  onCopyOutbound: (
+    section: Podkop.OutboundGroup,
+    outbound: Podkop.Outbound,
+  ) => void;
   latencyFetching: boolean;
 }
 
@@ -31,6 +36,7 @@ function renderLoadingState() {
 export function renderDefaultState({
   section,
   onChooseOutbound,
+  onCopyOutbound,
   onTestLatency,
   latencyFetching,
 }: IRenderSectionsProps) {
@@ -61,6 +67,10 @@ export function renderDefaultState({
       return 'pdk_dashboard-page__outbound-grid__item__latency--red';
     }
 
+    const canCopyLink =
+      outbound.type?.toLowerCase() !== 'urltest' &&
+      Boolean(outbound.code || outbound.link);
+
     return E(
       'div',
       {
@@ -70,7 +80,28 @@ export function renderDefaultState({
           onChooseOutbound(section.code, outbound.code),
       },
       [
-        E('b', {}, outbound.displayName),
+        E('div', { class: 'pdk_dashboard-page__outbound-grid__item__header' }, [
+          E('b', {}, outbound.displayName),
+          ...(canCopyLink
+            ? [
+                E(
+                  'button',
+                  {
+                    type: 'button',
+                    class:
+                      'btn pdk_dashboard-page__outbound-grid__item__copy-button',
+                    title: _('Copy proxy link'),
+                    'aria-label': _('Copy proxy link'),
+                    click: (event: MouseEvent) => {
+                      event.stopPropagation();
+                      onCopyOutbound(section, outbound);
+                    },
+                  },
+                  renderCopyIcon24(),
+                ),
+              ]
+            : []),
+        ]),
         E('div', { class: 'pdk_dashboard-page__outbound-grid__item__footer' }, [
           E(
             'div',

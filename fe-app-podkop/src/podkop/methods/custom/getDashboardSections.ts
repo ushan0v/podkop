@@ -59,12 +59,10 @@ export async function getDashboardSections(): Promise<IGetDashboardSectionsRespo
       value,
     }),
   );
-
   const data = configSections
     .filter(
       (section) =>
-        section.enabled !== '0' &&
-        getSectionAction(section) === 'proxy',
+        section.enabled !== '0' && getSectionAction(section) === 'proxy',
     )
     .map((section) => {
       const displayName = getDisplayName(section);
@@ -82,6 +80,7 @@ export async function getDashboardSections(): Promise<IGetDashboardSectionsRespo
         return {
           withTagSelect: false,
           code: outbound?.code || section['.name'],
+          sectionName: section['.name'],
           displayName,
           outbounds: [
             {
@@ -90,6 +89,7 @@ export async function getDashboardSections(): Promise<IGetDashboardSectionsRespo
               latency: outbound?.value?.history?.[0]?.delay || 0,
               type: outbound?.value?.type || '',
               selected: true,
+              link: activeConfigs?.[0] || '',
             },
           ],
         };
@@ -113,6 +113,7 @@ export async function getDashboardSections(): Promise<IGetDashboardSectionsRespo
         return {
           withTagSelect: false,
           code: outbound?.code || section['.name'],
+          sectionName: section['.name'],
           displayName,
           outbounds: [
             {
@@ -147,11 +148,13 @@ export async function getDashboardSections(): Promise<IGetDashboardSectionsRespo
             latency: item?.outbound?.value?.history?.[0]?.delay || 0,
             type: item?.outbound?.value?.type || '',
             selected: selector?.value?.now === item?.outbound?.code,
+            link: item.link,
           }));
 
         return {
           withTagSelect: true,
           code: selector?.code || section['.name'],
+          sectionName: section['.name'],
           displayName,
           outbounds,
         };
@@ -176,11 +179,13 @@ export async function getDashboardSections(): Promise<IGetDashboardSectionsRespo
             latency: item?.value?.history?.[0]?.delay || 0,
             type: item?.value?.type || '',
             selected: selector?.value?.now === item?.code,
+            link: section.urltest_proxy_links?.[index] || '',
           }));
 
         return {
           withTagSelect: true,
           code: selector?.code || section['.name'],
+          sectionName: section['.name'],
           displayName,
           outbounds: [
             {
@@ -250,6 +255,7 @@ export async function getDashboardSections(): Promise<IGetDashboardSectionsRespo
           return {
             withTagSelect: true,
             code: selector?.code || section['.name'],
+            sectionName: section['.name'],
             displayName,
             outbounds: [
               {
@@ -267,6 +273,7 @@ export async function getDashboardSections(): Promise<IGetDashboardSectionsRespo
         return {
           withTagSelect: true,
           code: selector?.code || section['.name'],
+          sectionName: section['.name'],
           displayName,
           outbounds,
         };
@@ -280,6 +287,7 @@ export async function getDashboardSections(): Promise<IGetDashboardSectionsRespo
         return {
           withTagSelect: false,
           code: outbound?.code || section['.name'],
+          sectionName: section['.name'],
           displayName,
           outbounds: [
             {
@@ -296,6 +304,7 @@ export async function getDashboardSections(): Promise<IGetDashboardSectionsRespo
       return {
         withTagSelect: false,
         code: section['.name'],
+        sectionName: section['.name'],
         displayName,
         outbounds: [],
       };

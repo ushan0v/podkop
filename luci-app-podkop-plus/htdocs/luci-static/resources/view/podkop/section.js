@@ -382,7 +382,7 @@ function parseRequiredValueOnSave(section_id) {
     const error = this.getValidationError(section_id);
     return Promise.reject(
       new TypeError(
-        `${_("Option \"%s\" contains an invalid input value.").format(title || this.option)} ${error}`,
+        `${_('Option "%s" contains an invalid input value.').format(title || this.option)} ${error}`,
       ),
     );
   }
@@ -392,7 +392,9 @@ function parseRequiredValueOnSave(section_id) {
     const normalized = formValue ? `${formValue}`.trim() : "";
 
     if (!normalized.length) {
-      return Promise.reject(new TypeError(_("Subscription URL cannot be empty")));
+      return Promise.reject(
+        new TypeError(_("Subscription URL cannot be empty")),
+      );
     }
 
     return Promise.resolve(this.write(section_id, normalized));
@@ -1601,7 +1603,9 @@ function validateCustomRulesetReference(value) {
   return validateFileReference(
     value,
     [".srs", ".json"],
-    _("Rule set must be a direct .srs / .json URL or a local .srs / .json path"),
+    _(
+      "Rule set must be a direct .srs / .json URL or a local .srs / .json path",
+    ),
   );
 }
 
@@ -1819,7 +1823,7 @@ function createSectionContent(section) {
     form.Value,
     "subscription_url",
     _("Subscription URL"),
-    _("Enter the subscription URL to fetch proxy configurations from your provider"),
+    _("Enter the subscription URL"),
   );
   o.depends({ action: "proxy", proxy_config_type: "subscription" });
   o.rmempty = true;
@@ -1830,7 +1834,7 @@ function createSectionContent(section) {
       return true;
     }
 
-    const validation = main.validateUrl(value);
+    const validation = main.validateUrl(value.trim());
     return validation.valid ? true : validation.message;
   };
 
@@ -1839,7 +1843,9 @@ function createSectionContent(section) {
     form.Value,
     "subscription_update_interval",
     _("Subscription update interval"),
-    _("Use sing-box duration format. Leave empty to disable automatic updates."),
+    _(
+      "Use sing-box duration format. Leave empty to disable automatic updates.",
+    ),
   );
   o.default = "1h";
   o.placeholder = "1h";
@@ -1874,7 +1880,9 @@ function createSectionContent(section) {
     form.Flag,
     "subscription_group_by_countries",
     _("Group subscription proxies by country"),
-    _("Group subscription proxies by the country flag at the beginning of the outbound tag"),
+    _(
+      "Group subscription proxies by the country flag at the beginning of the outbound tag",
+    ),
   );
   o.default = "0";
   o.rmempty = false;
@@ -1922,7 +1930,9 @@ function createSectionContent(section) {
     form.Value,
     "urltest_check_interval",
     _("URLTest interval"),
-    _("Use sing-box duration format. Leave empty to disable periodic URLTest checks."),
+    _(
+      "Use sing-box duration format. Leave empty to disable periodic URLTest checks.",
+    ),
   );
   o.default = "3m";
   o.placeholder = "3m";

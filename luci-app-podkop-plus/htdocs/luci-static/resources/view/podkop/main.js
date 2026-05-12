@@ -731,6 +731,7 @@ var Podkop;
     AvailableMethods2["CHECK_NFT_RULES"] = "check_nft_rules";
     AvailableMethods2["CHECK_ZAPRET_RUNTIME"] = "check_zapret_runtime";
     AvailableMethods2["GET_STATUS"] = "get_status";
+    AvailableMethods2["GET_OUTBOUND_LINK"] = "get_outbound_link";
     AvailableMethods2["CHECK_SING_BOX"] = "check_sing_box";
     AvailableMethods2["GET_SING_BOX_STATUS"] = "get_sing_box_status";
     AvailableMethods2["GET_ZAPRET_STATUS"] = "get_zapret_status";
@@ -771,6 +772,10 @@ var PodkopShellMethods = {
     Podkop.AvailableMethods.CHECK_ZAPRET_RUNTIME
   ),
   getStatus: async () => callBaseMethod(Podkop.AvailableMethods.GET_STATUS),
+  getOutboundLink: async (section, tag) => callBaseMethod(
+    Podkop.AvailableMethods.GET_OUTBOUND_LINK,
+    [section, tag]
+  ),
   checkSingBox: async () => callBaseMethod(
     Podkop.AvailableMethods.CHECK_SING_BOX
   ),
@@ -889,6 +894,7 @@ async function getDashboardSections() {
       return {
         withTagSelect: false,
         code: outbound?.code || section[".name"],
+        sectionName: section[".name"],
         displayName,
         outbounds: [
           {
@@ -896,7 +902,8 @@ async function getDashboardSections() {
             displayName: proxyDisplayName,
             latency: outbound?.value?.history?.[0]?.delay || 0,
             type: outbound?.value?.type || "",
-            selected: true
+            selected: true,
+            link: activeConfigs?.[0] || ""
           }
         ]
       };
@@ -915,6 +922,7 @@ async function getDashboardSections() {
       return {
         withTagSelect: false,
         code: outbound?.code || section[".name"],
+        sectionName: section[".name"],
         displayName,
         outbounds: [
           {
@@ -942,11 +950,13 @@ async function getDashboardSections() {
         displayName: getProxyUrlName(item.link) || item?.outbound?.value?.name || "",
         latency: item?.outbound?.value?.history?.[0]?.delay || 0,
         type: item?.outbound?.value?.type || "",
-        selected: selector?.value?.now === item?.outbound?.code
+        selected: selector?.value?.now === item?.outbound?.code,
+        link: item.link
       }));
       return {
         withTagSelect: true,
         code: selector?.code || section[".name"],
+        sectionName: section[".name"],
         displayName,
         outbounds
       };
@@ -963,11 +973,13 @@ async function getDashboardSections() {
         displayName: getProxyUrlName(section.urltest_proxy_links?.[index] || "") || item?.value?.name || "",
         latency: item?.value?.history?.[0]?.delay || 0,
         type: item?.value?.type || "",
-        selected: selector?.value?.now === item?.code
+        selected: selector?.value?.now === item?.code,
+        link: section.urltest_proxy_links?.[index] || ""
       }));
       return {
         withTagSelect: true,
         code: selector?.code || section[".name"],
+        sectionName: section[".name"],
         displayName,
         outbounds: [
           {
@@ -1025,6 +1037,7 @@ async function getDashboardSections() {
         return {
           withTagSelect: true,
           code: selector?.code || section[".name"],
+          sectionName: section[".name"],
           displayName,
           outbounds: [
             {
@@ -1041,6 +1054,7 @@ async function getDashboardSections() {
       return {
         withTagSelect: true,
         code: selector?.code || section[".name"],
+        sectionName: section[".name"],
         displayName,
         outbounds
       };
@@ -1052,6 +1066,7 @@ async function getDashboardSections() {
       return {
         withTagSelect: false,
         code: outbound?.code || section[".name"],
+        sectionName: section[".name"],
         displayName,
         outbounds: [
           {
@@ -1067,6 +1082,7 @@ async function getDashboardSections() {
     return {
       withTagSelect: false,
       code: section[".name"],
+      sectionName: section[".name"],
       displayName,
       outbounds: []
     };
@@ -1893,6 +1909,566 @@ var SocketManager = class _SocketManager {
 };
 var socket = SocketManager.getInstance();
 
+// src/icons/renderLoaderCircleIcon24.ts
+function renderLoaderCircleIcon24() {
+  const NS = "http://www.w3.org/2000/svg";
+  return svgEl(
+    "svg",
+    {
+      xmlns: NS,
+      viewBox: "0 0 24 24",
+      fill: "none",
+      stroke: "currentColor",
+      "stroke-width": "2",
+      "stroke-linecap": "round",
+      "stroke-linejoin": "round",
+      class: "lucide lucide-loader-circle rotate"
+    },
+    [
+      svgEl("path", {
+        d: "M21 12a9 9 0 1 1-6.219-8.56"
+      }),
+      svgEl("animateTransform", {
+        attributeName: "transform",
+        attributeType: "XML",
+        type: "rotate",
+        from: "0 12 12",
+        to: "360 12 12",
+        dur: "1s",
+        repeatCount: "indefinite"
+      })
+    ]
+  );
+}
+
+// src/icons/renderCircleAlertIcon24.ts
+function renderCircleAlertIcon24() {
+  const NS = "http://www.w3.org/2000/svg";
+  return svgEl(
+    "svg",
+    {
+      xmlns: NS,
+      width: "24",
+      height: "24",
+      viewBox: "0 0 24 24",
+      fill: "none",
+      stroke: "currentColor",
+      "stroke-width": "2",
+      "stroke-linecap": "round",
+      "stroke-linejoin": "round",
+      class: "lucide lucide-circle-alert-icon lucide-circle-alert"
+    },
+    [
+      svgEl("circle", {
+        cx: "12",
+        cy: "12",
+        r: "10"
+      }),
+      svgEl("line", {
+        x1: "12",
+        y1: "8",
+        x2: "12",
+        y2: "12"
+      }),
+      svgEl("line", {
+        x1: "12",
+        y1: "16",
+        x2: "12.01",
+        y2: "16"
+      })
+    ]
+  );
+}
+
+// src/icons/renderCircleCheckIcon24.ts
+function renderCircleCheckIcon24() {
+  const NS = "http://www.w3.org/2000/svg";
+  return svgEl(
+    "svg",
+    {
+      xmlns: NS,
+      width: "24",
+      height: "24",
+      viewBox: "0 0 24 24",
+      fill: "none",
+      stroke: "currentColor",
+      "stroke-width": "2",
+      "stroke-linecap": "round",
+      "stroke-linejoin": "round",
+      class: "lucide lucide-circle-check-icon lucide-circle-check"
+    },
+    [
+      svgEl("circle", {
+        cx: "12",
+        cy: "12",
+        r: "10"
+      }),
+      svgEl("path", {
+        d: "M9 12l2 2 4-4"
+      })
+    ]
+  );
+}
+
+// src/icons/renderCircleSlashIcon24.ts
+function renderCircleSlashIcon24() {
+  const NS = "http://www.w3.org/2000/svg";
+  return svgEl(
+    "svg",
+    {
+      xmlns: NS,
+      width: "24",
+      height: "24",
+      viewBox: "0 0 24 24",
+      fill: "none",
+      stroke: "currentColor",
+      "stroke-width": "2",
+      "stroke-linecap": "round",
+      "stroke-linejoin": "round",
+      class: "lucide lucide-circle-slash-icon lucide-circle-slash"
+    },
+    [
+      svgEl("circle", {
+        cx: "12",
+        cy: "12",
+        r: "10"
+      }),
+      svgEl("line", {
+        x1: "9",
+        y1: "15",
+        x2: "15",
+        y2: "9"
+      })
+    ]
+  );
+}
+
+// src/icons/renderCircleXIcon24.ts
+function renderCircleXIcon24() {
+  const NS = "http://www.w3.org/2000/svg";
+  return svgEl(
+    "svg",
+    {
+      xmlns: NS,
+      width: "24",
+      height: "24",
+      viewBox: "0 0 24 24",
+      fill: "none",
+      stroke: "currentColor",
+      "stroke-width": "2",
+      "stroke-linecap": "round",
+      "stroke-linejoin": "round",
+      class: "lucide lucide-circle-x-icon lucide-circle-x"
+    },
+    [
+      svgEl("circle", {
+        cx: "12",
+        cy: "12",
+        r: "10"
+      }),
+      svgEl("path", {
+        d: "M15 9L9 15"
+      }),
+      svgEl("path", {
+        d: "M9 9L15 15"
+      })
+    ]
+  );
+}
+
+// src/icons/renderCheckIcon24.ts
+function renderCheckIcon24() {
+  const NS = "http://www.w3.org/2000/svg";
+  return svgEl(
+    "svg",
+    {
+      xmlns: NS,
+      viewBox: "0 0 24 24",
+      fill: "none",
+      stroke: "currentColor",
+      "stroke-width": "2",
+      "stroke-linecap": "round",
+      "stroke-linejoin": "round",
+      class: "lucide lucide-check-icon lucide-check"
+    },
+    [
+      svgEl("path", {
+        d: "M20 6 9 17l-5-5"
+      })
+    ]
+  );
+}
+
+// src/icons/renderXIcon24.ts
+function renderXIcon24() {
+  const NS = "http://www.w3.org/2000/svg";
+  return svgEl(
+    "svg",
+    {
+      xmlns: NS,
+      viewBox: "0 0 24 24",
+      fill: "none",
+      stroke: "currentColor",
+      "stroke-width": "2",
+      "stroke-linecap": "round",
+      "stroke-linejoin": "round",
+      class: "lucide lucide-x-icon lucide-x"
+    },
+    [svgEl("path", { d: "M18 6 6 18" }), svgEl("path", { d: "m6 6 12 12" })]
+  );
+}
+
+// src/icons/renderTriangleAlertIcon24.ts
+function renderTriangleAlertIcon24() {
+  const NS = "http://www.w3.org/2000/svg";
+  return svgEl(
+    "svg",
+    {
+      xmlns: NS,
+      viewBox: "0 0 24 24",
+      fill: "none",
+      stroke: "currentColor",
+      "stroke-width": "2",
+      "stroke-linecap": "round",
+      "stroke-linejoin": "round",
+      class: "lucide lucide-triangle-alert-icon lucide-triangle-alert"
+    },
+    [
+      svgEl("path", {
+        d: "m21.73 18-8-14a2 2 0 0 0-3.48 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.73-3"
+      }),
+      svgEl("path", { d: "M12 9v4" }),
+      svgEl("path", { d: "M12 17h.01" })
+    ]
+  );
+}
+
+// src/icons/renderPauseIcon24.ts
+function renderPauseIcon24() {
+  const NS = "http://www.w3.org/2000/svg";
+  return svgEl(
+    "svg",
+    {
+      xmlns: NS,
+      viewBox: "0 0 24 24",
+      fill: "none",
+      stroke: "currentColor",
+      "stroke-width": "2",
+      "stroke-linecap": "round",
+      "stroke-linejoin": "round",
+      class: "lucide lucide-pause-icon lucide-pause"
+    },
+    [
+      svgEl("rect", {
+        x: "14",
+        y: "3",
+        width: "5",
+        height: "18",
+        rx: "1"
+      }),
+      svgEl("rect", {
+        x: "5",
+        y: "3",
+        width: "5",
+        height: "18",
+        rx: "1"
+      })
+    ]
+  );
+}
+
+// src/icons/renderPlayIcon24.ts
+function renderPlayIcon24() {
+  const NS = "http://www.w3.org/2000/svg";
+  return svgEl(
+    "svg",
+    {
+      xmlns: NS,
+      viewBox: "0 0 24 24",
+      fill: "none",
+      stroke: "currentColor",
+      "stroke-width": "2",
+      "stroke-linecap": "round",
+      "stroke-linejoin": "round",
+      class: "lucide lucide-play-icon lucide-play"
+    },
+    [
+      svgEl("path", {
+        d: "M5 5a2 2 0 0 1 3.008-1.728l11.997 6.998a2 2 0 0 1 .003 3.458l-12 7A2 2 0 0 1 5 19z"
+      })
+    ]
+  );
+}
+
+// src/icons/renderRotateCcwIcon24.ts
+function renderRotateCcwIcon24() {
+  const NS = "http://www.w3.org/2000/svg";
+  return svgEl(
+    "svg",
+    {
+      xmlns: NS,
+      viewBox: "0 0 24 24",
+      fill: "none",
+      stroke: "currentColor",
+      "stroke-width": "2",
+      "stroke-linecap": "round",
+      "stroke-linejoin": "round",
+      class: "lucide lucide-rotate-ccw-icon lucide-rotate-ccw"
+    },
+    [
+      svgEl("path", {
+        d: "M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"
+      }),
+      svgEl("path", {
+        d: "M3 3v5h5"
+      })
+    ]
+  );
+}
+
+// src/icons/renderCircleStopIcon24.ts
+function renderCircleStopIcon24() {
+  const NS = "http://www.w3.org/2000/svg";
+  return svgEl(
+    "svg",
+    {
+      xmlns: NS,
+      viewBox: "0 0 24 24",
+      fill: "none",
+      stroke: "currentColor",
+      "stroke-width": "2",
+      "stroke-linecap": "round",
+      "stroke-linejoin": "round",
+      class: "lucide lucide-circle-stop-icon lucide-circle-stop"
+    },
+    [
+      svgEl("circle", {
+        cx: "12",
+        cy: "12",
+        r: "10"
+      }),
+      svgEl("rect", {
+        x: "9",
+        y: "9",
+        width: "6",
+        height: "6",
+        rx: "1"
+      })
+    ]
+  );
+}
+
+// src/icons/renderCirclePlayIcon24.ts
+function renderCirclePlayIcon24() {
+  const NS = "http://www.w3.org/2000/svg";
+  return svgEl(
+    "svg",
+    {
+      xmlns: NS,
+      viewBox: "0 0 24 24",
+      fill: "none",
+      stroke: "currentColor",
+      "stroke-width": "2",
+      "stroke-linecap": "round",
+      "stroke-linejoin": "round",
+      class: "lucide lucide-circle-play-icon lucide-circle-play"
+    },
+    [
+      svgEl("path", {
+        d: "M9 9.003a1 1 0 0 1 1.517-.859l4.997 2.997a1 1 0 0 1 0 1.718l-4.997 2.997A1 1 0 0 1 9 14.996z"
+      }),
+      svgEl("circle", {
+        cx: "12",
+        cy: "12",
+        r: "10"
+      })
+    ]
+  );
+}
+
+// src/icons/renderCircleCheckBigIcon24.ts
+function renderCircleCheckBigIcon24() {
+  const NS = "http://www.w3.org/2000/svg";
+  return svgEl(
+    "svg",
+    {
+      xmlns: NS,
+      viewBox: "0 0 24 24",
+      fill: "none",
+      stroke: "currentColor",
+      "stroke-width": "2",
+      "stroke-linecap": "round",
+      "stroke-linejoin": "round",
+      class: "lucide lucide-circle-check-big-icon lucide-circle-check-big"
+    },
+    [
+      svgEl("path", {
+        d: "M21.801 10A10 10 0 1 1 17 3.335"
+      }),
+      svgEl("path", {
+        d: "m9 11 3 3L22 4"
+      })
+    ]
+  );
+}
+
+// src/icons/renderSquareChartGanttIcon24.ts
+function renderSquareChartGanttIcon24() {
+  const NS = "http://www.w3.org/2000/svg";
+  return svgEl(
+    "svg",
+    {
+      xmlns: NS,
+      viewBox: "0 0 24 24",
+      fill: "none",
+      stroke: "currentColor",
+      "stroke-width": "2",
+      "stroke-linecap": "round",
+      "stroke-linejoin": "round",
+      class: "lucide lucide-square-chart-gantt-icon lucide-square-chart-gantt"
+    },
+    [
+      svgEl("rect", {
+        width: "18",
+        height: "18",
+        x: "3",
+        y: "3",
+        rx: "2"
+      }),
+      svgEl("path", { d: "M9 8h7" }),
+      svgEl("path", { d: "M8 12h6" }),
+      svgEl("path", { d: "M11 16h5" })
+    ]
+  );
+}
+
+// src/icons/renderCogIcon24.ts
+function renderCogIcon24() {
+  const NS = "http://www.w3.org/2000/svg";
+  return svgEl(
+    "svg",
+    {
+      xmlns: NS,
+      viewBox: "0 0 24 24",
+      fill: "none",
+      stroke: "currentColor",
+      "stroke-width": "2",
+      "stroke-linecap": "round",
+      "stroke-linejoin": "round",
+      class: "lucide lucide-cog-icon lucide-cog"
+    },
+    [
+      svgEl("path", { d: "M11 10.27 7 3.34" }),
+      svgEl("path", { d: "m11 13.73-4 6.93" }),
+      svgEl("path", { d: "M12 22v-2" }),
+      svgEl("path", { d: "M12 2v2" }),
+      svgEl("path", { d: "M14 12h8" }),
+      svgEl("path", { d: "m17 20.66-1-1.73" }),
+      svgEl("path", { d: "m17 3.34-1 1.73" }),
+      svgEl("path", { d: "M2 12h2" }),
+      svgEl("path", { d: "m20.66 17-1.73-1" }),
+      svgEl("path", { d: "m20.66 7-1.73 1" }),
+      svgEl("path", { d: "m3.34 17 1.73-1" }),
+      svgEl("path", { d: "m3.34 7 1.73 1" }),
+      svgEl("circle", { cx: "12", cy: "12", r: "2" }),
+      svgEl("circle", { cx: "12", cy: "12", r: "8" })
+    ]
+  );
+}
+
+// src/icons/renderSearchIcon24.ts
+function renderSearchIcon24() {
+  const NS = "http://www.w3.org/2000/svg";
+  return svgEl(
+    "svg",
+    {
+      xmlns: NS,
+      viewBox: "0 0 24 24",
+      fill: "none",
+      stroke: "currentColor",
+      "stroke-width": "2",
+      "stroke-linecap": "round",
+      "stroke-linejoin": "round",
+      class: "lucide lucide-search-icon lucide-search"
+    },
+    [
+      svgEl("path", { d: "m21 21-4.34-4.34" }),
+      svgEl("circle", { cx: "11", cy: "11", r: "8" })
+    ]
+  );
+}
+
+// src/icons/renderBookOpenTextIcon24.ts
+function renderBookOpenTextIcon24() {
+  const NS = "http://www.w3.org/2000/svg";
+  return svgEl(
+    "svg",
+    {
+      xmlns: NS,
+      viewBox: "0 0 24 24",
+      fill: "none",
+      stroke: "currentColor",
+      "stroke-width": "2",
+      "stroke-linecap": "round",
+      "stroke-linejoin": "round",
+      class: "lucide lucide-book-open-text-icon lucide-book-open-text"
+    },
+    [
+      svgEl("path", { d: "M12 7v14" }),
+      svgEl("path", { d: "M16 12h2" }),
+      svgEl("path", { d: "M16 8h2" }),
+      svgEl("path", {
+        d: "M3 18a1 1 0 0 1-1-1V4a1 1 0 0 1 1-1h5a4 4 0 0 1 4 4 4 4 0 0 1 4-4h5a1 1 0 0 1 1 1v13a1 1 0 0 1-1 1h-6a3 3 0 0 0-3 3 3 3 0 0 0-3-3z"
+      }),
+      svgEl("path", { d: "M6 12h2" }),
+      svgEl("path", { d: "M6 8h2" })
+    ]
+  );
+}
+
+// src/helpers/svgEl.ts
+function svgEl(tag, attrs = {}, children = []) {
+  const NS = "http://www.w3.org/2000/svg";
+  const el = document.createElementNS(NS, tag);
+  for (const [k, v] of Object.entries(attrs)) {
+    if (v != null) el.setAttribute(k, String(v));
+  }
+  (Array.isArray(children) ? children : [children]).filter(Boolean).forEach((ch) => el.appendChild(ch));
+  return el;
+}
+
+// src/icons/renderCopyIcon24.ts
+function renderCopyIcon24() {
+  return svgEl(
+    "svg",
+    {
+      xmlns: "http://www.w3.org/2000/svg",
+      width: "24",
+      height: "24",
+      viewBox: "0 0 24 24",
+      fill: "none",
+      stroke: "currentColor",
+      "stroke-width": "2",
+      "stroke-linecap": "round",
+      "stroke-linejoin": "round",
+      class: "lucide lucide-copy-icon lucide-copy"
+    },
+    [
+      svgEl("rect", {
+        width: "14",
+        height: "14",
+        x: "8",
+        y: "8",
+        rx: "2",
+        ry: "2"
+      }),
+      svgEl("path", {
+        d: "M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2"
+      })
+    ]
+  );
+}
+
 // src/podkop/tabs/dashboard/partials/renderSections.ts
 function renderFailedState() {
   return E(
@@ -1914,6 +2490,7 @@ function renderLoadingState() {
 function renderDefaultState({
   section,
   onChooseOutbound,
+  onCopyOutbound,
   onTestLatency,
   latencyFetching
 }) {
@@ -1938,6 +2515,7 @@ function renderDefaultState({
       }
       return "pdk_dashboard-page__outbound-grid__item__latency--red";
     }
+    const canCopyLink = outbound.type?.toLowerCase() !== "urltest" && Boolean(outbound.code || outbound.link);
     return E(
       "div",
       {
@@ -1945,7 +2523,25 @@ function renderDefaultState({
         click: () => section.withTagSelect && onChooseOutbound(section.code, outbound.code)
       },
       [
-        E("b", {}, outbound.displayName),
+        E("div", { class: "pdk_dashboard-page__outbound-grid__item__header" }, [
+          E("b", {}, outbound.displayName),
+          ...canCopyLink ? [
+            E(
+              "button",
+              {
+                type: "button",
+                class: "btn pdk_dashboard-page__outbound-grid__item__copy-button",
+                title: _("Copy proxy link"),
+                "aria-label": _("Copy proxy link"),
+                click: (event) => {
+                  event.stopPropagation();
+                  onCopyOutbound(section, outbound);
+                }
+              },
+              renderCopyIcon24()
+            )
+          ] : []
+        ]),
         E("div", { class: "pdk_dashboard-page__outbound-grid__item__footer" }, [
           E(
             "div",
@@ -2115,6 +2711,41 @@ function render() {
   );
 }
 
+// src/helpers/showToast.ts
+function showToast(message, type, duration = 3e3) {
+  let container = document.querySelector(".toast-container");
+  if (!container) {
+    container = document.createElement("div");
+    container.className = "toast-container";
+    document.body.appendChild(container);
+  }
+  const toast = document.createElement("div");
+  toast.className = `toast toast-${type}`;
+  toast.textContent = message;
+  container.appendChild(toast);
+  setTimeout(() => toast.classList.add("visible"), 100);
+  setTimeout(() => {
+    toast.classList.remove("visible");
+    setTimeout(() => toast.remove(), 300);
+  }, duration);
+}
+
+// src/helpers/copyToClipboard.ts
+function copyToClipboard(text) {
+  const textarea = document.createElement("textarea");
+  textarea.value = text;
+  document.body.appendChild(textarea);
+  textarea.select();
+  try {
+    document.execCommand("copy");
+    showToast(_("Successfully copied!"), "success");
+  } catch (_err) {
+    showToast(_("Failed to copy!"), "error");
+    console.error("copyToClipboard - e", _err);
+  }
+  document.body.removeChild(textarea);
+}
+
 // src/helpers/prettyBytes.ts
 function prettyBytes(n) {
   const UNITS = ["B", "KB", "MB", "GB", "TB", "PB", "EB", "ZB", "YB"];
@@ -2198,26 +2829,37 @@ async function fetchPodkopStatus() {
 }
 
 // src/podkop/tabs/dashboard/initController.ts
+var SECTIONS_REFRESH_INTERVAL_MS = 5e3;
+var sectionsRefreshTimer = null;
+var sectionsRefreshInFlight = false;
 async function fetchDashboardSections() {
-  const prev = store.get().sectionsWidget;
-  store.set({
-    sectionsWidget: {
-      ...prev,
-      failed: false
-    }
-  });
-  const { data, success } = await CustomPodkopMethods.getDashboardSections();
-  if (!success) {
-    logger.error("[DASHBOARD]", "fetchDashboardSections: failed to fetch");
+  if (sectionsRefreshInFlight) {
+    return;
   }
-  store.set({
-    sectionsWidget: {
-      latencyFetching: false,
-      loading: false,
-      failed: !success,
-      data
+  sectionsRefreshInFlight = true;
+  try {
+    const prev = store.get().sectionsWidget;
+    store.set({
+      sectionsWidget: {
+        ...prev,
+        failed: false
+      }
+    });
+    const { data, success } = await CustomPodkopMethods.getDashboardSections();
+    if (!success) {
+      logger.error("[DASHBOARD]", "fetchDashboardSections: failed to fetch");
     }
-  });
+    store.set({
+      sectionsWidget: {
+        latencyFetching: false,
+        loading: false,
+        failed: !success,
+        data
+      }
+    });
+  } finally {
+    sectionsRefreshInFlight = false;
+  }
 }
 async function connectToClashSockets() {
   const clashApiSecret = await getClashApiSecret();
@@ -2331,6 +2973,21 @@ async function handleTestProxyLatency(tag) {
     }
   });
 }
+async function handleCopyOutbound(section, outbound) {
+  if (outbound.link) {
+    copyToClipboard(outbound.link);
+    return;
+  }
+  const response = await PodkopShellMethods.getOutboundLink(
+    section.sectionName,
+    outbound.code
+  );
+  if (response.success && response.data.link) {
+    copyToClipboard(response.data.link);
+    return;
+  }
+  showToast(_("Proxy link is unavailable"), "error");
+}
 async function renderSectionsWidget() {
   logger.debug("[DASHBOARD]", "renderSectionsWidget");
   const sectionsWidget = store.get().sectionsWidget;
@@ -2348,6 +3005,8 @@ async function renderSectionsWidget() {
       onTestLatency: () => {
       },
       onChooseOutbound: () => {
+      },
+      onCopyOutbound: () => {
       },
       latencyFetching: sectionsWidget.latencyFetching
     });
@@ -2369,6 +3028,9 @@ async function renderSectionsWidget() {
       },
       onChooseOutbound: (selector, tag) => {
         handleChooseOutbound(selector, tag);
+      },
+      onCopyOutbound: (section2, outbound) => {
+        void handleCopyOutbound(section2, outbound);
       }
     })
   );
@@ -2526,8 +3188,16 @@ async function onPageMount() {
   await fetchDashboardSections();
   await fetchServicesInfo();
   await connectToClashSockets();
+  sectionsRefreshTimer = setInterval(() => {
+    void fetchDashboardSections();
+  }, SECTIONS_REFRESH_INTERVAL_MS);
 }
 function onPageUnmount() {
+  if (sectionsRefreshTimer) {
+    clearInterval(sectionsRefreshTimer);
+    sectionsRefreshTimer = null;
+  }
+  sectionsRefreshInFlight = false;
   store.unsubscribe(onStoreUpdate);
   store.reset([
     "bandwidthWidget",
@@ -2593,7 +3263,7 @@ var styles = `
 #cbi-${PODKOP_CBI_PREFIX}-dashboard > h3 {
     display: none;
 }
-    
+
 .pdk_dashboard-page {
     width: 100%;
     --dashboard-grid-columns: 4;
@@ -2676,6 +3346,37 @@ var styles = `
 
 .pdk_dashboard-page__outbound-grid__item--active {
     border-color: var(--success-color-medium, green);
+}
+
+.pdk_dashboard-page__outbound-grid__item__header {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 8px;
+}
+
+.pdk_dashboard-page__outbound-grid__item__header b {
+    min-width: 0;
+    line-height: 1.25;
+    overflow-wrap: anywhere;
+}
+
+.pdk_dashboard-page__outbound-grid__item__copy-button {
+    width: 22px;
+    height: 22px;
+    min-width: 22px;
+    min-height: 22px;
+    padding: 1px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    flex: 0 0 auto;
+    line-height: 1;
+}
+
+.pdk_dashboard-page__outbound-grid__item__copy-button svg {
+    width: 13px;
+    height: 13px;
 }
 
 .pdk_dashboard-page__outbound-grid__item__footer {
@@ -3201,523 +3902,6 @@ var styles3 = `
 }
 `;
 
-// src/icons/renderLoaderCircleIcon24.ts
-function renderLoaderCircleIcon24() {
-  const NS = "http://www.w3.org/2000/svg";
-  return svgEl(
-    "svg",
-    {
-      xmlns: NS,
-      viewBox: "0 0 24 24",
-      fill: "none",
-      stroke: "currentColor",
-      "stroke-width": "2",
-      "stroke-linecap": "round",
-      "stroke-linejoin": "round",
-      class: "lucide lucide-loader-circle rotate"
-    },
-    [
-      svgEl("path", {
-        d: "M21 12a9 9 0 1 1-6.219-8.56"
-      }),
-      svgEl("animateTransform", {
-        attributeName: "transform",
-        attributeType: "XML",
-        type: "rotate",
-        from: "0 12 12",
-        to: "360 12 12",
-        dur: "1s",
-        repeatCount: "indefinite"
-      })
-    ]
-  );
-}
-
-// src/icons/renderCircleAlertIcon24.ts
-function renderCircleAlertIcon24() {
-  const NS = "http://www.w3.org/2000/svg";
-  return svgEl(
-    "svg",
-    {
-      xmlns: NS,
-      width: "24",
-      height: "24",
-      viewBox: "0 0 24 24",
-      fill: "none",
-      stroke: "currentColor",
-      "stroke-width": "2",
-      "stroke-linecap": "round",
-      "stroke-linejoin": "round",
-      class: "lucide lucide-circle-alert-icon lucide-circle-alert"
-    },
-    [
-      svgEl("circle", {
-        cx: "12",
-        cy: "12",
-        r: "10"
-      }),
-      svgEl("line", {
-        x1: "12",
-        y1: "8",
-        x2: "12",
-        y2: "12"
-      }),
-      svgEl("line", {
-        x1: "12",
-        y1: "16",
-        x2: "12.01",
-        y2: "16"
-      })
-    ]
-  );
-}
-
-// src/icons/renderCircleCheckIcon24.ts
-function renderCircleCheckIcon24() {
-  const NS = "http://www.w3.org/2000/svg";
-  return svgEl(
-    "svg",
-    {
-      xmlns: NS,
-      width: "24",
-      height: "24",
-      viewBox: "0 0 24 24",
-      fill: "none",
-      stroke: "currentColor",
-      "stroke-width": "2",
-      "stroke-linecap": "round",
-      "stroke-linejoin": "round",
-      class: "lucide lucide-circle-check-icon lucide-circle-check"
-    },
-    [
-      svgEl("circle", {
-        cx: "12",
-        cy: "12",
-        r: "10"
-      }),
-      svgEl("path", {
-        d: "M9 12l2 2 4-4"
-      })
-    ]
-  );
-}
-
-// src/icons/renderCircleSlashIcon24.ts
-function renderCircleSlashIcon24() {
-  const NS = "http://www.w3.org/2000/svg";
-  return svgEl(
-    "svg",
-    {
-      xmlns: NS,
-      width: "24",
-      height: "24",
-      viewBox: "0 0 24 24",
-      fill: "none",
-      stroke: "currentColor",
-      "stroke-width": "2",
-      "stroke-linecap": "round",
-      "stroke-linejoin": "round",
-      class: "lucide lucide-circle-slash-icon lucide-circle-slash"
-    },
-    [
-      svgEl("circle", {
-        cx: "12",
-        cy: "12",
-        r: "10"
-      }),
-      svgEl("line", {
-        x1: "9",
-        y1: "15",
-        x2: "15",
-        y2: "9"
-      })
-    ]
-  );
-}
-
-// src/icons/renderCircleXIcon24.ts
-function renderCircleXIcon24() {
-  const NS = "http://www.w3.org/2000/svg";
-  return svgEl(
-    "svg",
-    {
-      xmlns: NS,
-      width: "24",
-      height: "24",
-      viewBox: "0 0 24 24",
-      fill: "none",
-      stroke: "currentColor",
-      "stroke-width": "2",
-      "stroke-linecap": "round",
-      "stroke-linejoin": "round",
-      class: "lucide lucide-circle-x-icon lucide-circle-x"
-    },
-    [
-      svgEl("circle", {
-        cx: "12",
-        cy: "12",
-        r: "10"
-      }),
-      svgEl("path", {
-        d: "M15 9L9 15"
-      }),
-      svgEl("path", {
-        d: "M9 9L15 15"
-      })
-    ]
-  );
-}
-
-// src/icons/renderCheckIcon24.ts
-function renderCheckIcon24() {
-  const NS = "http://www.w3.org/2000/svg";
-  return svgEl(
-    "svg",
-    {
-      xmlns: NS,
-      viewBox: "0 0 24 24",
-      fill: "none",
-      stroke: "currentColor",
-      "stroke-width": "2",
-      "stroke-linecap": "round",
-      "stroke-linejoin": "round",
-      class: "lucide lucide-check-icon lucide-check"
-    },
-    [
-      svgEl("path", {
-        d: "M20 6 9 17l-5-5"
-      })
-    ]
-  );
-}
-
-// src/icons/renderXIcon24.ts
-function renderXIcon24() {
-  const NS = "http://www.w3.org/2000/svg";
-  return svgEl(
-    "svg",
-    {
-      xmlns: NS,
-      viewBox: "0 0 24 24",
-      fill: "none",
-      stroke: "currentColor",
-      "stroke-width": "2",
-      "stroke-linecap": "round",
-      "stroke-linejoin": "round",
-      class: "lucide lucide-x-icon lucide-x"
-    },
-    [svgEl("path", { d: "M18 6 6 18" }), svgEl("path", { d: "m6 6 12 12" })]
-  );
-}
-
-// src/icons/renderTriangleAlertIcon24.ts
-function renderTriangleAlertIcon24() {
-  const NS = "http://www.w3.org/2000/svg";
-  return svgEl(
-    "svg",
-    {
-      xmlns: NS,
-      viewBox: "0 0 24 24",
-      fill: "none",
-      stroke: "currentColor",
-      "stroke-width": "2",
-      "stroke-linecap": "round",
-      "stroke-linejoin": "round",
-      class: "lucide lucide-triangle-alert-icon lucide-triangle-alert"
-    },
-    [
-      svgEl("path", {
-        d: "m21.73 18-8-14a2 2 0 0 0-3.48 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.73-3"
-      }),
-      svgEl("path", { d: "M12 9v4" }),
-      svgEl("path", { d: "M12 17h.01" })
-    ]
-  );
-}
-
-// src/icons/renderPauseIcon24.ts
-function renderPauseIcon24() {
-  const NS = "http://www.w3.org/2000/svg";
-  return svgEl(
-    "svg",
-    {
-      xmlns: NS,
-      viewBox: "0 0 24 24",
-      fill: "none",
-      stroke: "currentColor",
-      "stroke-width": "2",
-      "stroke-linecap": "round",
-      "stroke-linejoin": "round",
-      class: "lucide lucide-pause-icon lucide-pause"
-    },
-    [
-      svgEl("rect", {
-        x: "14",
-        y: "3",
-        width: "5",
-        height: "18",
-        rx: "1"
-      }),
-      svgEl("rect", {
-        x: "5",
-        y: "3",
-        width: "5",
-        height: "18",
-        rx: "1"
-      })
-    ]
-  );
-}
-
-// src/icons/renderPlayIcon24.ts
-function renderPlayIcon24() {
-  const NS = "http://www.w3.org/2000/svg";
-  return svgEl(
-    "svg",
-    {
-      xmlns: NS,
-      viewBox: "0 0 24 24",
-      fill: "none",
-      stroke: "currentColor",
-      "stroke-width": "2",
-      "stroke-linecap": "round",
-      "stroke-linejoin": "round",
-      class: "lucide lucide-play-icon lucide-play"
-    },
-    [
-      svgEl("path", {
-        d: "M5 5a2 2 0 0 1 3.008-1.728l11.997 6.998a2 2 0 0 1 .003 3.458l-12 7A2 2 0 0 1 5 19z"
-      })
-    ]
-  );
-}
-
-// src/icons/renderRotateCcwIcon24.ts
-function renderRotateCcwIcon24() {
-  const NS = "http://www.w3.org/2000/svg";
-  return svgEl(
-    "svg",
-    {
-      xmlns: NS,
-      viewBox: "0 0 24 24",
-      fill: "none",
-      stroke: "currentColor",
-      "stroke-width": "2",
-      "stroke-linecap": "round",
-      "stroke-linejoin": "round",
-      class: "lucide lucide-rotate-ccw-icon lucide-rotate-ccw"
-    },
-    [
-      svgEl("path", {
-        d: "M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"
-      }),
-      svgEl("path", {
-        d: "M3 3v5h5"
-      })
-    ]
-  );
-}
-
-// src/icons/renderCircleStopIcon24.ts
-function renderCircleStopIcon24() {
-  const NS = "http://www.w3.org/2000/svg";
-  return svgEl(
-    "svg",
-    {
-      xmlns: NS,
-      viewBox: "0 0 24 24",
-      fill: "none",
-      stroke: "currentColor",
-      "stroke-width": "2",
-      "stroke-linecap": "round",
-      "stroke-linejoin": "round",
-      class: "lucide lucide-circle-stop-icon lucide-circle-stop"
-    },
-    [
-      svgEl("circle", {
-        cx: "12",
-        cy: "12",
-        r: "10"
-      }),
-      svgEl("rect", {
-        x: "9",
-        y: "9",
-        width: "6",
-        height: "6",
-        rx: "1"
-      })
-    ]
-  );
-}
-
-// src/icons/renderCirclePlayIcon24.ts
-function renderCirclePlayIcon24() {
-  const NS = "http://www.w3.org/2000/svg";
-  return svgEl(
-    "svg",
-    {
-      xmlns: NS,
-      viewBox: "0 0 24 24",
-      fill: "none",
-      stroke: "currentColor",
-      "stroke-width": "2",
-      "stroke-linecap": "round",
-      "stroke-linejoin": "round",
-      class: "lucide lucide-circle-play-icon lucide-circle-play"
-    },
-    [
-      svgEl("path", {
-        d: "M9 9.003a1 1 0 0 1 1.517-.859l4.997 2.997a1 1 0 0 1 0 1.718l-4.997 2.997A1 1 0 0 1 9 14.996z"
-      }),
-      svgEl("circle", {
-        cx: "12",
-        cy: "12",
-        r: "10"
-      })
-    ]
-  );
-}
-
-// src/icons/renderCircleCheckBigIcon24.ts
-function renderCircleCheckBigIcon24() {
-  const NS = "http://www.w3.org/2000/svg";
-  return svgEl(
-    "svg",
-    {
-      xmlns: NS,
-      viewBox: "0 0 24 24",
-      fill: "none",
-      stroke: "currentColor",
-      "stroke-width": "2",
-      "stroke-linecap": "round",
-      "stroke-linejoin": "round",
-      class: "lucide lucide-circle-check-big-icon lucide-circle-check-big"
-    },
-    [
-      svgEl("path", {
-        d: "M21.801 10A10 10 0 1 1 17 3.335"
-      }),
-      svgEl("path", {
-        d: "m9 11 3 3L22 4"
-      })
-    ]
-  );
-}
-
-// src/icons/renderSquareChartGanttIcon24.ts
-function renderSquareChartGanttIcon24() {
-  const NS = "http://www.w3.org/2000/svg";
-  return svgEl(
-    "svg",
-    {
-      xmlns: NS,
-      viewBox: "0 0 24 24",
-      fill: "none",
-      stroke: "currentColor",
-      "stroke-width": "2",
-      "stroke-linecap": "round",
-      "stroke-linejoin": "round",
-      class: "lucide lucide-square-chart-gantt-icon lucide-square-chart-gantt"
-    },
-    [
-      svgEl("rect", {
-        width: "18",
-        height: "18",
-        x: "3",
-        y: "3",
-        rx: "2"
-      }),
-      svgEl("path", { d: "M9 8h7" }),
-      svgEl("path", { d: "M8 12h6" }),
-      svgEl("path", { d: "M11 16h5" })
-    ]
-  );
-}
-
-// src/icons/renderCogIcon24.ts
-function renderCogIcon24() {
-  const NS = "http://www.w3.org/2000/svg";
-  return svgEl(
-    "svg",
-    {
-      xmlns: NS,
-      viewBox: "0 0 24 24",
-      fill: "none",
-      stroke: "currentColor",
-      "stroke-width": "2",
-      "stroke-linecap": "round",
-      "stroke-linejoin": "round",
-      class: "lucide lucide-cog-icon lucide-cog"
-    },
-    [
-      svgEl("path", { d: "M11 10.27 7 3.34" }),
-      svgEl("path", { d: "m11 13.73-4 6.93" }),
-      svgEl("path", { d: "M12 22v-2" }),
-      svgEl("path", { d: "M12 2v2" }),
-      svgEl("path", { d: "M14 12h8" }),
-      svgEl("path", { d: "m17 20.66-1-1.73" }),
-      svgEl("path", { d: "m17 3.34-1 1.73" }),
-      svgEl("path", { d: "M2 12h2" }),
-      svgEl("path", { d: "m20.66 17-1.73-1" }),
-      svgEl("path", { d: "m20.66 7-1.73 1" }),
-      svgEl("path", { d: "m3.34 17 1.73-1" }),
-      svgEl("path", { d: "m3.34 7 1.73 1" }),
-      svgEl("circle", { cx: "12", cy: "12", r: "2" }),
-      svgEl("circle", { cx: "12", cy: "12", r: "8" })
-    ]
-  );
-}
-
-// src/icons/renderSearchIcon24.ts
-function renderSearchIcon24() {
-  const NS = "http://www.w3.org/2000/svg";
-  return svgEl(
-    "svg",
-    {
-      xmlns: NS,
-      viewBox: "0 0 24 24",
-      fill: "none",
-      stroke: "currentColor",
-      "stroke-width": "2",
-      "stroke-linecap": "round",
-      "stroke-linejoin": "round",
-      class: "lucide lucide-search-icon lucide-search"
-    },
-    [
-      svgEl("path", { d: "m21 21-4.34-4.34" }),
-      svgEl("circle", { cx: "11", cy: "11", r: "8" })
-    ]
-  );
-}
-
-// src/icons/renderBookOpenTextIcon24.ts
-function renderBookOpenTextIcon24() {
-  const NS = "http://www.w3.org/2000/svg";
-  return svgEl(
-    "svg",
-    {
-      xmlns: NS,
-      viewBox: "0 0 24 24",
-      fill: "none",
-      stroke: "currentColor",
-      "stroke-width": "2",
-      "stroke-linecap": "round",
-      "stroke-linejoin": "round",
-      class: "lucide lucide-book-open-text-icon lucide-book-open-text"
-    },
-    [
-      svgEl("path", { d: "M12 7v14" }),
-      svgEl("path", { d: "M16 12h2" }),
-      svgEl("path", { d: "M16 8h2" }),
-      svgEl("path", {
-        d: "M3 18a1 1 0 0 1-1-1V4a1 1 0 0 1 1-1h5a4 4 0 0 1 4 4 4 4 0 0 1 4-4h5a1 1 0 0 1 1 1v13a1 1 0 0 1-1 1h-6a3 3 0 0 0-3 3 3 3 0 0 0-3-3z"
-      }),
-      svgEl("path", { d: "M6 12h2" }),
-      svgEl("path", { d: "M6 8h2" })
-    ]
-  );
-}
-
 // src/partials/button/renderButton.ts
 function renderButton({
   classNames = [],
@@ -3763,41 +3947,6 @@ function renderButton({
     { class: getClass(), disabled: getDisabled(), click: onClick },
     [...insertIf(hasIcon, [getWrappedIcon()]), E("span", {}, text)]
   );
-}
-
-// src/helpers/showToast.ts
-function showToast(message, type, duration = 3e3) {
-  let container = document.querySelector(".toast-container");
-  if (!container) {
-    container = document.createElement("div");
-    container.className = "toast-container";
-    document.body.appendChild(container);
-  }
-  const toast = document.createElement("div");
-  toast.className = `toast toast-${type}`;
-  toast.textContent = message;
-  container.appendChild(toast);
-  setTimeout(() => toast.classList.add("visible"), 100);
-  setTimeout(() => {
-    toast.classList.remove("visible");
-    setTimeout(() => toast.remove(), 300);
-  }, duration);
-}
-
-// src/helpers/copyToClipboard.ts
-function copyToClipboard(text) {
-  const textarea = document.createElement("textarea");
-  textarea.value = text;
-  document.body.appendChild(textarea);
-  textarea.select();
-  try {
-    document.execCommand("copy");
-    showToast(_("Successfully copied!"), "success");
-  } catch (_err) {
-    showToast(_("Failed to copy!"), "error");
-    console.error("copyToClipboard - e", _err);
-  }
-  document.body.removeChild(textarea);
 }
 
 // src/partials/modal/renderModal.ts
@@ -3932,9 +4081,9 @@ function renderModal(text, name, options) {
     renderButton({
       classNames: ["cbi-button-apply"],
       text: _("Copy"),
-      onClick: () => copyToClipboard(` \`\`\`${name} 
- ${currentText}  
- \`\`\``)
+      onClick: () => copyToClipboard(`\`\`\`${name}
+${currentText}
+\`\`\``)
     }),
     renderButton({
       classNames: ["cbi-button-remove"],
@@ -4753,17 +4902,18 @@ function renderDiagnosticAvailableActionsWidget() {
   const isStopping = lifecycleBusy && lifecycleAction === "stop";
   const isRestarting = lifecycleBusy && lifecycleAction === "restart";
   const isReloading = lifecycleBusy && lifecycleAction === "reload";
-  const restartLoading = diagnosticsActions.restart.loading;
+  const backendRestartLikeLoading = isRestarting || isReloading;
+  const restartLoading = diagnosticsActions.restart.loading || backendRestartLikeLoading;
   const atLeastOneMutatingActionLoading = restartLoading || diagnosticsActions.start.loading || diagnosticsActions.stop.loading || diagnosticsActions.enable.loading || diagnosticsActions.disable.loading;
   const serviceControlsDisabled = servicesInfoWidget.loading || lifecycleBusy || atLeastOneMutatingActionLoading;
   const utilityActionsDisabled = lifecycleBusy || atLeastOneMutatingActionLoading;
   const startVisible = isStarting || !podkopRunning && !isStopping && !isRestarting && !isReloading;
   const stopVisible = isStopping || podkopRunning && !isStarting && !isRestarting && !isReloading;
-  const frozenStartStop = restartLoading && (restartStartStopSnapshot || (podkopRunning ? "stop" : "start"));
+  const frozenStartStop = restartLoading && (restartStartStopSnapshot || (backendRestartLikeLoading ? "stop" : podkopRunning ? "stop" : "start"));
   const container = document.getElementById("pdk_diagnostic-page-actions");
   const renderedActions = renderAvailableActions({
     restart: {
-      loading: restartLoading || isRestarting || isReloading,
+      loading: restartLoading,
       visible: true,
       onClick: handleRestart,
       disabled: serviceControlsDisabled
@@ -5555,17 +5705,6 @@ function preserveScrollForPage(renderFn) {
   requestAnimationFrame(() => {
     window.scrollTo({ top: scrollY });
   });
-}
-
-// src/helpers/svgEl.ts
-function svgEl(tag, attrs = {}, children = []) {
-  const NS = "http://www.w3.org/2000/svg";
-  const el = document.createElementNS(NS, tag);
-  for (const [k, v] of Object.entries(attrs)) {
-    if (v != null) el.setAttribute(k, String(v));
-  }
-  (Array.isArray(children) ? children : [children]).filter(Boolean).forEach((ch) => el.appendChild(ch));
-  return el;
 }
 
 // src/helpers/insertIf.ts

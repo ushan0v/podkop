@@ -969,10 +969,17 @@ sing_box_cm_add_urltest_outbound() {
     local tolerance="$6"
     local idle_timeout="$7"
     local interrupt_exist_connections="$8"
+    local outbounds_tmp jq_status
 
-    echo "$config" | jq \
+    outbounds_tmp="$(mktemp)" || return 1
+    printf '%s' "$outbounds" > "$outbounds_tmp" || {
+        rm -f "$outbounds_tmp"
+        return 1
+    }
+
+    printf '%s' "$config" | jq \
         --arg tag "$tag" \
-        --argjson outbounds "$outbounds" \
+        --slurpfile outbounds "$outbounds_tmp" \
         --arg url "$url" \
         --arg interval "$interval" \
         --arg tolerance "$tolerance" \
@@ -982,7 +989,7 @@ sing_box_cm_add_urltest_outbound() {
             {
                 type: "urltest",
                 tag: $tag,
-                outbounds: $outbounds
+                outbounds: ($outbounds[0] // [])
             }
             + (if $url != "" then {url: $url} else {} end)
             + (if $interval != "" then {interval: $interval} else {} end)
@@ -990,6 +997,9 @@ sing_box_cm_add_urltest_outbound() {
             + (if $idle_timeout != "" then {idle_timeout: $idle_timeout} else {} end)
             + (if $interrupt_exist_connections == "true" then {interrupt_exist_connections: true} else {} end)
         ]'
+    jq_status=$?
+    rm -f "$outbounds_tmp"
+    return "$jq_status"
 }
 
 #######################################
@@ -1011,21 +1021,31 @@ sing_box_cm_add_selector_outbound() {
     local outbounds="$3"
     local default="$4"
     local interrupt_exist_connections="$5"
+    local outbounds_tmp jq_status
 
-    echo "$config" | jq \
+    outbounds_tmp="$(mktemp)" || return 1
+    printf '%s' "$outbounds" > "$outbounds_tmp" || {
+        rm -f "$outbounds_tmp"
+        return 1
+    }
+
+    printf '%s' "$config" | jq \
         --arg tag "$tag" \
-        --argjson outbounds "$outbounds" \
+        --slurpfile outbounds "$outbounds_tmp" \
         --arg default "$default" \
         --arg interrupt_exist_connections "$interrupt_exist_connections" \
         '.outbounds += [
             {
                 type: "selector",
                 tag: $tag,
-                outbounds: $outbounds,
+                outbounds: ($outbounds[0] // []),
                 default: $default
             }
             + (if $interrupt_exist_connections == "true" then {interrupt_exist_connections: true} else {} end)
         ]'
+    jq_status=$?
+    rm -f "$outbounds_tmp"
+    return "$jq_status"
 }
 
 #######################################

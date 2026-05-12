@@ -20,6 +20,11 @@ export const PodkopShellMethods = {
     ),
   getStatus: async () =>
     callBaseMethod<Podkop.GetStatus>(Podkop.AvailableMethods.GET_STATUS),
+  getOutboundLink: async (section: string, tag: string) =>
+    callBaseMethod<Podkop.GetOutboundLink>(
+      Podkop.AvailableMethods.GET_OUTBOUND_LINK,
+      [section, tag],
+    ),
   checkSingBox: async () =>
     callBaseMethod<Podkop.SingBoxCheckResult>(
       Podkop.AvailableMethods.CHECK_SING_BOX,

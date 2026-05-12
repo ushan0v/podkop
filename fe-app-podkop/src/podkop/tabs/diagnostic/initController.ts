@@ -367,7 +367,9 @@ function renderDiagnosticAvailableActionsWidget() {
   const isStopping = lifecycleBusy && lifecycleAction === 'stop';
   const isRestarting = lifecycleBusy && lifecycleAction === 'restart';
   const isReloading = lifecycleBusy && lifecycleAction === 'reload';
-  const restartLoading = diagnosticsActions.restart.loading;
+  const backendRestartLikeLoading = isRestarting || isReloading;
+  const restartLoading =
+    diagnosticsActions.restart.loading || backendRestartLikeLoading;
   const atLeastOneMutatingActionLoading =
     restartLoading ||
     diagnosticsActions.start.loading ||
@@ -388,13 +390,14 @@ function renderDiagnosticAvailableActionsWidget() {
     (podkopRunning && !isStarting && !isRestarting && !isReloading);
   const frozenStartStop =
     restartLoading &&
-    (restartStartStopSnapshot || (podkopRunning ? 'stop' : 'start'));
+    (restartStartStopSnapshot ||
+      (backendRestartLikeLoading ? 'stop' : podkopRunning ? 'stop' : 'start'));
 
   const container = document.getElementById('pdk_diagnostic-page-actions');
 
   const renderedActions = renderAvailableActions({
     restart: {
-      loading: restartLoading || isRestarting || isReloading,
+      loading: restartLoading,
       visible: true,
       onClick: handleRestart,
       disabled: serviceControlsDisabled,

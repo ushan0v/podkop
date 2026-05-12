@@ -55,6 +55,7 @@ export namespace Podkop {
     CHECK_NFT_RULES = 'check_nft_rules',
     CHECK_ZAPRET_RUNTIME = 'check_zapret_runtime',
     GET_STATUS = 'get_status',
+    GET_OUTBOUND_LINK = 'get_outbound_link',
     CHECK_SING_BOX = 'check_sing_box',
     GET_SING_BOX_STATUS = 'get_sing_box_status',
     GET_ZAPRET_STATUS = 'get_zapret_status',
@@ -85,11 +86,13 @@ export namespace Podkop {
     latency: number;
     type: string;
     selected: boolean;
+    link?: string;
   }
 
   export interface OutboundGroup {
     withTagSelect: boolean;
     code: string;
+    sectionName: string;
     displayName: string;
     outbounds: Outbound[];
   }
@@ -188,6 +191,10 @@ export namespace Podkop {
     lifecycle_busy?: number;
     lifecycle_updated_at?: number;
     lifecycle_pid?: number;
+  }
+
+  export interface GetOutboundLink {
+    link: string;
   }
 
   export interface GetSingBoxStatus {

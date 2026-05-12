@@ -189,7 +189,7 @@ export function renderModal(
       classNames: ['cbi-button-apply'],
       text: _('Copy'),
       onClick: () =>
-        copyToClipboard(` \`\`\`${name} \n ${currentText}  \n \`\`\``),
+        copyToClipboard(`\`\`\`${name}\n${currentText}\n\`\`\``),
     }),
     renderButton({
       classNames: ['cbi-button-remove'],

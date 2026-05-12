@@ -3,39 +3,55 @@ import {
   onMount,
   preserveScrollForPage,
 } from '../../../helpers';
+import { copyToClipboard } from '../../../helpers/copyToClipboard';
+import { showToast } from '../../../helpers/showToast';
 import { prettyBytes } from '../../../helpers/prettyBytes';
 import { CustomPodkopMethods, PodkopShellMethods } from '../../methods';
 import { logger, socket, store, StoreType } from '../../services';
 import { renderSections, renderWidget } from './partials';
 import { fetchServicesInfo } from '../../fetchers';
 import { getClashApiSecret } from '../../methods/custom/getClashApiSecret';
+import { Podkop } from '../../types';
+
+const SECTIONS_REFRESH_INTERVAL_MS = 5000;
+let sectionsRefreshTimer: ReturnType<typeof setInterval> | null = null;
+let sectionsRefreshInFlight = false;
 
 // Fetchers
 
 async function fetchDashboardSections() {
-  const prev = store.get().sectionsWidget;
-
-  store.set({
-    sectionsWidget: {
-      ...prev,
-      failed: false,
-    },
-  });
-
-  const { data, success } = await CustomPodkopMethods.getDashboardSections();
-
-  if (!success) {
-    logger.error('[DASHBOARD]', 'fetchDashboardSections: failed to fetch');
+  if (sectionsRefreshInFlight) {
+    return;
   }
 
-  store.set({
-    sectionsWidget: {
-      latencyFetching: false,
-      loading: false,
-      failed: !success,
-      data,
-    },
-  });
+  sectionsRefreshInFlight = true;
+  try {
+    const prev = store.get().sectionsWidget;
+
+    store.set({
+      sectionsWidget: {
+        ...prev,
+        failed: false,
+      },
+    });
+
+    const { data, success } = await CustomPodkopMethods.getDashboardSections();
+
+    if (!success) {
+      logger.error('[DASHBOARD]', 'fetchDashboardSections: failed to fetch');
+    }
+
+    store.set({
+      sectionsWidget: {
+        latencyFetching: false,
+        loading: false,
+        failed: !success,
+        data,
+      },
+    });
+  } finally {
+    sectionsRefreshInFlight = false;
+  }
 }
 
 async function connectToClashSockets() {
@@ -164,6 +180,28 @@ async function handleTestProxyLatency(tag: string) {
   });
 }
 
+async function handleCopyOutbound(
+  section: Podkop.OutboundGroup,
+  outbound: Podkop.Outbound,
+) {
+  if (outbound.link) {
+    copyToClipboard(outbound.link);
+    return;
+  }
+
+  const response = await PodkopShellMethods.getOutboundLink(
+    section.sectionName,
+    outbound.code,
+  );
+
+  if (response.success && response.data.link) {
+    copyToClipboard(response.data.link);
+    return;
+  }
+
+  showToast(_('Proxy link is unavailable'), 'error');
+}
+
 // Renderer
 
 async function renderSectionsWidget() {
@@ -183,6 +221,7 @@ async function renderSectionsWidget() {
       },
       onTestLatency: () => {},
       onChooseOutbound: () => {},
+      onCopyOutbound: () => {},
       latencyFetching: sectionsWidget.latencyFetching,
     });
 
@@ -206,6 +245,9 @@ async function renderSectionsWidget() {
       },
       onChooseOutbound: (selector, tag) => {
         handleChooseOutbound(selector, tag);
+      },
+      onCopyOutbound: (section, outbound) => {
+        void handleCopyOutbound(section, outbound);
       },
     }),
   );
@@ -419,9 +461,18 @@ async function onPageMount() {
   await fetchDashboardSections();
   await fetchServicesInfo();
   await connectToClashSockets();
+
+  sectionsRefreshTimer = setInterval(() => {
+    void fetchDashboardSections();
+  }, SECTIONS_REFRESH_INTERVAL_MS);
 }
 
 function onPageUnmount() {
+  if (sectionsRefreshTimer) {
+    clearInterval(sectionsRefreshTimer);
+    sectionsRefreshTimer = null;
+  }
+  sectionsRefreshInFlight = false;
   // Remove old listener
   store.unsubscribe(onStoreUpdate);
   // Clear store
