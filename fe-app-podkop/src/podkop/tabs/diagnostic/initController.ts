@@ -7,7 +7,6 @@ import { runZapretCheck } from './checks/runZapretCheck';
 import { loadingDiagnosticsChecksStore } from './diagnostic.store';
 import { logger, store, StoreType } from '../../services';
 import {
-  IRenderSystemInfoRow,
   renderAvailableActions,
   renderCheckSection,
   renderRunAction,
@@ -21,10 +20,7 @@ import { PODKOP_LUCI_APP_VERSION } from '../../../constants';
 import { showToast } from '../../../helpers/showToast';
 import { renderWikiDisclaimer } from './partials/renderWikiDisclaimer';
 import { runSectionsCheck } from './checks/runSectionsCheck';
-import {
-  compareReleaseVersions,
-  isDevVersion,
-} from '../../../helpers/compareReleaseVersions';
+import { getPodkopVersionRow } from './helpers/getPodkopVersionRow';
 
 const UNKNOWN_DIAGNOSTICS_SYSTEM_INFO = {
   podkop_version: _('unknown'),
@@ -461,104 +457,9 @@ function renderDiagnosticSystemInfoWidget() {
 
   const container = document.getElementById('pdk_diagnostic-page-system-info');
 
-  function getPodkopVersionRow(): IRenderSystemInfoRow {
-    const loading = diagnosticsSystemInfo.loading;
-    const unknown = diagnosticsSystemInfo.podkop_version === _('unknown');
-    const hasActualVersion =
-      Boolean(diagnosticsSystemInfo.podkop_latest_version) &&
-      diagnosticsSystemInfo.podkop_latest_version !== 'unknown';
-    const version = normalizeCompiledVersion(
-      diagnosticsSystemInfo.podkop_version,
-    );
-    const latestVersion =
-      `${diagnosticsSystemInfo.podkop_latest_version || ''}`.replace(/^v/, '');
-
-    if (loading) {
-      return {
-        key: 'Podkop Plus',
-        value: version,
-        tag: {
-          label: _('Checking'),
-          kind: 'neutral',
-        },
-      };
-    }
-
-    if (isDevVersion(version)) {
-      return {
-        key: 'Podkop Plus',
-        value: version,
-        tag: {
-          label: _('Dev'),
-          kind: 'neutral',
-        },
-      };
-    }
-
-    if (unknown || !hasActualVersion) {
-      return {
-        key: 'Podkop Plus',
-        value: version,
-        tag: {
-          label: _('Check unavailable'),
-          kind: 'neutral',
-        },
-      };
-    }
-
-    const versionCompareResult = compareReleaseVersions(version, latestVersion);
-
-    if (versionCompareResult === null) {
-      return {
-        key: 'Podkop Plus',
-        value: version,
-        tag: {
-          label: _('Check unavailable'),
-          kind: 'neutral',
-        },
-      };
-    }
-
-    if (versionCompareResult < 0) {
-      logger.debug(
-        '[DIAGNOSTIC]',
-        'diagnosticsSystemInfo',
-        diagnosticsSystemInfo,
-      );
-      return {
-        key: 'Podkop Plus',
-        value: version,
-        tag: {
-          label: _('Outdated'),
-          kind: 'warning',
-        },
-      };
-    }
-
-    if (versionCompareResult > 0) {
-      return {
-        key: 'Podkop Plus',
-        value: version,
-        tag: {
-          label: _('Dev'),
-          kind: 'neutral',
-        },
-      };
-    }
-
-    return {
-      key: 'Podkop Plus',
-      value: version,
-      tag: {
-        label: _('Latest'),
-        kind: 'success',
-      },
-    };
-  }
-
   const renderedSystemInfo = renderSystemInfo({
     items: [
-      getPodkopVersionRow(),
+      getPodkopVersionRow(diagnosticsSystemInfo),
       {
         key: 'Luci App',
         value: normalizeCompiledVersion(PODKOP_LUCI_APP_VERSION),

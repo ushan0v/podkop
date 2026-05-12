@@ -4626,6 +4626,89 @@ function isDevVersion(version) {
   return version === "dev" || /(?:^|[.+-])dev(?:$|[.+-])/i.test(version) || version.includes("COMPILED");
 }
 
+// src/podkop/tabs/diagnostic/helpers/getPodkopVersionRow.ts
+function isUnknownVersion(version) {
+  return version === "unknown" || version === _("unknown");
+}
+function getPodkopVersionRow(diagnosticsSystemInfo) {
+  const loading = diagnosticsSystemInfo.loading;
+  const unknown = isUnknownVersion(diagnosticsSystemInfo.podkop_version);
+  const hasActualVersion = Boolean(diagnosticsSystemInfo.podkop_latest_version) && !isUnknownVersion(diagnosticsSystemInfo.podkop_latest_version);
+  const version = normalizeCompiledVersion(
+    diagnosticsSystemInfo.podkop_version
+  );
+  const latestVersion = diagnosticsSystemInfo.podkop_latest_version || "";
+  if (loading) {
+    return {
+      key: "Podkop Plus",
+      value: version,
+      tag: {
+        label: _("Checking"),
+        kind: "neutral"
+      }
+    };
+  }
+  if (isDevVersion(version)) {
+    return {
+      key: "Podkop Plus",
+      value: version,
+      tag: {
+        label: _("Dev"),
+        kind: "neutral"
+      }
+    };
+  }
+  if (unknown || !hasActualVersion) {
+    return {
+      key: "Podkop Plus",
+      value: version,
+      tag: {
+        label: _("Check unavailable"),
+        kind: "neutral"
+      }
+    };
+  }
+  const versionCompareResult = compareReleaseVersions(version, latestVersion);
+  if (versionCompareResult === null) {
+    return {
+      key: "Podkop Plus",
+      value: version,
+      tag: {
+        label: _("Check unavailable"),
+        kind: "neutral"
+      }
+    };
+  }
+  if (versionCompareResult < 0) {
+    return {
+      key: "Podkop Plus",
+      value: version,
+      tag: {
+        label: _("Outdated"),
+        kind: "warning"
+      }
+    };
+  }
+  if (versionCompareResult > 0) {
+    return {
+      key: "Podkop Plus",
+      value: version,
+      tag: {
+        label: _("Dev"),
+        kind: "neutral"
+      }
+    };
+  }
+  return {
+    key: "Podkop Plus",
+    value: version,
+    tag: {
+      label: _("Latest"),
+      kind: "success"
+    }
+  };
+}
+
 // src/podkop/tabs/diagnostic/initController.ts
 var UNKNOWN_DIAGNOSTICS_SYSTEM_INFO = {
   podkop_version: _("unknown"),
@@ -4969,92 +5052,9 @@ function renderDiagnosticSystemInfoWidget() {
   logger.debug("[DIAGNOSTIC]", "renderDiagnosticSystemInfoWidget");
   const diagnosticsSystemInfo = store.get().diagnosticsSystemInfo;
   const container = document.getElementById("pdk_diagnostic-page-system-info");
-  function getPodkopVersionRow() {
-    const loading = diagnosticsSystemInfo.loading;
-    const unknown = diagnosticsSystemInfo.podkop_version === _("unknown");
-    const hasActualVersion = Boolean(diagnosticsSystemInfo.podkop_latest_version) && diagnosticsSystemInfo.podkop_latest_version !== "unknown";
-    const version = normalizeCompiledVersion(
-      diagnosticsSystemInfo.podkop_version
-    );
-    const latestVersion = `${diagnosticsSystemInfo.podkop_latest_version || ""}`.replace(/^v/, "");
-    if (loading) {
-      return {
-        key: "Podkop Plus",
-        value: version,
-        tag: {
-          label: _("Checking"),
-          kind: "neutral"
-        }
-      };
-    }
-    if (isDevVersion(version)) {
-      return {
-        key: "Podkop Plus",
-        value: version,
-        tag: {
-          label: _("Dev"),
-          kind: "neutral"
-        }
-      };
-    }
-    if (unknown || !hasActualVersion) {
-      return {
-        key: "Podkop Plus",
-        value: version,
-        tag: {
-          label: _("Check unavailable"),
-          kind: "neutral"
-        }
-      };
-    }
-    const versionCompareResult = compareReleaseVersions(version, latestVersion);
-    if (versionCompareResult === null) {
-      return {
-        key: "Podkop Plus",
-        value: version,
-        tag: {
-          label: _("Check unavailable"),
-          kind: "neutral"
-        }
-      };
-    }
-    if (versionCompareResult < 0) {
-      logger.debug(
-        "[DIAGNOSTIC]",
-        "diagnosticsSystemInfo",
-        diagnosticsSystemInfo
-      );
-      return {
-        key: "Podkop Plus",
-        value: version,
-        tag: {
-          label: _("Outdated"),
-          kind: "warning"
-        }
-      };
-    }
-    if (versionCompareResult > 0) {
-      return {
-        key: "Podkop Plus",
-        value: version,
-        tag: {
-          label: _("Dev"),
-          kind: "neutral"
-        }
-      };
-    }
-    return {
-      key: "Podkop Plus",
-      value: version,
-      tag: {
-        label: _("Latest"),
-        kind: "success"
-      }
-    };
-  }
   const renderedSystemInfo = renderSystemInfo({
     items: [
-      getPodkopVersionRow(),
+      getPodkopVersionRow(diagnosticsSystemInfo),
       {
         key: "Luci App",
         value: normalizeCompiledVersion(PODKOP_LUCI_APP_VERSION)

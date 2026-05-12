@@ -5,7 +5,7 @@ SCRIPT_PATH="$(readlink -f "${BASH_SOURCE[0]}")"
 SCRIPT_DIR="$(cd "$(dirname "$SCRIPT_PATH")" && pwd)"
 ROOT_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 
-RELEASE_VERSION="${1:-0.7.15-4}"
+RELEASE_VERSION="${1:-0.7.16-4}"
 OUTPUT_DIR_INPUT="${2:-}"
 BASE_VERSION="${RELEASE_VERSION%-*}"
 FORK_RELEASE="${RELEASE_VERSION##*-}"
@@ -20,7 +20,7 @@ if [[ "$DEFAULT_BUILD_HOME" == "/root" ]]; then
 fi
 
 if [[ "$BASE_VERSION" == "$RELEASE_VERSION" || -z "$FORK_RELEASE" ]]; then
-  echo "Expected release version in the form 0.7.15-1" >&2
+  echo "Expected release version in the form 0.7.16-1" >&2
   exit 1
 fi
 
