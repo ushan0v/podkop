@@ -97,7 +97,7 @@ export namespace Podkop {
     outbounds: Outbound[];
   }
 
-  export type RuleAction = 'proxy' | 'direct' | 'block' | 'zapret';
+  export type RuleAction = 'proxy' | 'vpn' | 'direct' | 'block' | 'zapret';
   export type LegacyConnectionType = 'proxy' | 'vpn' | 'block' | 'exclusion';
   export type ProxyConfigType =
     | 'urltest'
@@ -110,6 +110,7 @@ export namespace Podkop {
   export interface ConfigSection {
     '.name': string;
     '.type': 'settings' | 'rule' | 'node' | 'ruleset' | 'section';
+    label?: string;
     enabled?: string;
     action?: RuleAction;
     connection_type?: LegacyConnectionType;

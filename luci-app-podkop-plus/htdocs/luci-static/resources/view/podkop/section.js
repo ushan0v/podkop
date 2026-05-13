@@ -208,14 +208,24 @@ function isZapretInstalledForUi() {
 function getRuleResolvedAction(section_id) {
   const action = uci.get(UCI_PACKAGE, section_id, "action");
   if (action) {
+    const proxyConfigType = uci.get(
+      UCI_PACKAGE,
+      section_id,
+      "proxy_config_type",
+    );
+    if (`${action}` === "proxy" && proxyConfigType === "interface") {
+      return "vpn";
+    }
+
     return `${action}`;
   }
 
   const connectionType = uci.get(UCI_PACKAGE, section_id, "connection_type");
   switch (connectionType) {
     case "proxy":
-    case "vpn":
       return "proxy";
+    case "vpn":
+      return "vpn";
     case "block":
       return "block";
     case "exclusion":
@@ -231,6 +241,8 @@ function getActionOptionLabel(action) {
       return "Block";
     case "direct":
       return "Direct";
+    case "vpn":
+      return "VPN";
     case "zapret":
       return isZapretInstalledForUi()
         ? "Zapret"
@@ -260,6 +272,7 @@ function populateActionOptionValues(option) {
   delete option.vallist;
 
   option.value("proxy", "Proxy");
+  option.value("vpn", "VPN");
   option.value("direct", "Direct");
   option.value("block", "Block");
   option.value("zapret", getActionOptionLabel("zapret"));
@@ -1768,7 +1781,6 @@ function createSectionContent(section) {
   o.value("urltest", "URLTest");
   o.value("subscription", _("Subscription"));
   o.value("outbound", _("Outbound JSON"));
-  o.value("interface", _("Interface"));
   o.default = "url";
   o.rmempty = false;
   o.depends("action", "proxy");
@@ -2039,13 +2051,13 @@ function createSectionContent(section) {
     "settings",
     widgets.DeviceSelect,
     "interface",
-    _("Interface"),
-    _("Use a network interface as the outbound for this section"),
+    _("Network Interface"),
+    _("Select network interface for VPN connection"),
   );
   o.noaliases = true;
   o.nobridges = false;
   o.noinactive = false;
-  o.depends({ action: "proxy", proxy_config_type: "interface" });
+  o.depends("action", "vpn");
   o.modalonly = true;
   o.filter = function (_section_id, value) {
     const blockedInterfaces = [
@@ -2079,12 +2091,12 @@ function createSectionContent(section) {
     "settings",
     form.Flag,
     "domain_resolver_enabled",
-    _("Resolver for interface outbound"),
-    _("Enable a dedicated DNS resolver when this section uses an interface"),
+    _("Domain Resolver"),
+    _("Enable built-in DNS resolver for domains handled by this section"),
   );
   o.default = "0";
   o.rmempty = false;
-  o.depends({ action: "proxy", proxy_config_type: "interface" });
+  o.depends("action", "vpn");
   o.modalonly = true;
 
   o = section.taboption(
@@ -2099,8 +2111,7 @@ function createSectionContent(section) {
   o.default = "udp";
   o.rmempty = false;
   o.depends({
-    action: "proxy",
-    proxy_config_type: "interface",
+    action: "vpn",
     domain_resolver_enabled: "1",
   });
   o.modalonly = true;
@@ -2117,8 +2128,7 @@ function createSectionContent(section) {
   o.default = "8.8.8.8";
   o.rmempty = false;
   o.depends({
-    action: "proxy",
-    proxy_config_type: "interface",
+    action: "vpn",
     domain_resolver_enabled: "1",
   });
   o.modalonly = true;
@@ -2137,6 +2147,7 @@ function createSectionContent(section) {
   o.default = "0";
   o.rmempty = false;
   o.depends("action", "proxy");
+  o.depends("action", "vpn");
   o.modalonly = true;
 
   o = section.taboption(
@@ -2148,6 +2159,7 @@ function createSectionContent(section) {
   );
   o.rmempty = false;
   o.depends({ action: "proxy", mixed_proxy_enabled: "1" });
+  o.depends({ action: "vpn", mixed_proxy_enabled: "1" });
   o.modalonly = true;
   o.validate = function (_section_id, value) {
     if (!value || value.length === 0) {
@@ -2172,6 +2184,7 @@ function createSectionContent(section) {
   o.default = "0";
   o.rmempty = false;
   o.depends("action", "proxy");
+  o.depends("action", "vpn");
   o.modalonly = true;
 
   addTextConditionField(section, {

@@ -14,13 +14,21 @@ function getDisplayName(section: Podkop.ConfigSection) {
 
 function getSectionAction(section: Podkop.ConfigSection) {
   if (section.action) {
+    if (
+      section.action === 'proxy' &&
+      section.proxy_config_type === 'interface'
+    ) {
+      return 'vpn';
+    }
+
     return section.action;
   }
 
   switch (section.connection_type) {
     case 'proxy':
-    case 'vpn':
       return 'proxy';
+    case 'vpn':
+      return 'vpn';
     case 'block':
       return 'block';
     case 'exclusion':
@@ -32,11 +40,11 @@ function getSectionAction(section: Podkop.ConfigSection) {
 
 function getSectionProxyConfigType(section: Podkop.ConfigSection) {
   if (section.proxy_config_type) {
-    return section.proxy_config_type;
-  }
+    if (section.proxy_config_type === 'interface') {
+      return undefined;
+    }
 
-  if (section.connection_type === 'vpn') {
-    return 'interface';
+    return section.proxy_config_type;
   }
 
   return undefined;
@@ -62,11 +70,35 @@ export async function getDashboardSections(): Promise<IGetDashboardSectionsRespo
   const data = configSections
     .filter(
       (section) =>
-        section.enabled !== '0' && getSectionAction(section) === 'proxy',
+        section.enabled !== '0' &&
+        ['proxy', 'vpn'].includes(getSectionAction(section)),
     )
     .map((section) => {
       const displayName = getDisplayName(section);
+      const sectionAction = getSectionAction(section);
       const proxyConfigType = getSectionProxyConfigType(section);
+
+      if (sectionAction === 'vpn') {
+        const outbound = proxies.find(
+          (proxy) => proxy.code === `${section['.name']}-out`,
+        );
+
+        return {
+          withTagSelect: false,
+          code: outbound?.code || section['.name'],
+          sectionName: section['.name'],
+          displayName,
+          outbounds: [
+            {
+              code: outbound?.code || section['.name'],
+              displayName: section.interface || outbound?.value?.name || '',
+              latency: outbound?.value?.history?.[0]?.delay || 0,
+              type: outbound?.value?.type || '',
+              selected: true,
+            },
+          ],
+        };
+      }
 
       if (proxyConfigType === 'url') {
         const outbound = proxies.find(
@@ -276,28 +308,6 @@ export async function getDashboardSections(): Promise<IGetDashboardSectionsRespo
           sectionName: section['.name'],
           displayName,
           outbounds,
-        };
-      }
-
-      if (proxyConfigType === 'interface') {
-        const outbound = proxies.find(
-          (proxy) => proxy.code === `${section['.name']}-out`,
-        );
-
-        return {
-          withTagSelect: false,
-          code: outbound?.code || section['.name'],
-          sectionName: section['.name'],
-          displayName,
-          outbounds: [
-            {
-              code: outbound?.code || section['.name'],
-              displayName: section.interface || outbound?.value?.name || '',
-              latency: outbound?.value?.history?.[0]?.delay || 0,
-              type: outbound?.value?.type || '',
-              selected: true,
-            },
-          ],
         };
       }
 

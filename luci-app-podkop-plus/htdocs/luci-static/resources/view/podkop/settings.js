@@ -324,8 +324,8 @@ function createSettingsContent(section) {
   o = section.option(
     form.ListValue,
     "download_lists_via_proxy_section",
-    _("Download Lists via specific proxy section"),
-    _("Download external rule sets through one of the enabled proxy sections"),
+    _("Download Lists via specific proxy/VPN section"),
+    _("Download external rule sets through one of the enabled proxy/VPN sections"),
   );
 
   o.rmempty = false;
@@ -341,10 +341,14 @@ function createSettingsContent(section) {
 
     for (const secName in sections) {
       const sec = sections[secName];
+      const action =
+        sec.action === "proxy" && sec.proxy_config_type === "interface"
+          ? "vpn"
+          : sec.action;
       if (
         sec[".type"] === "rule" &&
         sec.enabled !== "0" &&
-        sec.action === "proxy"
+        (action === "proxy" || action === "vpn")
       ) {
         this.keylist.push(secName);
         this.vallist.push(sec.label || secName);

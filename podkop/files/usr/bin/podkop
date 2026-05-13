@@ -579,19 +579,6 @@ append_sing_box_rule_signature() {
             signature_add "rule.$section.urltest_tolerance" "$urltest_tolerance"
             signature_add "rule.$section.urltest_testing_url" "$urltest_testing_url"
             ;;
-        interface)
-            local interface_name domain_resolver_enabled domain_resolver_dns_type domain_resolver_dns_server
-            config_get interface_name "$section" "interface"
-            config_get_bool domain_resolver_enabled "$section" "domain_resolver_enabled" 0
-            signature_add "rule.$section.interface" "$interface_name"
-            signature_add "rule.$section.domain_resolver_enabled" "$domain_resolver_enabled"
-            if [ "$domain_resolver_enabled" -eq 1 ]; then
-                config_get domain_resolver_dns_type "$section" "domain_resolver_dns_type"
-                config_get domain_resolver_dns_server "$section" "domain_resolver_dns_server"
-                signature_add "rule.$section.domain_resolver_dns_type" "$domain_resolver_dns_type"
-                signature_add "rule.$section.domain_resolver_dns_server" "$domain_resolver_dns_server"
-            fi
-            ;;
         subscription)
             local subscription_url subscription_update_interval subscription_group_by_countries \
                 urltest_check_interval urltest_tolerance urltest_testing_url
@@ -609,6 +596,29 @@ append_sing_box_rule_signature() {
             signature_add "rule.$section.urltest_testing_url" "$urltest_testing_url"
             ;;
         esac
+
+        config_get_bool mixed_proxy_enabled "$section" "mixed_proxy_enabled" 0
+        signature_add "rule.$section.mixed_proxy_enabled" "$mixed_proxy_enabled"
+        if [ "$mixed_proxy_enabled" -eq 1 ]; then
+            config_get mixed_proxy_port "$section" "mixed_proxy_port"
+            signature_add "rule.$section.mixed_proxy_port" "$mixed_proxy_port"
+        fi
+
+        config_get_bool resolve_real_ip_for_routing "$section" "resolve_real_ip_for_routing" 0
+        signature_add "rule.$section.resolve_real_ip_for_routing" "$resolve_real_ip_for_routing"
+        ;;
+    vpn)
+        local interface_name domain_resolver_enabled domain_resolver_dns_type domain_resolver_dns_server
+        config_get interface_name "$section" "interface"
+        config_get_bool domain_resolver_enabled "$section" "domain_resolver_enabled" 0
+        signature_add "rule.$section.interface" "$interface_name"
+        signature_add "rule.$section.domain_resolver_enabled" "$domain_resolver_enabled"
+        if [ "$domain_resolver_enabled" -eq 1 ]; then
+            config_get domain_resolver_dns_type "$section" "domain_resolver_dns_type"
+            config_get domain_resolver_dns_server "$section" "domain_resolver_dns_server"
+            signature_add "rule.$section.domain_resolver_dns_type" "$domain_resolver_dns_type"
+            signature_add "rule.$section.domain_resolver_dns_server" "$domain_resolver_dns_server"
+        fi
 
         config_get_bool mixed_proxy_enabled "$section" "mixed_proxy_enabled" 0
         signature_add "rule.$section.mixed_proxy_enabled" "$mixed_proxy_enabled"
@@ -1056,10 +1066,16 @@ reload_sing_box_runtime() {
 
 get_rule_action() {
     local section="$1"
-    local action
+    local action proxy_config_type
 
     config_get action "$section" "action"
     if [ -n "$action" ]; then
+        config_get proxy_config_type "$section" "proxy_config_type"
+        if [ "$action" = "proxy" ] && [ "$proxy_config_type" = "interface" ]; then
+            echo "vpn"
+            return 0
+        fi
+
         echo "$action"
         return 0
     fi
@@ -1074,8 +1090,12 @@ infer_rule_action_from_fields() {
 
     config_get connection_type "$section" "connection_type"
     case "$connection_type" in
-    proxy | vpn)
+    proxy)
         echo "proxy"
+        return 0
+        ;;
+    vpn)
+        echo "vpn"
         return 0
         ;;
     block)
@@ -1089,20 +1109,30 @@ infer_rule_action_from_fields() {
     esac
 
     config_get proxy_config_type "$section" "proxy_config_type"
+    if [ "$proxy_config_type" = "interface" ]; then
+        echo "vpn"
+        return 0
+    fi
+
     if [ -n "$proxy_config_type" ]; then
         echo "proxy"
         return 0
     fi
 
-    config_get interface "$section" "interface"
     config_get outbound_json "$section" "outbound_json"
     config_get selector_proxy_links "$section" "selector_proxy_links"
     config_get urltest_proxy_links "$section" "urltest_proxy_links"
     config_get subscription_url "$section" "subscription_url"
     config_get proxy_string "$section" "proxy_string"
-    if [ -n "$interface" ] || [ -n "$outbound_json" ] || [ -n "$selector_proxy_links" ] ||
+    if [ -n "$outbound_json" ] || [ -n "$selector_proxy_links" ] ||
         [ -n "$urltest_proxy_links" ] || [ -n "$subscription_url" ] || [ -n "$proxy_string" ]; then
         echo "proxy"
+        return 0
+    fi
+
+    config_get interface "$section" "interface"
+    if [ -n "$interface" ]; then
+        echo "vpn"
         return 0
     fi
 
@@ -1117,10 +1147,21 @@ infer_rule_action_from_fields() {
 
 get_proxy_config_type() {
     local section="$1"
-    local proxy_config_type
+    local action proxy_config_type
+
+    config_get action "$section" "action"
+    if [ "$action" = "vpn" ]; then
+        echo ""
+        return 0
+    fi
 
     config_get proxy_config_type "$section" "proxy_config_type"
     if [ -n "$proxy_config_type" ]; then
+        if [ "$proxy_config_type" = "interface" ]; then
+            echo ""
+            return 0
+        fi
+
         echo "$proxy_config_type"
         return 0
     fi
@@ -1130,17 +1171,17 @@ get_proxy_config_type() {
 
 infer_proxy_config_type_from_fields() {
     local section="$1"
-    local connection_type interface outbound_json selector_proxy_links urltest_proxy_links subscription_url proxy_string
+    local action connection_type outbound_json selector_proxy_links urltest_proxy_links subscription_url proxy_string
 
-    config_get connection_type "$section" "connection_type"
-    if [ "$connection_type" = "vpn" ]; then
-        echo "interface"
+    config_get action "$section" "action"
+    if [ "$action" = "vpn" ]; then
+        echo ""
         return 0
     fi
 
-    config_get interface "$section" "interface"
-    if [ -n "$interface" ]; then
-        echo "interface"
+    config_get connection_type "$section" "connection_type"
+    if [ "$connection_type" = "vpn" ]; then
+        echo ""
         return 0
     fi
 
@@ -1211,8 +1252,10 @@ migrate_legacy_section_to_rule() {
         uci set "$PODKOP_CONFIG_NAME.$section.action=$action"
     fi
 
-    if [ -n "$proxy_config_type" ]; then
+    if [ "$action" = "proxy" ] && [ -n "$proxy_config_type" ]; then
         uci set "$PODKOP_CONFIG_NAME.$section.proxy_config_type=$proxy_config_type"
+    elif [ "$action" = "vpn" ]; then
+        uci -q delete "$PODKOP_CONFIG_NAME.$section.proxy_config_type" || true
     fi
 
     legacy_migration_changed=1
@@ -1220,19 +1263,53 @@ migrate_legacy_section_to_rule() {
 
 normalize_incomplete_rule_section() {
     local section="$1"
-    local current_action current_proxy_config_type inferred_action inferred_proxy_config_type
+    local current_action current_proxy_config_type current_connection_type inferred_action inferred_proxy_config_type effective_action \
+        legacy_vpn_rule
 
     config_get current_action "$section" "action"
     config_get current_proxy_config_type "$section" "proxy_config_type"
+    config_get current_connection_type "$section" "connection_type"
+
+    legacy_vpn_rule=0
+    if [ "$current_connection_type" = "vpn" ]; then
+        legacy_vpn_rule=1
+    fi
+    if [ "$current_proxy_config_type" = "interface" ]; then
+        legacy_vpn_rule=1
+    fi
+
+    if [ "$legacy_vpn_rule" -eq 1 ]; then
+        if [ "$current_action" != "vpn" ]; then
+            log "Migrating legacy interface proxy rule '$section' to action 'vpn'"
+            uci set "$PODKOP_CONFIG_NAME.$section.action=vpn"
+            current_action="vpn"
+            legacy_migration_changed=1
+        fi
+
+        if [ -n "$current_proxy_config_type" ]; then
+            uci -q delete "$PODKOP_CONFIG_NAME.$section.proxy_config_type" || true
+            current_proxy_config_type=""
+            legacy_migration_changed=1
+        fi
+    fi
 
     inferred_action="$(get_rule_action "$section")"
     if [ -z "$current_action" ] && [ -n "$inferred_action" ]; then
         log "Migrating incomplete rule '$section': inferred action '$inferred_action'"
         uci set "$PODKOP_CONFIG_NAME.$section.action=$inferred_action"
+        current_action="$inferred_action"
         legacy_migration_changed=1
     fi
 
-    if [ "${current_action:-$inferred_action}" = "proxy" ] && [ -z "$current_proxy_config_type" ]; then
+    effective_action="${current_action:-$inferred_action}"
+    if [ "$effective_action" = "vpn" ] && [ -n "$current_proxy_config_type" ]; then
+        log "Removing stale proxy_config_type from VPN rule '$section'"
+        uci -q delete "$PODKOP_CONFIG_NAME.$section.proxy_config_type" || true
+        current_proxy_config_type=""
+        legacy_migration_changed=1
+    fi
+
+    if [ "$effective_action" = "proxy" ] && [ -z "$current_proxy_config_type" ]; then
         inferred_proxy_config_type="$(get_proxy_config_type "$section")"
         if [ -n "$inferred_proxy_config_type" ]; then
             log "Migrating incomplete proxy rule '$section': inferred proxy_config_type '$inferred_proxy_config_type'"
@@ -3637,35 +3714,6 @@ configure_outbound_handler() {
             fi
             return 0
             ;;
-        interface)
-            local interface_name domain_resolver_enabled domain_resolver_dns_type domain_resolver_dns_server \
-                domain_resolver_dns_server_address outbound_tag domain_resolver_tag dns_domain_resolver
-
-            config_get interface_name "$section" "interface"
-            config_get domain_resolver_enabled "$section" "domain_resolver_enabled"
-            config_get domain_resolver_dns_type "$section" "domain_resolver_dns_type"
-            config_get domain_resolver_dns_server "$section" "domain_resolver_dns_server"
-
-            if [ -z "$interface_name" ]; then
-                log "Interface outbound is not set for rule '$section'. Aborted." "fatal"
-                exit 1
-            fi
-
-            outbound_tag="$(get_outbound_tag_by_section "$section")"
-
-            if [ "$domain_resolver_enabled" -eq 1 ]; then
-                domain_resolver_dns_server_address="$(url_get_host "$domain_resolver_dns_server")"
-                if ! is_ipv4 "$domain_resolver_dns_server_address"; then
-                    dns_domain_resolver=$SB_BOOTSTRAP_SERVER_TAG
-                fi
-                domain_resolver_tag="$(get_domain_resolver_tag "$section")"
-                config=$(sing_box_cf_add_dns_server "$config" "$domain_resolver_dns_type" "$domain_resolver_tag" \
-                    "$domain_resolver_dns_server" "$dns_domain_resolver" "$outbound_tag")
-            fi
-
-            config=$(sing_box_cm_add_interface_outbound "$config" "$outbound_tag" "$interface_name" "$domain_resolver_tag")
-            return 0
-            ;;
         "")
             log "Proxy rule '$section' has no proxy_config_type configured. Aborted." "fatal"
             exit 1
@@ -3675,6 +3723,36 @@ configure_outbound_handler() {
             exit 1
             ;;
         esac
+    fi
+
+    if [ "$action" = "vpn" ]; then
+        local interface_name domain_resolver_enabled domain_resolver_dns_type domain_resolver_dns_server \
+            domain_resolver_dns_server_address outbound_tag domain_resolver_tag dns_domain_resolver
+
+        config_get interface_name "$section" "interface"
+        config_get_bool domain_resolver_enabled "$section" "domain_resolver_enabled" 0
+        config_get domain_resolver_dns_type "$section" "domain_resolver_dns_type"
+        config_get domain_resolver_dns_server "$section" "domain_resolver_dns_server"
+
+        if [ -z "$interface_name" ]; then
+            log "VPN interface is not set for rule '$section'. Aborted." "fatal"
+            exit 1
+        fi
+
+        outbound_tag="$(get_outbound_tag_by_section "$section")"
+
+        if [ "$domain_resolver_enabled" -eq 1 ]; then
+            domain_resolver_dns_server_address="$(url_get_host "$domain_resolver_dns_server")"
+            if ! is_ipv4 "$domain_resolver_dns_server_address"; then
+                dns_domain_resolver=$SB_BOOTSTRAP_SERVER_TAG
+            fi
+            domain_resolver_tag="$(get_domain_resolver_tag "$section")"
+            config=$(sing_box_cf_add_dns_server "$config" "$domain_resolver_dns_type" "$domain_resolver_tag" \
+                "$domain_resolver_dns_server" "$dns_domain_resolver" "$outbound_tag")
+        fi
+
+        config=$(sing_box_cm_add_interface_outbound "$config" "$outbound_tag" "$interface_name" "$domain_resolver_tag")
+        return 0
     fi
 
     case "$action" in
@@ -3910,7 +3988,7 @@ create_route_rule_for_action() {
     local rule_tag="$3"
 
     case "$action" in
-    proxy)
+    proxy | vpn)
         local outbound_tag
         outbound_tag="$(get_outbound_tag_by_section "$section")"
         config=$(sing_box_cm_add_route_rule "$config" "$rule_tag" "$SB_TPROXY_INBOUND_TAG" "$outbound_tag")
@@ -4226,7 +4304,7 @@ configure_route_rule_handler() {
         configure_domain_ip_lists "$section" "$route_rule_tag"
     fi
 
-    if [ "$action" = "proxy" ]; then
+    if [ "$action" = "proxy" ] || [ "$action" = "vpn" ]; then
         local resolve_real_ip_for_routing
         config_get_bool resolve_real_ip_for_routing "$section" "resolve_real_ip_for_routing" 0
         if [ "$resolve_real_ip_for_routing" -eq 1 ]; then
@@ -4623,7 +4701,7 @@ configure_section_mixed_proxy() {
     rule_is_enabled "$section" || return 0
 
     action="$(get_rule_action "$section")"
-    [ "$action" = "proxy" ] || return 0
+    [ "$action" = "proxy" ] || [ "$action" = "vpn" ] || return 0
 
     local mixed_inbound_enabled mixed_proxy_port mixed_inbound_tag mixed_outbound_tag mixed_proxy_address
     config_get_bool mixed_inbound_enabled "$section" "mixed_proxy_enabled" 0
@@ -5212,7 +5290,7 @@ _determine_first_outbound_section() {
     rule_is_enabled "$section" || return 0
 
     action="$(get_rule_action "$section")"
-    if [ "$action" = "proxy" ]; then
+    if [ "$action" = "proxy" ] || [ "$action" = "vpn" ]; then
         [ -z "$first_section" ] && first_section="$1"
     fi
 }
