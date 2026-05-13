@@ -580,16 +580,14 @@ append_sing_box_rule_signature() {
             signature_add "rule.$section.urltest_testing_url" "$urltest_testing_url"
             ;;
         subscription)
-            local subscription_url subscription_update_interval subscription_group_by_countries \
+            local subscription_url subscription_group_by_countries \
                 urltest_check_interval urltest_tolerance urltest_testing_url
             config_get subscription_url "$section" "subscription_url"
-            subscription_update_interval="$(get_subscription_update_interval_for_rule "$section")"
             config_get subscription_group_by_countries "$section" "subscription_group_by_countries"
             urltest_check_interval="$(get_urltest_check_interval_for_rule "$section")"
             config_get urltest_tolerance "$section" "urltest_tolerance" 50
             config_get urltest_testing_url "$section" "urltest_testing_url" "https://www.gstatic.com/generate_204"
             signature_add "rule.$section.subscription_url" "$subscription_url"
-            signature_add "rule.$section.subscription_update_interval" "$subscription_update_interval"
             signature_add "rule.$section.subscription_group_by_countries" "$subscription_group_by_countries"
             signature_add "rule.$section.urltest_check_interval" "$urltest_check_interval"
             signature_add "rule.$section.urltest_tolerance" "$urltest_tolerance"
@@ -685,7 +683,9 @@ build_sing_box_signature() {
     signature_add "settings.output_network_interface" "$output_network_interface"
     signature_add "settings.disable_quic" "$disable_quic"
     signature_add "settings.routing_excluded_ips" "$routing_excluded_ips"
-    signature_add "settings.update_interval" "$update_interval"
+    if has_remote_sing_box_ruleset_sources; then
+        signature_add "settings.update_interval" "$update_interval"
+    fi
     signature_add "settings.cache_path" "$cache_path"
     signature_add "settings.config_path" "$config_path"
     signature_add "settings.log_level" "$log_level"
@@ -709,17 +709,18 @@ build_sing_box_signature() {
 
 append_nft_rule_signature() {
     local section="$1"
-    local ip_cidr community_lists remote_subnet_lists rule_set_with_subnets
+    local ip_cidr community_lists community_subnet_lists remote_subnet_lists rule_set_with_subnets
 
     rule_is_enabled "$section" || return 0
 
     ip_cidr="$(get_rule_condition_commas_string "$section" "ip_cidr" "subnets")"
     config_get community_lists "$section" "community_lists"
+    community_subnet_lists="$(filter_community_subnet_lists "$community_lists")"
     config_get remote_subnet_lists "$section" "remote_subnet_lists"
     config_get rule_set_with_subnets "$section" "rule_set_with_subnets"
 
     signature_add "rule.$section.ip_cidr" "$ip_cidr"
-    signature_add "rule.$section.community_lists" "$community_lists"
+    signature_add "rule.$section.community_subnet_lists" "$community_subnet_lists"
     signature_add "rule.$section.remote_subnet_lists" "$remote_subnet_lists"
     signature_add "rule.$section.rule_set_with_subnets" "$rule_set_with_subnets"
 }
@@ -795,17 +796,18 @@ build_zapret_runtime_signature() {
 
 append_list_update_signature() {
     local section="$1"
-    local community_lists remote_domain_lists remote_subnet_lists rule_set_with_subnets domain_ip_lists
+    local community_lists community_subnet_lists remote_domain_lists remote_subnet_lists rule_set_with_subnets domain_ip_lists
 
     rule_is_enabled "$section" || return 0
 
     config_get community_lists "$section" "community_lists"
+    community_subnet_lists="$(filter_community_subnet_lists "$community_lists")"
     config_get remote_domain_lists "$section" "remote_domain_lists"
     config_get remote_subnet_lists "$section" "remote_subnet_lists"
     config_get rule_set_with_subnets "$section" "rule_set_with_subnets"
     config_get domain_ip_lists "$section" "domain_ip_lists"
 
-    signature_add "lists.$section.community_lists" "$community_lists"
+    signature_add "lists.$section.community_subnet_lists" "$community_subnet_lists"
     signature_add "lists.$section.remote_domain_lists" "$remote_domain_lists"
     signature_add "lists.$section.remote_subnet_lists" "$remote_subnet_lists"
     signature_add "lists.$section.rule_set_with_subnets" "$rule_set_with_subnets"
@@ -855,6 +857,88 @@ list_has_remote_references() {
     done
 
     return 1
+}
+
+community_service_has_subnet_list() {
+    case "$1" in
+    twitter | meta | telegram | cloudflare | hetzner | ovh | digitalocean | cloudfront | discord | roblox)
+        return 0
+        ;;
+    esac
+
+    return 1
+}
+
+filter_community_subnet_lists() {
+    local items="$1"
+    local item result
+
+    for item in $items; do
+        community_service_has_subnet_list "$item" || continue
+
+        if [ -z "$result" ]; then
+            result="$item"
+        else
+            result="$result $item"
+        fi
+    done
+
+    printf '%s\n' "$result"
+}
+
+reference_is_remote_sing_box_ruleset() {
+    local extension
+
+    case "$1" in
+    http://* | https://*)
+        extension="$(url_get_file_extension "$1")"
+        [ "$extension" = "srs" ] || [ "$extension" = "json" ]
+        return "$?"
+        ;;
+    esac
+
+    return 1
+}
+
+list_has_remote_sing_box_rulesets() {
+    local items="$1"
+    local item
+
+    for item in $items; do
+        reference_is_remote_sing_box_ruleset "$item" && return 0
+    done
+
+    return 1
+}
+
+enabled_rule_has_remote_sing_box_ruleset_source() {
+    local section="$1"
+    local community_lists rule_set rule_set_with_subnets
+
+    rule_is_enabled "$section" || return 0
+
+    config_get community_lists "$section" "community_lists"
+    if [ -n "$community_lists" ]; then
+        RELOAD_REMOTE_SING_BOX_RULESET_SOURCES_PRESENT=1
+        return 0
+    fi
+
+    config_get rule_set "$section" "rule_set"
+    if list_has_remote_sing_box_rulesets "$rule_set"; then
+        RELOAD_REMOTE_SING_BOX_RULESET_SOURCES_PRESENT=1
+        return 0
+    fi
+
+    config_get rule_set_with_subnets "$section" "rule_set_with_subnets"
+    if list_has_remote_sing_box_rulesets "$rule_set_with_subnets"; then
+        RELOAD_REMOTE_SING_BOX_RULESET_SOURCES_PRESENT=1
+    fi
+}
+
+has_remote_sing_box_ruleset_sources() {
+    RELOAD_REMOTE_SING_BOX_RULESET_SOURCES_PRESENT=0
+    config_foreach enabled_rule_has_remote_sing_box_ruleset_source "rule"
+    [ "$RELOAD_REMOTE_SING_BOX_RULESET_SOURCES_PRESENT" -eq 1 ]
 }
 
 get_settings_update_interval() {
@@ -935,16 +1019,17 @@ EOF
 
 enabled_rule_has_list_sources() {
     local section="$1"
-    local community_lists remote_domain_lists remote_subnet_lists rule_set_with_subnets domain_ip_lists
+    local community_lists community_subnet_lists remote_domain_lists remote_subnet_lists rule_set_with_subnets domain_ip_lists
 
     rule_is_enabled "$section" || return 0
     config_get community_lists "$section" "community_lists"
+    community_subnet_lists="$(filter_community_subnet_lists "$community_lists")"
     config_get remote_domain_lists "$section" "remote_domain_lists"
     config_get remote_subnet_lists "$section" "remote_subnet_lists"
     config_get rule_set_with_subnets "$section" "rule_set_with_subnets"
     config_get domain_ip_lists "$section" "domain_ip_lists"
 
-    if [ -n "$community_lists" ] ||
+    if [ -n "$community_subnet_lists" ] ||
         [ -n "$remote_domain_lists" ] ||
         [ -n "$remote_subnet_lists" ] ||
         [ -n "$rule_set_with_subnets" ] ||
@@ -979,15 +1064,16 @@ has_subscription_update_sources() {
 
 enabled_rule_has_nft_list_sources() {
     local section="$1"
-    local community_lists remote_subnet_lists rule_set_with_subnets domain_ip_lists
+    local community_lists community_subnet_lists remote_subnet_lists rule_set_with_subnets domain_ip_lists
 
     rule_is_enabled "$section" || return 0
     config_get community_lists "$section" "community_lists"
+    community_subnet_lists="$(filter_community_subnet_lists "$community_lists")"
     config_get remote_subnet_lists "$section" "remote_subnet_lists"
     config_get rule_set_with_subnets "$section" "rule_set_with_subnets"
     config_get domain_ip_lists "$section" "domain_ip_lists"
 
-    if [ -n "$community_lists" ] ||
+    if [ -n "$community_subnet_lists" ] ||
         [ -n "$remote_subnet_lists" ] ||
         [ -n "$rule_set_with_subnets" ] ||
         list_has_remote_references "$domain_ip_lists"; then
@@ -1676,6 +1762,7 @@ reload() {
     local previous_zapret_queue_signature previous_zapret_runtime_signature previous_list_signature previous_cron_signature
     local previous_dont_touch_dhcp needs_init_restart needs_sing_box_reload needs_nft_rebuild needs_zapret_restart
     local needs_dnsmasq_configure needs_dnsmasq_restore needs_cron_refresh needs_list_update
+    local changed_dnsmasq changed_sing_box changed_nft changed_zapret_queue changed_zapret_runtime changed_cron changed_list
 
     log "Podkop Plus reload"
     runtime_status_write "reloading" "reload"
@@ -1724,6 +1811,13 @@ reload() {
     needs_dnsmasq_restore=0
     needs_cron_refresh=0
     needs_list_update=0
+    changed_dnsmasq=0
+    changed_sing_box=0
+    changed_nft=0
+    changed_zapret_queue=0
+    changed_zapret_runtime=0
+    changed_cron=0
+    changed_list=0
 
     [ "$RELOAD_STATE_RESTART_SIGNATURE" != "$previous_restart_signature" ] && needs_init_restart=1
 
@@ -1735,20 +1829,30 @@ reload() {
         return "$status"
     fi
 
-    [ "$RELOAD_STATE_SING_BOX_SIGNATURE" != "$previous_sing_box_signature" ] && needs_sing_box_reload=1
-    [ "$RELOAD_STATE_NFT_SIGNATURE" != "$previous_nft_signature" ] && needs_nft_rebuild=1
+    if [ "$RELOAD_STATE_SING_BOX_SIGNATURE" != "$previous_sing_box_signature" ]; then
+        changed_sing_box=1
+        needs_sing_box_reload=1
+    fi
+
+    if [ "$RELOAD_STATE_NFT_SIGNATURE" != "$previous_nft_signature" ]; then
+        changed_nft=1
+        needs_nft_rebuild=1
+    fi
 
     if [ "$RELOAD_STATE_ZAPRET_QUEUE_SIGNATURE" != "$previous_zapret_queue_signature" ]; then
+        changed_zapret_queue=1
         needs_zapret_restart=1
         needs_nft_rebuild=1
         needs_sing_box_reload=1
     fi
 
     if [ "$RELOAD_STATE_ZAPRET_RUNTIME_SIGNATURE" != "$previous_zapret_runtime_signature" ]; then
+        changed_zapret_runtime=1
         needs_zapret_restart=1
     fi
 
     if [ "$RELOAD_STATE_DNSMASQ_SIGNATURE" != "$previous_dnsmasq_signature" ]; then
+        changed_dnsmasq=1
         if [ "$RELOAD_STATE_DONT_TOUCH_DHCP" -eq 0 ]; then
             needs_dnsmasq_configure=1
         elif [ "$previous_dont_touch_dhcp" = "0" ]; then
@@ -1756,10 +1860,14 @@ reload() {
         fi
     fi
 
-    [ "$RELOAD_STATE_CRON_SIGNATURE" != "$previous_cron_signature" ] && needs_cron_refresh=1
+    if [ "$RELOAD_STATE_CRON_SIGNATURE" != "$previous_cron_signature" ]; then
+        changed_cron=1
+        needs_cron_refresh=1
+    fi
 
-    if [ "$RELOAD_STATE_LIST_SIGNATURE" != "$previous_list_signature" ] && has_list_update_sources; then
-        needs_list_update=1
+    if [ "$RELOAD_STATE_LIST_SIGNATURE" != "$previous_list_signature" ]; then
+        changed_list=1
+        has_list_update_sources && needs_list_update=1
     fi
 
     if [ "$needs_nft_rebuild" -eq 1 ] && has_nft_list_update_sources; then
@@ -1775,6 +1883,7 @@ reload() {
         needs_sing_box_reload=1
     fi
 
+    log "Reload signature changes: sing-box=$changed_sing_box nft=$changed_nft zapret_queue=$changed_zapret_queue zapret_runtime=$changed_zapret_runtime dnsmasq=$changed_dnsmasq cron=$changed_cron list=$changed_list forced=$force_runtime_reload" "debug"
     log "Reload plan: sing-box=$needs_sing_box_reload nft=$needs_nft_rebuild zapret=$needs_zapret_restart dnsmasq_configure=$needs_dnsmasq_configure dnsmasq_restore=$needs_dnsmasq_restore cron=$needs_cron_refresh list_update=$needs_list_update" "debug"
 
     if [ "$needs_sing_box_reload" -eq 0 ] &&
@@ -6920,7 +7029,7 @@ stop)
     stop
     ;;
 reload)
-    reload
+    reload "$2"
     ;;
 restart)
     restart
