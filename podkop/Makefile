@@ -1,0 +1,81 @@
+include $(TOPDIR)/rules.mk
+
+PKG_NAME:=podkop-plus
+
+PODKOP_RELEASE_VERSION:=$(or $(PODKOP_PACKAGE_VERSION),$(PODKOP_VERSION),0.7.16-4)
+PODKOP_BASE_VERSION:=$(or $(PODKOP_BASE_VERSION),$(word 1,$(subst -, ,$(PODKOP_RELEASE_VERSION))))
+PODKOP_FORK_RELEASE:=$(or $(PODKOP_FORK_RELEASE),$(word 2,$(subst -, ,$(PODKOP_RELEASE_VERSION))),4)
+PODKOP_COMPILED_VERSION:=$(PODKOP_BASE_VERSION)-$(PODKOP_FORK_RELEASE)
+
+PKG_VERSION:=$(PODKOP_BASE_VERSION)
+PKG_RELEASE:=$(PODKOP_FORK_RELEASE)
+
+PKG_MAINTAINER:=ushan0v <ushan0v@users.noreply.github.com>
+PKG_LICENSE:=GPL-2.0-or-later
+
+include $(INCLUDE_DIR)/package.mk
+
+define Package/podkop-plus
+	SECTION:=net
+	CATEGORY:=Network
+	DEPENDS:=+sing-box +curl +jq +kmod-nft-tproxy +coreutils-base64 +coreutils-sort +bind-dig +nftables +kmod-nft-nat +kmod-nft-offload
+	CONFLICTS:=https-dns-proxy nextdns luci-app-passwall luci-app-passwall2
+	TITLE:=Podkop Plus backend service
+	URL:=https://github.com/ushan0v/podkop-plus
+	PKGARCH:=all
+endef
+
+define Package/podkop-plus/description
+	Rule-based Podkop Plus backend with hybrid sing-box + zapret orchestration
+endef
+
+define Build/Configure
+endef
+
+define Build/Compile
+endef
+
+define Package/podkop-plus/preinst
+#!/bin/sh
+
+[ -n "$${IPKG_INSTROOT}" ] && exit 0
+
+if [ ! -f /etc/config/podkop-plus ] && [ -f /etc/config/podkop_plus ]; then
+	cp /etc/config/podkop_plus /etc/config/podkop-plus || exit 1
+	chmod 0644 /etc/config/podkop-plus 2>/dev/null || true
+fi
+
+exit 0
+endef
+
+define Package/podkop-plus/prerm
+#!/bin/sh
+
+grep -q "105 podkopplus" /etc/iproute2/rt_tables && sed -i "/105 podkopplus/d" /etc/iproute2/rt_tables
+
+/etc/init.d/podkop-plus stop >/dev/null 2>&1 || true
+
+exit 0
+endef
+
+define Package/podkop-plus/conffiles
+/etc/config/podkop-plus
+endef
+
+define Package/podkop-plus/install
+	$(INSTALL_DIR) $(1)/etc/init.d
+	$(INSTALL_BIN) ./files/etc/init.d/podkop $(1)/etc/init.d/podkop-plus
+
+	$(INSTALL_DIR) $(1)/etc/config
+	$(INSTALL_CONF) ./files/etc/config/podkop $(1)/etc/config/podkop-plus
+
+	$(INSTALL_DIR) $(1)/usr/bin
+	$(INSTALL_BIN) ./files/usr/bin/podkop $(1)/usr/bin/podkop-plus
+
+	$(INSTALL_DIR) $(1)/usr/lib/podkop-plus
+	$(CP) ./files/usr/lib/* $(1)/usr/lib/podkop-plus/
+
+	sed -i -e 's/__COMPILED_VERSION_VARIABLE__/$(PODKOP_COMPILED_VERSION)/g' $(1)/usr/lib/podkop-plus/constants.sh
+endef
+
+$(eval $(call BuildPackage,podkop-plus))

@@ -2,16 +2,17 @@ include $(TOPDIR)/rules.mk
 
 PKG_NAME:=luci-app-podkop-plus
 
-PODKOP_BASE_VERSION:=$(or $(PODKOP_BASE_VERSION),$(PODKOP_VERSION),0.7.16)
-PODKOP_FORK_RELEASE:=$(or $(PODKOP_FORK_RELEASE),4)
-PODKOP_PACKAGE_VERSION:=$(PODKOP_BASE_VERSION)-$(PODKOP_FORK_RELEASE)
+PODKOP_RELEASE_VERSION:=$(or $(PODKOP_PACKAGE_VERSION),$(PODKOP_VERSION),0.7.16-4)
+PODKOP_BASE_VERSION:=$(or $(PODKOP_BASE_VERSION),$(word 1,$(subst -, ,$(PODKOP_RELEASE_VERSION))))
+PODKOP_FORK_RELEASE:=$(or $(PODKOP_FORK_RELEASE),$(word 2,$(subst -, ,$(PODKOP_RELEASE_VERSION))),4)
+PODKOP_COMPILED_VERSION:=$(PODKOP_BASE_VERSION)-$(PODKOP_FORK_RELEASE)
 
-PKG_VERSION:=$(PODKOP_PACKAGE_VERSION)
-PKG_RELEASE:=
-PKG_PO_VERSION:=$(PODKOP_PACKAGE_VERSION)
+PKG_VERSION:=$(PODKOP_BASE_VERSION)
+PKG_RELEASE:=$(PODKOP_FORK_RELEASE)
+PKG_PO_VERSION:=$(PODKOP_COMPILED_VERSION)
 
 LUCI_TITLE:=LuCI Podkop Plus app
-LUCI_DEPENDS:=+luci-base +sing-box +curl +jq +kmod-nft-tproxy +coreutils-base64 +coreutils-sort +bind-dig +nftables +kmod-nft-nat +kmod-nft-offload
+LUCI_DEPENDS:=+luci-base +podkop-plus
 LUCI_PKGARCH:=all
 LUCI_LANG.ru:=Русский (Russian)
 LUCI_LANG.en:=English
@@ -26,48 +27,12 @@ define Package/$(PKG_NAME)/description
 	Rule-based Podkop Plus LuCI app with hybrid sing-box + zapret orchestration
 endef
 
-define Package/$(PKG_NAME)/preinst
-#!/bin/sh
-
-[ -n "$${IPKG_INSTROOT}" ] && exit 0
-
-if [ ! -f /etc/config/podkop-plus ] && [ -f /etc/config/podkop_plus ]; then
-	cp /etc/config/podkop_plus /etc/config/podkop-plus || exit 1
-	chmod 0644 /etc/config/podkop-plus 2>/dev/null || true
-fi
-
-exit 0
-endef
-
-define Package/$(PKG_NAME)/prerm
-#!/bin/sh
-
-grep -q "105 podkopplus" /etc/iproute2/rt_tables && sed -i "/105 podkopplus/d" /etc/iproute2/rt_tables
-
-/etc/init.d/podkop-plus stop >/dev/null 2>&1 || true
-
-exit 0
-endef
-
-define Package/$(PKG_NAME)/conffiles
-/etc/config/podkop-plus
-endef
-
 define Package/$(PKG_NAME)/install
 	$(INSTALL_DIR) $(1)$(HTDOCS)/luci-static/resources/view/podkop_plus
 	$(CP) $(PKG_BUILD_DIR)/htdocs/luci-static/resources/view/podkop/* $(1)$(HTDOCS)/luci-static/resources/view/podkop_plus/
 	$(INSTALL_DIR) $(1)/
 	$(CP) $(PKG_BUILD_DIR)/root/* $(1)/
-	$(INSTALL_DIR) $(1)/etc/init.d
-	$(INSTALL_BIN) ../podkop/files/etc/init.d/podkop $(1)/etc/init.d/podkop-plus
-	$(INSTALL_DIR) $(1)/etc/config
-	$(INSTALL_CONF) ../podkop/files/etc/config/podkop $(1)/etc/config/podkop-plus
-	$(INSTALL_DIR) $(1)/usr/bin
-	$(INSTALL_BIN) ../podkop/files/usr/bin/podkop $(1)/usr/bin/podkop-plus
-	$(INSTALL_DIR) $(1)/usr/lib/podkop-plus
-	$(CP) ../podkop/files/usr/lib/* $(1)/usr/lib/podkop-plus/
-	sed -i -e 's/__COMPILED_VERSION_VARIABLE__/$(PODKOP_PACKAGE_VERSION)/g' $(1)$(HTDOCS)/luci-static/resources/view/podkop_plus/main.js || true
-	sed -i -e 's/__COMPILED_VERSION_VARIABLE__/$(PODKOP_PACKAGE_VERSION)/g' $(1)/usr/lib/podkop-plus/constants.sh || true
+	sed -i -e 's/__COMPILED_VERSION_VARIABLE__/$(PODKOP_COMPILED_VERSION)/g' $(1)$(HTDOCS)/luci-static/resources/view/podkop_plus/main.js || true
 endef
 
 $(eval $(call BuildPackage,$(PKG_NAME)))

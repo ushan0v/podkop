@@ -32,7 +32,7 @@ jobs:
       - name: Build release artifacts
         shell: bash
         run: |
-          bash ./scripts/build-packages.sh "${RELEASE_TAG}" ./dist/release
+          bash ./scripts/build-openwrt-packages-wsl.sh "${RELEASE_TAG}" ./dist/release
 
       - name: Upload build artifacts
         uses: actions/upload-artifact@v4.6.2

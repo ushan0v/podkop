@@ -31,12 +31,15 @@ SDK_CACHE_DIR="${SDK_CACHE_DIR:-$DEFAULT_BUILD_HOME/.cache/podkop-plus/openwrt-s
 IPK_SDK_URL="${IPK_SDK_URL:-https://downloads.openwrt.org/releases/24.10.6/targets/x86/64/openwrt-sdk-24.10.6-x86-64_gcc-13.3.0_musl.Linux-x86_64.tar.zst}"
 APK_SDK_URL="${APK_SDK_URL:-https://downloads.openwrt.org/releases/25.12.3/targets/x86/64/openwrt-sdk-25.12.3-x86-64_gcc-14.3.0_musl.Linux-x86_64.tar.zst}"
 
+BACKEND_DESCRIPTION="Rule-based Podkop Plus backend with hybrid sing-box + zapret orchestration"
 APP_DESCRIPTION="Rule-based Podkop Plus LuCI app with hybrid sing-box + zapret orchestration"
 I18N_DESCRIPTION="Translation for luci-app-podkop-plus - Русский (Russian)"
 MAINTAINER="ushan0v <ushan0v@users.noreply.github.com>"
 PROJECT_URL="https://github.com/ushan0v/podkop-plus"
-APP_DEPENDS_IPK="libc, luci-base, sing-box, curl, jq, kmod-nft-tproxy, coreutils-base64, coreutils-sort, bind-dig, nftables, kmod-nft-nat, kmod-nft-offload"
-APP_DEPENDS_APK="bind-dig coreutils-base64 coreutils-sort curl jq kmod-nft-nat kmod-nft-offload kmod-nft-tproxy libc luci-base nftables sing-box"
+BACKEND_DEPENDS_IPK="libc, sing-box, curl, jq, kmod-nft-tproxy, coreutils-base64, coreutils-sort, bind-dig, nftables, kmod-nft-nat, kmod-nft-offload"
+BACKEND_DEPENDS_APK="bind-dig coreutils-base64 coreutils-sort curl jq kmod-nft-nat kmod-nft-offload kmod-nft-tproxy libc nftables sing-box"
+APP_DEPENDS_IPK="libc, luci-base, podkop-plus"
+APP_DEPENDS_APK="libc luci-base podkop-plus"
 
 APT_PACKAGES=(
   build-essential
@@ -50,6 +53,7 @@ APT_PACKAGES=(
   rsync
   tar
   unzip
+  util-linux
   wget
   xz-utils
   zstd
@@ -111,6 +115,7 @@ ensure_host_deps() {
     rsync
     sha256sum
     tar
+    unshare
     wget
     zstd
   )
@@ -144,6 +149,10 @@ ensure_host_deps() {
 
 have_passwordless_sudo() {
   command -v sudo >/dev/null 2>&1 && sudo -n true >/dev/null 2>&1
+}
+
+have_unshare_root() {
+  command -v unshare >/dev/null 2>&1 && unshare -r true >/dev/null 2>&1
 }
 
 download_sdk_archive() {
@@ -214,15 +223,39 @@ make_dir() {
   mkdir -p "$1"
 }
 
+normalize_package_root_modes() {
+  local package_root="$1"
+
+  find "$package_root" -type d -exec chmod 0755 {} +
+  find "$package_root" -type f -exec chmod 0644 {} +
+}
+
+build_backend_root() {
+  local output_root="$1"
+
+  rm -rf "$output_root"
+  make_dir "$output_root/etc/init.d"
+  make_dir "$output_root/etc/config"
+  make_dir "$output_root/usr/bin"
+  make_dir "$output_root/usr/lib/podkop-plus"
+
+  install -m 0755 "$ROOT_DIR/podkop/files/etc/init.d/podkop" "$output_root/etc/init.d/podkop-plus"
+  install -m 0644 "$ROOT_DIR/podkop/files/etc/config/podkop" "$output_root/etc/config/podkop-plus"
+  install -m 0755 "$ROOT_DIR/podkop/files/usr/bin/podkop" "$output_root/usr/bin/podkop-plus"
+  cp -a "$ROOT_DIR/podkop/files/usr/lib/." "$output_root/usr/lib/podkop-plus/"
+
+  sed -i -e "s/__COMPILED_VERSION_VARIABLE__/${RELEASE_VERSION}/g" \
+    "$output_root/usr/lib/podkop-plus/constants.sh"
+
+  normalize_package_root_modes "$output_root"
+  chmod 0755 "$output_root/etc/init.d/podkop-plus" "$output_root/usr/bin/podkop-plus"
+}
+
 build_app_root() {
   local output_root="$1"
 
   rm -rf "$output_root"
   make_dir "$output_root/www"
-  make_dir "$output_root/etc/init.d"
-  make_dir "$output_root/etc/config"
-  make_dir "$output_root/usr/bin"
-  make_dir "$output_root/usr/lib/podkop-plus"
 
   if [[ -d "$ROOT_DIR/luci-app-podkop-plus/htdocs" ]]; then
     cp -a "$ROOT_DIR/luci-app-podkop-plus/htdocs/." "$output_root/www/"
@@ -238,18 +271,13 @@ build_app_root() {
     cp -a "$ROOT_DIR/luci-app-podkop-plus/root/." "$output_root/"
   fi
 
-  install -m 0755 "$ROOT_DIR/podkop/files/etc/init.d/podkop" "$output_root/etc/init.d/podkop-plus"
-  install -m 0644 "$ROOT_DIR/podkop/files/etc/config/podkop" "$output_root/etc/config/podkop-plus"
-  install -m 0755 "$ROOT_DIR/podkop/files/usr/bin/podkop" "$output_root/usr/bin/podkop-plus"
-  cp -a "$ROOT_DIR/podkop/files/usr/lib/." "$output_root/usr/lib/podkop-plus/"
-
   if [[ -f "$output_root/www/luci-static/resources/view/podkop_plus/main.js" ]]; then
     sed -i -e "s/__COMPILED_VERSION_VARIABLE__/${RELEASE_VERSION}/g" \
       "$output_root/www/luci-static/resources/view/podkop_plus/main.js"
   fi
 
-  sed -i -e "s/__COMPILED_VERSION_VARIABLE__/${RELEASE_VERSION}/g" \
-    "$output_root/usr/lib/podkop-plus/constants.sh"
+  normalize_package_root_modes "$output_root"
+  find "$output_root/etc/uci-defaults" -type f -exec chmod 0755 {} + 2>/dev/null || true
 }
 
 build_i18n_root() {
@@ -266,6 +294,9 @@ uci set luci.languages.ru='Русский (Russian)'; uci commit luci
 EOF
 
   "$po2lmo_bin" "$ROOT_DIR/luci-app-podkop-plus/po/ru/podkop_plus.po" "$lmo_path"
+
+  normalize_package_root_modes "$output_root"
+  find "$output_root/etc/uci-defaults" -type f -exec chmod 0755 {} + 2>/dev/null || true
 }
 
 generate_apk_metadata_files() {
@@ -295,6 +326,55 @@ installed_size_bytes() {
   du -sk "$1" | awk '{print $1 * 1024}'
 }
 
+write_backend_ipk_control() {
+  local control_dir="$1"
+  local installed_size="$2"
+
+  rm -rf "$control_dir"
+  make_dir "$control_dir"
+
+  cat > "$control_dir/control" <<EOF
+Package: podkop-plus
+Version: ${RELEASE_VERSION}
+Depends: ${BACKEND_DEPENDS_IPK}
+License: GPL-2.0-or-later
+Section: net
+URL: ${PROJECT_URL}
+Maintainer: ${MAINTAINER}
+Architecture: all
+Installed-Size: ${installed_size}
+Description: ${BACKEND_DESCRIPTION}
+EOF
+
+  cat > "$control_dir/conffiles" <<'EOF'
+/etc/config/podkop-plus
+EOF
+
+  cat > "$control_dir/preinst" <<'EOF'
+#!/bin/sh
+[ -n "${IPKG_INSTROOT}" ] && exit 0
+
+if [ ! -f /etc/config/podkop-plus ] && [ -f /etc/config/podkop_plus ]; then
+	cp /etc/config/podkop_plus /etc/config/podkop-plus || exit 1
+	chmod 0644 /etc/config/podkop-plus 2>/dev/null || true
+fi
+
+exit 0
+EOF
+
+  cat > "$control_dir/prerm" <<'EOF'
+#!/bin/sh
+
+grep -q "105 podkopplus" /etc/iproute2/rt_tables && sed -i "/105 podkopplus/d" /etc/iproute2/rt_tables
+
+/etc/init.d/podkop-plus stop >/dev/null 2>&1 || true
+
+exit 0
+EOF
+
+  chmod 0755 "$control_dir/preinst" "$control_dir/prerm"
+}
+
 write_app_ipk_control() {
   local control_dir="$1"
   local installed_size="$2"
@@ -313,22 +393,6 @@ Maintainer: ${MAINTAINER}
 Architecture: all
 Installed-Size: ${installed_size}
 Description: ${APP_DESCRIPTION}
-EOF
-
-  cat > "$control_dir/conffiles" <<'EOF'
-/etc/config/podkop-plus
-EOF
-
-  cat > "$control_dir/preinst" <<'EOF'
-#!/bin/sh
-[ -n "${IPKG_INSTROOT}" ] && exit 0
-
-if [ ! -f /etc/config/podkop-plus ] && [ -f /etc/config/podkop_plus ]; then
-	cp /etc/config/podkop_plus /etc/config/podkop-plus || exit 1
-	chmod 0644 /etc/config/podkop-plus 2>/dev/null || true
-fi
-
-exit 0
 EOF
 
   cat > "$control_dir/postinst" <<'EOF'
@@ -354,17 +418,7 @@ EOF
 default_prerm $0 $@
 EOF
 
-  cat > "$control_dir/prerm-pkg" <<'EOF'
-#!/bin/sh
-
-grep -q "105 podkopplus" /etc/iproute2/rt_tables && sed -i "/105 podkopplus/d" /etc/iproute2/rt_tables
-
-/etc/init.d/podkop-plus stop >/dev/null 2>&1 || true
-
-exit 0
-EOF
-
-  chmod 0755 "$control_dir/preinst" "$control_dir/postinst" "$control_dir/prerm" "$control_dir/prerm-pkg"
+  chmod 0755 "$control_dir/postinst" "$control_dir/prerm"
 }
 
 write_i18n_ipk_control() {
@@ -422,7 +476,19 @@ build_ipk_package() {
   cp -a "$control_root/." "$package_root/CONTROL/"
 
   rm -f "$output_file"
-  "$ipkg_build_bin" "$package_root" "$build_dir" >/dev/null
+  if [[ "$(id -u)" -eq 0 ]]; then
+    chown -R 0:0 "$package_root"
+    "$ipkg_build_bin" "$package_root" "$build_dir" >/dev/null
+  elif have_passwordless_sudo; then
+    sudo chown -R 0:0 "$package_root"
+    sudo "$ipkg_build_bin" "$package_root" "$build_dir" >/dev/null
+    sudo chown "$(id -u):$(id -g)" "$build_dir/${package_name}_${RELEASE_VERSION}_all.ipk"
+  else
+    fakeroot sh -c "
+      chown -R 0:0 '$package_root'
+      '$ipkg_build_bin' '$package_root' '$build_dir' >/dev/null
+    "
+  fi
 
   built_file="$build_dir/${package_name}_${RELEASE_VERSION}_all.ipk"
   [ -f "$built_file" ] || {
@@ -433,13 +499,13 @@ build_ipk_package() {
   mv "$built_file" "$output_file"
 }
 
-write_app_apk_scripts() {
+write_backend_apk_scripts() {
   local scripts_dir="$1"
 
   rm -rf "$scripts_dir"
   make_dir "$scripts_dir"
 
-  cat > "$scripts_dir/app-pre-install.sh" <<'EOF'
+  cat > "$scripts_dir/backend-pre-install.sh" <<'EOF'
 #!/bin/sh
 [ -n "${IPKG_INSTROOT}" ] && exit 0
 
@@ -448,6 +514,48 @@ if [ ! -f /etc/config/podkop-plus ] && [ -f /etc/config/podkop_plus ]; then
 	chmod 0644 /etc/config/podkop-plus 2>/dev/null || true
 fi
 
+exit 0
+EOF
+
+  cat > "$scripts_dir/backend-post-install.sh" <<'EOF'
+#!/bin/sh
+exit 0
+EOF
+
+  cat > "$scripts_dir/backend-pre-deinstall.sh" <<'EOF'
+#!/bin/sh
+grep -q "105 podkopplus" /etc/iproute2/rt_tables && sed -i "/105 podkopplus/d" /etc/iproute2/rt_tables
+/etc/init.d/podkop-plus stop >/dev/null 2>&1 || true
+exit 0
+EOF
+
+  cat > "$scripts_dir/backend-pre-upgrade.sh" <<'EOF'
+#!/bin/sh
+[ -n "${IPKG_INSTROOT}" ] && exit 0
+
+if [ ! -f /etc/config/podkop-plus ] && [ -f /etc/config/podkop_plus ]; then
+	cp /etc/config/podkop_plus /etc/config/podkop-plus || exit 1
+	chmod 0644 /etc/config/podkop-plus 2>/dev/null || true
+fi
+
+exit 0
+EOF
+
+  cat > "$scripts_dir/backend-post-upgrade.sh" <<'EOF'
+#!/bin/sh
+exit 0
+EOF
+
+  chmod 0755 "$scripts_dir"/backend-*.sh
+}
+
+write_app_apk_scripts() {
+  local scripts_dir="$1"
+
+  make_dir "$scripts_dir"
+
+  cat > "$scripts_dir/app-pre-install.sh" <<'EOF'
+#!/bin/sh
 exit 0
 EOF
 
@@ -474,20 +582,11 @@ EOF
 export root="${IPKG_INSTROOT}"
 export pkgname="luci-app-podkop-plus"
 default_prerm
-grep -q "105 podkopplus" /etc/iproute2/rt_tables && sed -i "/105 podkopplus/d" /etc/iproute2/rt_tables
-/etc/init.d/podkop-plus stop >/dev/null 2>&1 || true
 exit 0
 EOF
 
   cat > "$scripts_dir/app-pre-upgrade.sh" <<'EOF'
 #!/bin/sh
-[ -n "${IPKG_INSTROOT}" ] && exit 0
-
-if [ ! -f /etc/config/podkop-plus ] && [ -f /etc/config/podkop_plus ]; then
-	cp /etc/config/podkop_plus /etc/config/podkop-plus || exit 1
-	chmod 0644 /etc/config/podkop-plus 2>/dev/null || true
-fi
-
 exit 0
 EOF
 
@@ -620,6 +719,27 @@ build_apk_package() {
       -s "post-upgrade:${temp_scripts}/${script_prefix}-post-upgrade.sh"
     sudo chown "$(id -u):$(id -g)" "$output_file"
     sudo rm -rf "$temp_root" "$temp_scripts"
+  elif have_unshare_root; then
+    unshare -r sh -c "
+      chown -R 0:0 '$temp_root' '$temp_scripts'
+      '$apk_bin' mkpkg \
+        --files '$temp_root' \
+        --output '$output_file' \
+        -I 'name:${package_name}' \
+        -I 'version:${package_version}' \
+        -I 'description:${description}' \
+        -I 'arch:noarch' \
+        -I 'license:GPL-2.0-or-later' \
+        -I 'origin:podkop-plus' \
+        -I 'maintainer:${maintainer}' \
+        -I 'url:${PROJECT_URL}' \
+        -I 'depends:${depends}' \
+        -s pre-install:'$temp_scripts/${script_prefix}-pre-install.sh' \
+        -s post-install:'$temp_scripts/${script_prefix}-post-install.sh' \
+        -s pre-deinstall:'$temp_scripts/${script_prefix}-pre-deinstall.sh' \
+        -s pre-upgrade:'$temp_scripts/${script_prefix}-pre-upgrade.sh' \
+        -s post-upgrade:'$temp_scripts/${script_prefix}-post-upgrade.sh'
+    "
   else
     stderr_file="$(mktemp)"
     if ! fakeroot sh -c "
@@ -700,12 +820,15 @@ sync_artifacts_to_windows() {
   fi
 
   rm -f \
+    "$WINDOWS_ARTIFACTS_DIR"/podkop-plus_* \
     "$WINDOWS_ARTIFACTS_DIR"/luci-app-podkop-plus_* \
     "$WINDOWS_ARTIFACTS_DIR"/luci-i18n-podkop-plus-ru_*
 
   cp -f \
-    "$output_dir"/luci-app-podkop-plus_"${RELEASE_VERSION}".ipk \
-    "$output_dir"/luci-i18n-podkop-plus-ru_"${RELEASE_VERSION}".ipk \
+    "$output_dir"/podkop-plus_"${RELEASE_VERSION}"_all.ipk \
+    "$output_dir"/luci-app-podkop-plus_"${RELEASE_VERSION}"_all.ipk \
+    "$output_dir"/luci-i18n-podkop-plus-ru_"${RELEASE_VERSION}"_all.ipk \
+    "$output_dir"/podkop-plus_"${RELEASE_VERSION}".apk \
     "$output_dir"/luci-app-podkop-plus_"${RELEASE_VERSION}".apk \
     "$output_dir"/luci-i18n-podkop-plus-ru_"${RELEASE_VERSION}".apk \
     "$WINDOWS_ARTIFACTS_DIR"/
@@ -735,11 +858,14 @@ main() {
   local ipkg_build_bin
   local apk_bin
   local manual_root="$WORK_DIR/manual"
+  local backend_root="$manual_root/backend-root"
   local app_root="$manual_root/app-root"
   local i18n_root="$manual_root/i18n-root"
+  local backend_control="$manual_root/backend-ipk-control"
   local app_control="$manual_root/app-ipk-control"
   local i18n_control="$manual_root/i18n-ipk-control"
   local apk_scripts="$manual_root/apk-scripts"
+  local backend_size
   local app_size
   local i18n_size
 
@@ -749,7 +875,7 @@ main() {
   mkdir -p "$WORK_DIR"
   output_dir="${OUTPUT_DIR_INPUT:-$ROOT_DIR/dist/release-final}"
   mkdir -p "$output_dir"
-  rm -f "$output_dir"/luci-app-podkop-plus_* "$output_dir"/luci-i18n-podkop-plus-ru_*
+  rm -f "$output_dir"/podkop-plus_* "$output_dir"/luci-app-podkop-plus_* "$output_dir"/luci-i18n-podkop-plus-ru_*
 
   ipk_archive="$(download_sdk_archive "$IPK_SDK_URL")"
   apk_archive="$(download_sdk_archive "$APK_SDK_URL")"
@@ -762,33 +888,57 @@ main() {
   [[ -x "$ipkg_build_bin" ]] || { echo "ipkg-build not found at $ipkg_build_bin" >&2; exit 1; }
   [[ -x "$apk_bin" ]] || { echo "apk host tool not found at $apk_bin" >&2; exit 1; }
 
+  build_backend_root "$backend_root"
   build_app_root "$app_root"
   build_i18n_root "$i18n_root" "$po2lmo_bin"
 
+  backend_size="$(installed_size_bytes "$backend_root")"
   app_size="$(installed_size_bytes "$app_root")"
   i18n_size="$(installed_size_bytes "$i18n_root")"
 
+  write_backend_ipk_control "$backend_control" "$backend_size"
   write_app_ipk_control "$app_control" "$app_size"
   write_i18n_ipk_control "$i18n_control" "$i18n_size"
+
+  build_ipk_package \
+    "$ipkg_build_bin" \
+    "podkop-plus" \
+    "$backend_root" \
+    "$backend_control" \
+    "$output_dir/podkop-plus_${RELEASE_VERSION}_all.ipk"
 
   build_ipk_package \
     "$ipkg_build_bin" \
     "luci-app-podkop-plus" \
     "$app_root" \
     "$app_control" \
-    "$output_dir/luci-app-podkop-plus_${RELEASE_VERSION}.ipk"
+    "$output_dir/luci-app-podkop-plus_${RELEASE_VERSION}_all.ipk"
 
   build_ipk_package \
     "$ipkg_build_bin" \
     "luci-i18n-podkop-plus-ru" \
     "$i18n_root" \
     "$i18n_control" \
-    "$output_dir/luci-i18n-podkop-plus-ru_${RELEASE_VERSION}.ipk"
+    "$output_dir/luci-i18n-podkop-plus-ru_${RELEASE_VERSION}_all.ipk"
 
-  generate_apk_metadata_files "luci-app-podkop-plus" "$app_root" "/etc/config/podkop-plus"
+  generate_apk_metadata_files "podkop-plus" "$backend_root" "/etc/config/podkop-plus"
+  generate_apk_metadata_files "luci-app-podkop-plus" "$app_root"
   generate_apk_metadata_files "luci-i18n-podkop-plus-ru" "$i18n_root"
+  write_backend_apk_scripts "$apk_scripts"
   write_app_apk_scripts "$apk_scripts"
   write_i18n_apk_scripts "$apk_scripts"
+
+  build_apk_package \
+    "$apk_bin" \
+    "podkop-plus" \
+    "$APK_INTERNAL_VERSION" \
+    "$BACKEND_DESCRIPTION" \
+    "$BACKEND_DEPENDS_APK" \
+    "$backend_root" \
+    "$apk_scripts" \
+    "backend" \
+    "$output_dir/podkop-plus_${RELEASE_VERSION}.apk" \
+    "$MAINTAINER"
 
   build_apk_package \
     "$apk_bin" \
@@ -814,8 +964,10 @@ main() {
     "$output_dir/luci-i18n-podkop-plus-ru_${RELEASE_VERSION}.apk" \
     "$MAINTAINER"
 
-  verify_ipk_metadata "$output_dir/luci-app-podkop-plus_${RELEASE_VERSION}.ipk" "luci-app-podkop-plus" "$RELEASE_VERSION"
-  verify_ipk_metadata "$output_dir/luci-i18n-podkop-plus-ru_${RELEASE_VERSION}.ipk" "luci-i18n-podkop-plus-ru" "$RELEASE_VERSION"
+  verify_ipk_metadata "$output_dir/podkop-plus_${RELEASE_VERSION}_all.ipk" "podkop-plus" "$RELEASE_VERSION"
+  verify_ipk_metadata "$output_dir/luci-app-podkop-plus_${RELEASE_VERSION}_all.ipk" "luci-app-podkop-plus" "$RELEASE_VERSION"
+  verify_ipk_metadata "$output_dir/luci-i18n-podkop-plus-ru_${RELEASE_VERSION}_all.ipk" "luci-i18n-podkop-plus-ru" "$RELEASE_VERSION"
+  verify_apk_metadata "$apk_bin" "$output_dir/podkop-plus_${RELEASE_VERSION}.apk" "podkop-plus" "$APK_INTERNAL_VERSION"
   verify_apk_metadata "$apk_bin" "$output_dir/luci-app-podkop-plus_${RELEASE_VERSION}.apk" "luci-app-podkop-plus" "$APK_INTERNAL_VERSION"
   verify_apk_metadata "$apk_bin" "$output_dir/luci-i18n-podkop-plus-ru_${RELEASE_VERSION}.apk" "luci-i18n-podkop-plus-ru" "$APK_INTERNAL_VERSION"
 

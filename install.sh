@@ -10,6 +10,7 @@ PKG_IS_APK=0
 FETCHER=""
 TMP_DIR=""
 PODKOP_WAS_ENABLED=0
+PODKOP_WAS_RUNNING=0
 TARGET_ARCH=""
 ZAPRET_ARCH=""
 ZAPRET_ARCH_CANDIDATES=""
@@ -21,9 +22,12 @@ PODKOP_PLUS_I18N_REQUESTED=0
 
 PODKOP_PLUS_RELEASE_JSON=""
 PODKOP_PLUS_RELEASE_TAG=""
-PODKOP_PLUS_PACKAGE_URL=""
-PODKOP_PLUS_PACKAGE_NAME=""
-PODKOP_PLUS_PACKAGE_FILE=""
+PODKOP_PLUS_BACKEND_URL=""
+PODKOP_PLUS_BACKEND_NAME=""
+PODKOP_PLUS_BACKEND_FILE=""
+PODKOP_PLUS_APP_URL=""
+PODKOP_PLUS_APP_NAME=""
+PODKOP_PLUS_APP_FILE=""
 PODKOP_PLUS_I18N_URL=""
 PODKOP_PLUS_I18N_NAME=""
 PODKOP_PLUS_I18N_FILE=""
@@ -393,8 +397,17 @@ extract_package_version() {
     package_name="$1"
 
     case "$package_name" in
-        luci-app-podkop-plus_*.ipk|luci-app-podkop-plus_*.apk)
-            printf '%s\n' "$package_name" | sed 's/^luci-app-podkop-plus_//;s/\.\(ipk\|apk\)$//'
+        podkop-plus_*.ipk)
+            printf '%s\n' "$package_name" | sed 's/^podkop-plus_//;s/_[^_]*\.ipk$//'
+            ;;
+        podkop-plus_*.apk)
+            printf '%s\n' "$package_name" | sed 's/^podkop-plus_//;s/\.apk$//'
+            ;;
+        luci-app-podkop-plus_*.ipk)
+            printf '%s\n' "$package_name" | sed 's/^luci-app-podkop-plus_//;s/_[^_]*\.ipk$//'
+            ;;
+        luci-app-podkop-plus_*.apk)
+            printf '%s\n' "$package_name" | sed 's/^luci-app-podkop-plus_//;s/\.apk$//'
             ;;
         zapret_*.ipk)
             printf '%s\n' "$package_name" | sed 's/^zapret_//;s/_[^_]*\.ipk$//'
@@ -442,11 +455,15 @@ resolve_podkop_plus_release() {
     PODKOP_PLUS_RELEASE_TAG="$(printf '%s' "$PODKOP_PLUS_RELEASE_JSON" | jq -r '.tag_name // empty')"
     [ -n "$PODKOP_PLUS_RELEASE_TAG" ] || fail "Failed to detect the Podkop Plus release tag"
 
-    PODKOP_PLUS_PACKAGE_URL="$(printf '%s' "$PODKOP_PLUS_RELEASE_JSON" | jq -r --arg ext "$asset_ext" '.assets[] | select((.name | startswith("luci-app-podkop-plus_")) and (.name | endswith("." + $ext))) | .browser_download_url' | sed -n '1p')"
-    [ -n "$PODKOP_PLUS_PACKAGE_URL" ] || fail "The Podkop Plus release does not contain a luci-app-podkop-plus .$asset_ext package"
+    PODKOP_PLUS_BACKEND_URL="$(printf '%s' "$PODKOP_PLUS_RELEASE_JSON" | jq -r --arg ext "$asset_ext" '.assets[] | select((.name | startswith("podkop-plus_")) and (.name | endswith("." + $ext))) | .browser_download_url' | sed -n '1p')"
+    [ -n "$PODKOP_PLUS_BACKEND_URL" ] || fail "The Podkop Plus release does not contain a podkop-plus .$asset_ext package"
 
-    PODKOP_PLUS_PACKAGE_NAME="$(basename "$PODKOP_PLUS_PACKAGE_URL")"
-    PODKOP_PLUS_PACKAGE_VERSION="$(extract_package_version "$PODKOP_PLUS_PACKAGE_NAME")"
+    PODKOP_PLUS_APP_URL="$(printf '%s' "$PODKOP_PLUS_RELEASE_JSON" | jq -r --arg ext "$asset_ext" '.assets[] | select((.name | startswith("luci-app-podkop-plus_")) and (.name | endswith("." + $ext))) | .browser_download_url' | sed -n '1p')"
+    [ -n "$PODKOP_PLUS_APP_URL" ] || fail "The Podkop Plus release does not contain a luci-app-podkop-plus .$asset_ext package"
+
+    PODKOP_PLUS_BACKEND_NAME="$(basename "$PODKOP_PLUS_BACKEND_URL")"
+    PODKOP_PLUS_APP_NAME="$(basename "$PODKOP_PLUS_APP_URL")"
+    PODKOP_PLUS_PACKAGE_VERSION="$(extract_package_version "$PODKOP_PLUS_BACKEND_NAME")"
 
     PODKOP_PLUS_I18N_URL=""
     PODKOP_PLUS_I18N_NAME=""
@@ -532,9 +549,28 @@ remove_old_sing_box_if_needed() {
     pkg_remove_if_installed "sing-box"
 }
 
-remember_autostart_state() {
+remember_service_state() {
+    service_status=""
+
     if [ -x /etc/init.d/podkop-plus ] && /etc/init.d/podkop-plus enabled >/dev/null 2>&1; then
         PODKOP_WAS_ENABLED=1
+    fi
+
+    if [ -x /etc/init.d/podkop-plus ]; then
+        service_status="$(/etc/init.d/podkop-plus status 2>/dev/null || true)"
+        if [ "$service_status" = "running" ]; then
+            PODKOP_WAS_RUNNING=1
+            return 0
+        fi
+    fi
+
+    if [ -x /etc/init.d/podkop-plus ] && /etc/init.d/podkop-plus running >/dev/null 2>&1; then
+        PODKOP_WAS_RUNNING=1
+        return 0
+    fi
+
+    if [ -x /usr/bin/podkop-plus ] && /usr/bin/podkop-plus get_status 2>/dev/null | grep -q '"running":1'; then
+        PODKOP_WAS_RUNNING=1
     fi
 }
 
@@ -558,15 +594,33 @@ deactivate_original_podkop_if_present() {
 }
 
 cleanup_legacy_installation() {
-    remember_autostart_state
+    backend_package_installed=0
+    config_backup_file=""
+
+    pkg_is_installed "podkop-plus" && backend_package_installed=1
+    if [ -f /etc/config/podkop-plus ]; then
+        config_backup_file="$TMP_DIR/podkop-plus.config.backup"
+        cp /etc/config/podkop-plus "$config_backup_file" || fail "Failed to back up /etc/config/podkop-plus before upgrade"
+    fi
+
+    remember_service_state
     stop_conflicting_services
 
     pkg_remove_matching_prefix "luci-i18n-podkop-plus"
     pkg_remove_if_installed "luci-app-podkop-plus"
 
-    rm -rf /usr/lib/podkop-plus /www/luci-static/resources/view/podkop_plus
-    rm -f /etc/init.d/podkop-plus
-    rm -f /usr/bin/podkop-plus
+    if [ -n "$config_backup_file" ] && [ ! -f /etc/config/podkop-plus ]; then
+        cp "$config_backup_file" /etc/config/podkop-plus || fail "Failed to restore /etc/config/podkop-plus after legacy package removal"
+        chmod 0644 /etc/config/podkop-plus || true
+    fi
+
+    if [ "$backend_package_installed" -eq 0 ]; then
+        rm -rf /usr/lib/podkop-plus
+        rm -f /etc/init.d/podkop-plus
+        rm -f /usr/bin/podkop-plus
+    fi
+
+    rm -rf /www/luci-static/resources/view/podkop_plus
     rm -f /usr/share/luci/menu.d/luci-app-podkop-plus.json
     rm -f /usr/share/rpcd/acl.d/luci-app-podkop-plus.json
     rm -f /etc/uci-defaults/50_luci-podkop-plus
@@ -814,10 +868,12 @@ decide_i18n_installation() {
 }
 
 download_podkop_plus_packages() {
-    PODKOP_PLUS_PACKAGE_FILE="$TMP_DIR/$PODKOP_PLUS_PACKAGE_NAME"
+    PODKOP_PLUS_BACKEND_FILE="$TMP_DIR/$PODKOP_PLUS_BACKEND_NAME"
+    PODKOP_PLUS_APP_FILE="$TMP_DIR/$PODKOP_PLUS_APP_NAME"
     PODKOP_PLUS_I18N_FILE=""
 
-    download_with_retry "$PODKOP_PLUS_PACKAGE_URL" "$PODKOP_PLUS_PACKAGE_FILE" "$PODKOP_PLUS_PACKAGE_NAME" || fail "Failed to download $PODKOP_PLUS_PACKAGE_NAME"
+    download_with_retry "$PODKOP_PLUS_BACKEND_URL" "$PODKOP_PLUS_BACKEND_FILE" "$PODKOP_PLUS_BACKEND_NAME" || fail "Failed to download $PODKOP_PLUS_BACKEND_NAME"
+    download_with_retry "$PODKOP_PLUS_APP_URL" "$PODKOP_PLUS_APP_FILE" "$PODKOP_PLUS_APP_NAME" || fail "Failed to download $PODKOP_PLUS_APP_NAME"
 
     if [ -n "$PODKOP_PLUS_I18N_URL" ]; then
         PODKOP_PLUS_I18N_FILE="$TMP_DIR/$PODKOP_PLUS_I18N_NAME"
@@ -879,13 +935,12 @@ install_packages() {
         disable_installed_zapret_service
     fi
 
-    set -- "$PODKOP_PLUS_PACKAGE_FILE"
+    pkg_install_files "$PODKOP_PLUS_BACKEND_FILE" || fail "podkop-plus installation failed"
+    pkg_install_files "$PODKOP_PLUS_APP_FILE" || fail "luci-app-podkop-plus installation failed"
 
     if [ -n "$PODKOP_PLUS_I18N_FILE" ]; then
-        set -- "$@" "$PODKOP_PLUS_I18N_FILE"
+        pkg_install_files "$PODKOP_PLUS_I18N_FILE" || fail "luci-i18n-podkop-plus-ru installation failed"
     fi
-
-    pkg_install_files "$@" || fail "Package installation failed"
 }
 
 disable_installed_zapret_service() {
@@ -910,6 +965,10 @@ post_install() {
 
     if [ "$PODKOP_WAS_ENABLED" -eq 1 ] && [ -x /etc/init.d/podkop-plus ]; then
         /etc/init.d/podkop-plus enable >/dev/null 2>&1 || true
+    fi
+
+    if [ "$PODKOP_WAS_RUNNING" -eq 1 ] && [ -x /etc/init.d/podkop-plus ]; then
+        /etc/init.d/podkop-plus restart >/dev/null 2>&1 || /etc/init.d/podkop-plus start >/dev/null 2>&1 || warn "Failed to restart Podkop Plus after upgrade."
     fi
 
     if [ -n "$ZAPRET_PACKAGE_FILE" ]; then
