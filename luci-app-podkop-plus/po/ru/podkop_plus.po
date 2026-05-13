@@ -7,8 +7,8 @@ msgid ""
 msgstr ""
 "Project-Id-Version: PODKOP PLUS\n"
 "Report-Msgid-Bugs-To: \n"
-"POT-Creation-Date: 2026-05-12 14:28+0300\n"
-"PO-Revision-Date: 2026-05-12 14:28+0300\n"
+"POT-Creation-Date: 2026-05-13 21:23+0300\n"
+"PO-Revision-Date: 2026-05-13 21:23+0300\n"
 "Last-Translator: ushan0v\n"
 "Language-Team: none\n"
 "Language: ru\n"
@@ -50,8 +50,11 @@ msgstr "Добавить секцию"
 msgid "Add URLs or local paths to .lst lists"
 msgstr "Добавляйте URL или локальные пути к спискам .lst"
 
-msgid "Add URLs or local paths to .srs / .json lists"
-msgstr "Добавляйте URL или локальные пути к спискам .srs / .json"
+msgid "Add URLs or local paths to .srs / .json lists. Subnet rules are ignored"
+msgstr "Добавляйте URL или локальные пути к спискам .srs / .json. Правила подсетей игнорируются"
+
+msgid "Add URLs or local paths to .srs / .json lists. Subnets from the list will be extracted and added to nftables"
+msgstr "Добавляйте URL или локальные пути к спискам .srs / .json. Подсети из списка будут извлечены и добавлены в nftables"
 
 msgid "Additional marking rules found"
 msgstr "Найдены дополнительные правила маркировки"
@@ -728,8 +731,11 @@ msgstr "Набор правил должен быть прямым URL на .srs
 msgid "Rule set URL"
 msgstr "URL набора правил"
 
-msgid "Rule sets"
-msgstr "Наборы правил"
+msgid "Rule sets (domains and subnets)"
+msgstr "Наборы правил (домены и подсети)"
+
+msgid "Rule sets (domains)"
+msgstr "Наборы правил (домены)"
 
 msgid "Rules mangle counters"
 msgstr "Счётчики правил mangle"

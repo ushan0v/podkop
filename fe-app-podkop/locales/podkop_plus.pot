@@ -7,8 +7,8 @@ msgid ""
 msgstr ""
 "Project-Id-Version: PODKOP PLUS\n"
 "Report-Msgid-Bugs-To: \n"
-"POT-Creation-Date: 2026-05-12 11:28+0300\n"
-"PO-Revision-Date: 2026-05-12 11:28+0300\n"
+"POT-Creation-Date: 2026-05-13 18:23+0300\n"
+"PO-Revision-Date: 2026-05-13 18:23+0300\n"
 "Last-Translator: ushan0v <142658494+ushan0v@users.noreply.github.com>\n"
 "Language-Team: LANGUAGE <LL@li.org>\n"
 "Language: \n"
@@ -61,12 +61,16 @@ msgstr ""
 msgid "Add a section"
 msgstr ""
 
-#: ../luci-app-podkop-plus/htdocs/luci-static/resources/view/podkop/section.js:2347
+#: ../luci-app-podkop-plus/htdocs/luci-static/resources/view/podkop/section.js:2364
 msgid "Add URLs or local paths to .lst lists"
 msgstr ""
 
 #: ../luci-app-podkop-plus/htdocs/luci-static/resources/view/podkop/section.js:2332
-msgid "Add URLs or local paths to .srs / .json lists"
+msgid "Add URLs or local paths to .srs / .json lists. Subnet rules are ignored"
+msgstr ""
+
+#: ../luci-app-podkop-plus/htdocs/luci-static/resources/view/podkop/section.js:2347
+msgid "Add URLs or local paths to .srs / .json lists. Subnets from the list will be extracted and added to nftables"
 msgstr ""
 
 #: src/podkop/tabs/diagnostic/checks/runNftCheck.ts:106
@@ -146,12 +150,12 @@ msgstr ""
 msgid "Cannot receive checks result"
 msgstr ""
 
-#: src/podkop/tabs/diagnostic/initController.ts:503
-#: src/podkop/tabs/diagnostic/initController.ts:516
+#: src/podkop/tabs/diagnostic/helpers/getPodkopVersionRow.ts:53
+#: src/podkop/tabs/diagnostic/helpers/getPodkopVersionRow.ts:66
 msgid "Check unavailable"
 msgstr ""
 
-#: src/podkop/tabs/diagnostic/initController.ts:481
+#: src/podkop/tabs/diagnostic/helpers/getPodkopVersionRow.ts:31
 msgid "Checking"
 msgstr ""
 
@@ -246,8 +250,8 @@ msgstr ""
 msgid "Delay value cannot be empty"
 msgstr ""
 
-#: src/podkop/tabs/diagnostic/initController.ts:492
-#: src/podkop/tabs/diagnostic/initController.ts:543
+#: src/podkop/tabs/diagnostic/helpers/getPodkopVersionRow.ts:42
+#: src/podkop/tabs/diagnostic/helpers/getPodkopVersionRow.ts:88
 msgid "Dev"
 msgstr ""
 
@@ -329,7 +333,7 @@ msgstr ""
 msgid "Do not panic, everything can be fixed, just..."
 msgstr ""
 
-#: ../luci-app-podkop-plus/htdocs/luci-static/resources/view/podkop/section.js:2346
+#: ../luci-app-podkop-plus/htdocs/luci-static/resources/view/podkop/section.js:2363
 msgid "Domain and IP Lists"
 msgstr ""
 
@@ -479,12 +483,12 @@ msgstr ""
 msgid "Failed to copy!"
 msgstr ""
 
+#: src/podkop/tabs/diagnostic/initController.ts:250
 #: src/podkop/tabs/diagnostic/initController.ts:254
-#: src/podkop/tabs/diagnostic/initController.ts:258
+#: src/podkop/tabs/diagnostic/initController.ts:289
 #: src/podkop/tabs/diagnostic/initController.ts:293
-#: src/podkop/tabs/diagnostic/initController.ts:297
+#: src/podkop/tabs/diagnostic/initController.ts:319
 #: src/podkop/tabs/diagnostic/initController.ts:323
-#: src/podkop/tabs/diagnostic/initController.ts:327
 msgid "Failed to execute!"
 msgstr ""
 
@@ -503,7 +507,7 @@ msgstr ""
 msgid "Get global check"
 msgstr ""
 
-#: src/podkop/tabs/diagnostic/initController.ts:249
+#: src/podkop/tabs/diagnostic/initController.ts:245
 msgid "Global check"
 msgstr ""
 
@@ -743,7 +747,7 @@ msgstr ""
 msgid "Keyword must not contain spaces"
 msgstr ""
 
-#: src/podkop/tabs/diagnostic/initController.ts:553
+#: src/podkop/tabs/diagnostic/helpers/getPodkopVersionRow.ts:98
 msgid "Latest"
 msgstr ""
 
@@ -849,7 +853,7 @@ msgstr ""
 msgid "Not implement yet"
 msgstr ""
 
-#: src/podkop/tabs/diagnostic/initController.ts:576
+#: src/podkop/tabs/diagnostic/initController.ts:477
 msgid "not installed"
 msgstr ""
 
@@ -895,7 +899,7 @@ msgstr ""
 msgid "Outbound JSON"
 msgstr ""
 
-#: src/podkop/tabs/diagnostic/initController.ts:532
+#: src/podkop/tabs/diagnostic/helpers/getPodkopVersionRow.ts:77
 msgid "Outdated"
 msgstr ""
 
@@ -1032,8 +1036,12 @@ msgstr ""
 msgid "Rule set URL"
 msgstr ""
 
+#: ../luci-app-podkop-plus/htdocs/luci-static/resources/view/podkop/section.js:2346
+msgid "Rule sets (domains and subnets)"
+msgstr ""
+
 #: ../luci-app-podkop-plus/htdocs/luci-static/resources/view/podkop/section.js:2331
-msgid "Rule sets"
+msgid "Rule sets (domains)"
 msgstr ""
 
 #: src/podkop/tabs/diagnostic/checks/runNftCheck.ts:79
@@ -1145,7 +1153,7 @@ msgstr ""
 msgid "Settings"
 msgstr ""
 
-#: src/podkop/tabs/diagnostic/initController.ts:311
+#: src/podkop/tabs/diagnostic/initController.ts:307
 #: src/podkop/tabs/diagnostic/partials/renderAvailableActions.ts:116
 msgid "Show sing-box config"
 msgstr ""
@@ -1339,14 +1347,14 @@ msgstr ""
 msgid "unique UCI identifier"
 msgstr ""
 
+#: src/podkop/tabs/diagnostic/initController.ts:26
+#: src/podkop/tabs/diagnostic/initController.ts:27
+#: src/podkop/tabs/diagnostic/initController.ts:28
+#: src/podkop/tabs/diagnostic/initController.ts:29
 #: src/podkop/tabs/diagnostic/initController.ts:30
-#: src/podkop/tabs/diagnostic/initController.ts:31
 #: src/podkop/tabs/diagnostic/initController.ts:32
 #: src/podkop/tabs/diagnostic/initController.ts:33
-#: src/podkop/tabs/diagnostic/initController.ts:34
-#: src/podkop/tabs/diagnostic/initController.ts:36
-#: src/podkop/tabs/diagnostic/initController.ts:37
-#: src/podkop/tabs/diagnostic/initController.ts:466
+#: src/podkop/tabs/diagnostic/helpers/getPodkopVersionRow.ts:10
 msgid "unknown"
 msgstr ""
 
@@ -1449,7 +1457,7 @@ msgstr ""
 msgid "Validation errors:"
 msgstr ""
 
-#: src/podkop/tabs/diagnostic/initController.ts:282
+#: src/podkop/tabs/diagnostic/initController.ts:278
 #: src/podkop/tabs/diagnostic/partials/renderAvailableActions.ts:107
 msgid "View logs"
 msgstr ""

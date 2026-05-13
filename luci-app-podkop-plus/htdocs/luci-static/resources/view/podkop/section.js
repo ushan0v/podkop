@@ -2328,14 +2328,31 @@ function createSectionContent(section) {
     "conditions",
     form.DynamicList,
     "rule_set",
-    _("Rule sets"),
-    _("Add URLs or local paths to .srs / .json lists"),
+    _("Rule sets (domains)"),
+    _("Add URLs or local paths to .srs / .json lists. Subnet rules are ignored"),
   );
   ruleSetOption.modalonly = true;
   ruleSetOption.load = function (section_id) {
     return getCustomRulesetReferences(section_id);
   };
   ruleSetOption.validate = function (_section_id, value) {
+    return validateCustomRulesetReference(value);
+  };
+
+  const ruleSetWithSubnetsOption = section.taboption(
+    "conditions",
+    form.DynamicList,
+    "rule_set_with_subnets",
+    _("Rule sets (domains and subnets)"),
+    _(
+      "Add URLs or local paths to .srs / .json lists. Subnets from the list will be extracted and added to nftables",
+    ),
+  );
+  ruleSetWithSubnetsOption.modalonly = true;
+  ruleSetWithSubnetsOption.load = function (section_id) {
+    return getConfigListValues(section_id, "rule_set_with_subnets");
+  };
+  ruleSetWithSubnetsOption.validate = function (_section_id, value) {
     return validateCustomRulesetReference(value);
   };
 
