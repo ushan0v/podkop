@@ -7,8 +7,8 @@ msgid ""
 msgstr ""
 "Project-Id-Version: PODKOP PLUS\n"
 "Report-Msgid-Bugs-To: \n"
-"POT-Creation-Date: 2026-05-13 21:19+0300\n"
-"PO-Revision-Date: 2026-05-13 21:19+0300\n"
+"POT-Creation-Date: 2026-05-14 01:44+0300\n"
+"PO-Revision-Date: 2026-05-14 01:44+0300\n"
 "Last-Translator: ushan0v <142658494+ushan0v@users.noreply.github.com>\n"
 "Language-Team: LANGUAGE <LL@li.org>\n"
 "Language: \n"
@@ -16,19 +16,19 @@ msgstr ""
 "Content-Type: text/plain; charset=UTF-8\n"
 "Content-Transfer-Encoding: 8bit\n"
 
-#: src/podkop/tabs/dashboard/initController.ts:387
-#: src/podkop/tabs/dashboard/initController.ts:398
-#: src/podkop/tabs/dashboard/initController.ts:411
+#: src/podkop/tabs/dashboard/initController.ts:391
+#: src/podkop/tabs/dashboard/initController.ts:402
+#: src/podkop/tabs/dashboard/initController.ts:415
 msgid "✔ Running"
 msgstr ""
 
-#: src/podkop/tabs/dashboard/initController.ts:409
+#: src/podkop/tabs/dashboard/initController.ts:413
 msgid "✘ Not installed"
 msgstr ""
 
-#: src/podkop/tabs/dashboard/initController.ts:388
-#: src/podkop/tabs/dashboard/initController.ts:399
-#: src/podkop/tabs/dashboard/initController.ts:412
+#: src/podkop/tabs/dashboard/initController.ts:392
+#: src/podkop/tabs/dashboard/initController.ts:403
+#: src/podkop/tabs/dashboard/initController.ts:416
 msgid "✘ Stopped"
 msgstr ""
 
@@ -53,7 +53,7 @@ msgstr ""
 msgid "Action"
 msgstr ""
 
-#: src/podkop/tabs/dashboard/initController.ts:349
+#: src/podkop/tabs/dashboard/initController.ts:353
 msgid "Active Connections"
 msgstr ""
 
@@ -98,7 +98,7 @@ msgstr ""
 msgid "At least one valid IP or subnet must be specified."
 msgstr ""
 
-#: src/partials/modal/renderModal.ts:219
+#: src/partials/modal/renderModal.ts:218
 msgid "Auto refresh"
 msgstr ""
 
@@ -192,7 +192,7 @@ msgstr ""
 msgid "CIDR must be between 0 and 32"
 msgstr ""
 
-#: src/partials/modal/renderModal.ts:196
+#: src/partials/modal/renderModal.ts:195
 msgid "Close"
 msgstr ""
 
@@ -225,8 +225,8 @@ msgstr ""
 msgid "Copy"
 msgstr ""
 
-#: src/podkop/tabs/dashboard/partials/renderSections.ts:93
-#: src/podkop/tabs/dashboard/partials/renderSections.ts:94
+#: src/podkop/tabs/dashboard/partials/renderSections.ts:235
+#: src/podkop/tabs/dashboard/partials/renderSections.ts:236
 msgid "Copy proxy link"
 msgstr ""
 
@@ -238,7 +238,7 @@ msgstr ""
 msgid "Dashboard"
 msgstr ""
 
-#: src/podkop/tabs/dashboard/partials/renderSections.ts:24
+#: src/podkop/tabs/dashboard/partials/renderSections.ts:29
 msgid "Dashboard currently unavailable"
 msgstr ""
 
@@ -357,8 +357,8 @@ msgstr ""
 msgid "Dont Touch My DHCP!"
 msgstr ""
 
-#: src/podkop/tabs/dashboard/initController.ts:283
-#: src/podkop/tabs/dashboard/initController.ts:317
+#: src/podkop/tabs/dashboard/initController.ts:287
+#: src/podkop/tabs/dashboard/initController.ts:321
 msgid "Downlink"
 msgstr ""
 
@@ -475,6 +475,10 @@ msgstr ""
 msgid "Expecting: %s"
 msgstr ""
 
+#: src/podkop/tabs/dashboard/partials/renderSections.ts:110
+msgid "Expires"
+msgstr ""
+
 #: ../luci-app-podkop-plus/htdocs/luci-static/resources/view/podkop/section.js:2145
 msgid "Expose this section as a local HTTP+SOCKS proxy"
 msgstr ""
@@ -496,9 +500,9 @@ msgstr ""
 msgid "Failed to execute!"
 msgstr ""
 
-#: src/podkop/methods/custom/getDashboardSections.ts:225
-#: src/podkop/methods/custom/getDashboardSections.ts:257
-#: src/podkop/methods/custom/getDashboardSections.ts:295
+#: src/podkop/methods/custom/getDashboardSections.ts:308
+#: src/podkop/methods/custom/getDashboardSections.ts:344
+#: src/podkop/methods/custom/getDashboardSections.ts:385
 #: src/podkop/tabs/diagnostic/checks/runSectionsCheck.ts:59
 msgid "Fastest"
 msgstr ""
@@ -806,7 +810,7 @@ msgstr ""
 msgid "Maximum response time delta in milliseconds"
 msgstr ""
 
-#: src/podkop/tabs/dashboard/initController.ts:353
+#: src/podkop/tabs/dashboard/initController.ts:357
 msgid "Memory Usage"
 msgstr ""
 
@@ -978,7 +982,7 @@ msgstr ""
 msgid "Proxy Configuration URL"
 msgstr ""
 
-#: src/podkop/tabs/dashboard/initController.ts:202
+#: src/podkop/tabs/dashboard/initController.ts:205
 msgid "Proxy link is unavailable"
 msgstr ""
 
@@ -988,6 +992,10 @@ msgstr ""
 
 #: src/podkop/tabs/diagnostic/checks/runFakeIPCheck.ts:67
 msgid "Proxy traffic is routed via FakeIP"
+msgstr ""
+
+#: src/podkop/tabs/dashboard/partials/renderSections.ts:111
+msgid "Refill"
 msgstr ""
 
 #: ../luci-app-podkop-plus/htdocs/luci-static/resources/view/podkop/section.js:2289
@@ -1150,7 +1158,7 @@ msgstr ""
 msgid "Service list"
 msgstr ""
 
-#: src/podkop/tabs/dashboard/initController.ts:382
+#: src/podkop/tabs/dashboard/initController.ts:386
 msgid "Services info"
 msgstr ""
 
@@ -1236,6 +1244,10 @@ msgstr ""
 msgid "Subscription"
 msgstr ""
 
+#: src/podkop/tabs/dashboard/partials/renderSections.ts:125
+msgid "Subscription info:"
+msgstr ""
+
 #: ../luci-app-podkop-plus/htdocs/luci-static/resources/view/podkop/section.js:1857
 msgid "Subscription update interval"
 msgstr ""
@@ -1252,7 +1264,7 @@ msgstr ""
 msgid "Successfully copied!"
 msgstr ""
 
-#: src/podkop/tabs/dashboard/initController.ts:346
+#: src/podkop/tabs/dashboard/initController.ts:350
 msgid "System info"
 msgstr ""
 
@@ -1264,7 +1276,7 @@ msgstr ""
 msgid "Table exist"
 msgstr ""
 
-#: src/podkop/tabs/dashboard/partials/renderSections.ts:139
+#: src/podkop/tabs/dashboard/partials/renderSections.ts:283
 msgid "Test latency"
 msgstr ""
 
@@ -1304,11 +1316,12 @@ msgstr ""
 msgid "Time in seconds for DNS record caching (default: 60)"
 msgstr ""
 
-#: src/podkop/tabs/dashboard/initController.ts:280
+#: src/podkop/tabs/dashboard/initController.ts:284
+#: src/podkop/tabs/dashboard/partials/renderSections.ts:106
 msgid "Traffic"
 msgstr ""
 
-#: src/podkop/tabs/dashboard/initController.ts:310
+#: src/podkop/tabs/dashboard/initController.ts:314
 msgid "Traffic Total"
 msgstr ""
 
@@ -1376,8 +1389,8 @@ msgstr ""
 msgid "Update interval"
 msgstr ""
 
-#: src/podkop/tabs/dashboard/initController.ts:282
-#: src/podkop/tabs/dashboard/initController.ts:313
+#: src/podkop/tabs/dashboard/initController.ts:286
+#: src/podkop/tabs/dashboard/initController.ts:317
 msgid "Uplink"
 msgstr ""
 

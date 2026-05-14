@@ -25,6 +25,11 @@ export const PodkopShellMethods = {
       Podkop.AvailableMethods.GET_OUTBOUND_LINK,
       [section, tag],
     ),
+  getSubscriptionMetadata: async (section: string) =>
+    callBaseMethod<Podkop.SubscriptionMetadata>(
+      Podkop.AvailableMethods.GET_SUBSCRIPTION_METADATA,
+      [section],
+    ),
   checkSingBox: async () =>
     callBaseMethod<Podkop.SingBoxCheckResult>(
       Podkop.AvailableMethods.CHECK_SING_BOX,

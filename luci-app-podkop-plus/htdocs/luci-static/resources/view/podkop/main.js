@@ -732,6 +732,7 @@ var Podkop;
     AvailableMethods2["CHECK_ZAPRET_RUNTIME"] = "check_zapret_runtime";
     AvailableMethods2["GET_STATUS"] = "get_status";
     AvailableMethods2["GET_OUTBOUND_LINK"] = "get_outbound_link";
+    AvailableMethods2["GET_SUBSCRIPTION_METADATA"] = "get_subscription_metadata";
     AvailableMethods2["CHECK_SING_BOX"] = "check_sing_box";
     AvailableMethods2["GET_SING_BOX_STATUS"] = "get_sing_box_status";
     AvailableMethods2["GET_ZAPRET_STATUS"] = "get_zapret_status";
@@ -775,6 +776,10 @@ var PodkopShellMethods = {
   getOutboundLink: async (section, tag) => callBaseMethod(
     Podkop.AvailableMethods.GET_OUTBOUND_LINK,
     [section, tag]
+  ),
+  getSubscriptionMetadata: async (section) => callBaseMethod(
+    Podkop.AvailableMethods.GET_SUBSCRIPTION_METADATA,
+    [section]
   ),
   checkSingBox: async () => callBaseMethod(
     Podkop.AvailableMethods.CHECK_SING_BOX
@@ -902,6 +907,13 @@ async function markSubscriptionCopyableOutbounds(sectionName, outbounds) {
       )
     }))
   );
+}
+async function getSubscriptionMetadata(sectionName) {
+  const response = await PodkopShellMethods.getSubscriptionMetadata(sectionName);
+  if (response.success && response.data && Object.keys(response.data).length > 1) {
+    return response.data;
+  }
+  return void 0;
 }
 async function getDashboardSections() {
   const configSections = await getConfigSections();
@@ -1073,6 +1085,9 @@ async function getDashboardSections() {
         const fallbackUrltest = proxies.find(
           (proxy) => proxy.code === `${section[".name"]}-urltest-out`
         );
+        const subscriptionMetadata = await getSubscriptionMetadata(
+          section[".name"]
+        );
         const selectorOutbounds = (selector?.value?.all ?? []).flatMap(
           (code) => {
             const item = proxies.find((proxy) => proxy.code === code);
@@ -1114,6 +1129,7 @@ async function getDashboardSections() {
             code: selector?.code || section[".name"],
             sectionName: section[".name"],
             displayName,
+            subscriptionMetadata,
             outbounds: [
               {
                 code: fallbackUrltest?.code || "",
@@ -1135,6 +1151,7 @@ async function getDashboardSections() {
           code: selector?.code || section[".name"],
           sectionName: section[".name"],
           displayName,
+          subscriptionMetadata,
           outbounds: await markSubscriptionCopyableOutbounds(
             section[".name"],
             outbounds
@@ -2532,6 +2549,45 @@ function renderCopyIcon24() {
   );
 }
 
+// src/icons/renderLinkIcon24.ts
+function renderLinkIcon24() {
+  return svgEl(
+    "svg",
+    {
+      xmlns: "http://www.w3.org/2000/svg",
+      width: "24",
+      height: "24",
+      viewBox: "0 0 24 24",
+      fill: "none",
+      stroke: "currentColor",
+      "stroke-width": "2",
+      "stroke-linecap": "round",
+      "stroke-linejoin": "round",
+      class: "lucide lucide-link-icon lucide-link"
+    },
+    [
+      svgEl("path", {
+        d: "M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"
+      }),
+      svgEl("path", {
+        d: "M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"
+      })
+    ]
+  );
+}
+
+// src/helpers/prettyBytes.ts
+function prettyBytes(n) {
+  const UNITS = ["B", "KB", "MB", "GB", "TB", "PB", "EB", "ZB", "YB"];
+  if (n < 1e3) {
+    return n + " B";
+  }
+  const exponent = Math.min(Math.floor(Math.log10(n) / 3), UNITS.length - 1);
+  n = Number((n / Math.pow(1e3, exponent)).toPrecision(3));
+  const unit = UNITS[exponent];
+  return n + " " + unit;
+}
+
 // src/podkop/tabs/dashboard/partials/renderSections.ts
 function renderFailedState() {
   return E(
@@ -2549,6 +2605,118 @@ function renderLoadingState() {
     class: "pdk_dashboard-page__outbound-section skeleton",
     style: "height: 127px"
   });
+}
+function isValidHttpUrl(url) {
+  return Boolean(url && /^https?:\/\/\S+$/i.test(url));
+}
+function formatBytes(value) {
+  if (typeof value !== "number" || !Number.isFinite(value) || value < 0) {
+    return void 0;
+  }
+  return prettyBytes(value);
+}
+function formatDate(seconds) {
+  if (typeof seconds !== "number" || !Number.isFinite(seconds) || seconds <= 0) {
+    return void 0;
+  }
+  const date = new Date(seconds * 1e3);
+  if (Number.isNaN(date.getTime())) {
+    return void 0;
+  }
+  return date.toLocaleDateString(void 0, {
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit"
+  });
+}
+function renderMetadataAction(label, url) {
+  if (!isValidHttpUrl(url)) {
+    return void 0;
+  }
+  return E(
+    "a",
+    {
+      class: "btn pdk_dashboard-page__subscription-meta__action",
+      href: url,
+      target: "_blank",
+      rel: "noopener noreferrer",
+      title: label,
+      "aria-label": label
+    },
+    renderLinkIcon24()
+  );
+}
+function renderSubscriptionMetadata(metadata) {
+  if (!metadata || Object.keys(metadata).length <= 1) {
+    return void 0;
+  }
+  const title = metadata.title || metadata.fileName;
+  const traffic = metadata.traffic;
+  const used = formatBytes(traffic?.used) || "0 B";
+  const total = traffic?.isUnlimited ? "\u221E" : formatBytes(traffic?.total) || "0 B";
+  const expire = formatDate(metadata.expire);
+  const refillDate = formatDate(metadata.refillDate);
+  const rows = [
+    traffic ? {
+      label: _("Traffic"),
+      value: `${used} / ${total}`
+    } : void 0,
+    expire ? { label: _("Expires"), value: expire } : void 0,
+    refillDate ? { label: _("Refill"), value: refillDate } : void 0
+  ].filter(Boolean);
+  const actions = [
+    renderMetadataAction("Profile", metadata.webPageUrl),
+    renderMetadataAction("Support", metadata.supportUrl),
+    renderMetadataAction("More details", metadata.announceUrl)
+  ].filter(Boolean);
+  return E("div", { class: "pdk_dashboard-page__subscription-meta" }, [
+    E("div", { class: "pdk_dashboard-page__subscription-meta__main" }, [
+      E(
+        "div",
+        { class: "pdk_dashboard-page__subscription-meta__heading" },
+        _("Subscription info:")
+      ),
+      title ? E(
+        "div",
+        { class: "pdk_dashboard-page__subscription-meta__title" },
+        title
+      ) : "",
+      rows.length ? E(
+        "div",
+        { class: "pdk_dashboard-page__subscription-meta__facts" },
+        rows.map(
+          (row) => E(
+            "div",
+            { class: "pdk_dashboard-page__subscription-meta__fact" },
+            [
+              E(
+                "span",
+                { class: "pdk_dashboard-page__subscription-meta__fact-key" },
+                row.label
+              ),
+              E(
+                "span",
+                {
+                  class: "pdk_dashboard-page__subscription-meta__fact-value"
+                },
+                row.value
+              )
+            ]
+          )
+        )
+      ) : "",
+      actions.length ? E(
+        "div",
+        { class: "pdk_dashboard-page__subscription-meta__actions" },
+        actions
+      ) : ""
+    ]),
+    metadata.announce ? E(
+      "blockquote",
+      { class: "pdk_dashboard-page__subscription-meta__announce" },
+      metadata.announce
+    ) : ""
+  ]);
 }
 function renderDefaultState({
   section,
@@ -2620,6 +2788,7 @@ function renderDefaultState({
       ]
     );
   }
+  const metadataNode = renderSubscriptionMetadata(section.subscriptionMetadata);
   return E("div", { class: "pdk_dashboard-page__outbound-section" }, [
     // Title with test latency
     E("div", { class: "pdk_dashboard-page__outbound-section__title-section" }, [
@@ -2642,7 +2811,10 @@ function renderDefaultState({
     E(
       "div",
       { class: "pdk_dashboard-page__outbound-grid" },
-      section.outbounds.map((outbound) => renderOutbound(outbound))
+      [
+        ...metadataNode ? [metadataNode] : [],
+        ...section.outbounds.map((outbound) => renderOutbound(outbound))
+      ]
     )
   ]);
 }
@@ -2810,18 +2982,6 @@ function copyToClipboard(text) {
     console.error("copyToClipboard - e", _err);
   }
   document.body.removeChild(textarea);
-}
-
-// src/helpers/prettyBytes.ts
-function prettyBytes(n) {
-  const UNITS = ["B", "KB", "MB", "GB", "TB", "PB", "EB", "ZB", "YB"];
-  if (n < 1e3) {
-    return n + " B";
-  }
-  const exponent = Math.min(Math.floor(Math.log10(n) / 3), UNITS.length - 1);
-  n = Number((n / Math.pow(1e3, exponent)).toPrecision(3));
-  const unit = UNITS[exponent];
-  return n + " " + unit;
 }
 
 // src/podkop/fetchers/fetchServicesInfo.ts
@@ -3395,6 +3555,134 @@ var styles = `
     display: grid;
     grid-template-columns: repeat(var(--dashboard-grid-columns), 1fr);
     grid-gap: 10px;
+}
+
+.pdk_dashboard-page__subscription-meta {
+    --subscription-meta-action-size: 28px;
+    --subscription-meta-action-gap: 6px;
+    grid-column: 1 / -1;
+    border: 2px var(--background-color-low, lightgray) solid;
+    border-radius: 4px;
+    padding: 8px 10px;
+    background: var(--background-color-high, transparent);
+}
+
+.pdk_dashboard-page__subscription-meta__main {
+    display: flex;
+    align-items: center;
+    gap: 6px 10px;
+    min-width: 0;
+}
+
+.pdk_dashboard-page__subscription-meta__heading {
+    flex: 0 0 auto;
+    color: var(--text-color-high);
+    font-weight: 700;
+    line-height: 1.25;
+    white-space: nowrap;
+}
+
+.pdk_dashboard-page__subscription-meta__title {
+    flex: 0 1 auto;
+    width: max-content;
+    max-width: min(28ch, 30%);
+    min-width: min-content;
+    color: var(--text-color-high);
+    font-weight: 700;
+    line-height: 1.25;
+    overflow-wrap: anywhere;
+}
+
+.pdk_dashboard-page__subscription-meta__facts {
+    flex: 1 1 auto;
+    min-width: 0;
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 5px 12px;
+}
+
+.pdk_dashboard-page__subscription-meta__fact {
+    display: flex;
+    align-items: baseline;
+    gap: 4px;
+    min-width: 0;
+    line-height: 1.25;
+}
+
+.pdk_dashboard-page__subscription-meta__fact-key {
+    color: var(--text-color-medium);
+    font-size: 12px;
+    white-space: nowrap;
+}
+
+.pdk_dashboard-page__subscription-meta__fact-value {
+    color: var(--text-color-high);
+    font-weight: 600;
+    overflow-wrap: anywhere;
+}
+
+.pdk_dashboard-page__subscription-meta__actions {
+    flex: 0 0 auto;
+    margin-left: auto;
+    display: flex;
+    justify-content: flex-end;
+    gap: var(--subscription-meta-action-gap);
+}
+
+.pdk_dashboard-page__subscription-meta__action {
+    width: var(--subscription-meta-action-size);
+    height: var(--subscription-meta-action-size);
+    min-width: var(--subscription-meta-action-size);
+    min-height: var(--subscription-meta-action-size);
+    padding: 2px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    flex: 0 0 auto;
+    line-height: 1;
+    margin: 0;
+}
+
+.pdk_dashboard-page__subscription-meta__action svg {
+    width: 15px;
+    height: 15px;
+}
+
+.pdk_dashboard-page__subscription-meta__announce {
+    margin: 6px 0 0;
+    border-left: 3px solid var(--primary-color-medium, dodgerblue);
+    padding: 4px 8px;
+    background: var(--background-color-low, rgba(0, 0, 0, 0.04));
+    color: var(--text-color-medium);
+    font-style: italic;
+    line-height: 1.25;
+    overflow-wrap: anywhere;
+}
+
+@media (max-width: 700px) {
+    .pdk_dashboard-page__subscription-meta__main {
+        align-items: flex-start;
+        flex-wrap: wrap;
+    }
+
+    .pdk_dashboard-page__subscription-meta__heading,
+    .pdk_dashboard-page__subscription-meta__title {
+        order: 1;
+    }
+
+    .pdk_dashboard-page__subscription-meta__actions {
+        order: 2;
+    }
+
+    .pdk_dashboard-page__subscription-meta__facts {
+        order: 3;
+        flex-basis: 100%;
+    }
+
+    .pdk_dashboard-page__subscription-meta__title {
+        max-width: calc(100% - 42px);
+    }
 }
 
 .pdk_dashboard-page__outbound-grid__item {

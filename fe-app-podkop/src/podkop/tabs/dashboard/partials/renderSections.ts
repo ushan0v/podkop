@@ -1,5 +1,9 @@
-import { renderCopyIcon24 } from '../../../../icons';
+import {
+  renderCopyIcon24,
+  renderLinkIcon24,
+} from '../../../../icons';
 import { isCopyableProxyLink } from '../../../../helpers';
+import { prettyBytes } from '../../../../helpers/prettyBytes';
 import { Podkop } from '../../../types';
 
 interface IRenderSectionsProps {
@@ -32,6 +36,144 @@ function renderLoadingState() {
     class: 'pdk_dashboard-page__outbound-section skeleton',
     style: 'height: 127px',
   });
+}
+
+function isValidHttpUrl(url?: string) {
+  return Boolean(url && /^https?:\/\/\S+$/i.test(url));
+}
+
+function formatBytes(value?: number) {
+  if (typeof value !== 'number' || !Number.isFinite(value) || value < 0) {
+    return undefined;
+  }
+
+  return prettyBytes(value);
+}
+
+function formatDate(seconds?: number) {
+  if (typeof seconds !== 'number' || !Number.isFinite(seconds) || seconds <= 0) {
+    return undefined;
+  }
+
+  const date = new Date(seconds * 1000);
+  if (Number.isNaN(date.getTime())) {
+    return undefined;
+  }
+
+  return date.toLocaleDateString(undefined, {
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+  });
+}
+
+function renderMetadataAction(label: string, url?: string) {
+  if (!isValidHttpUrl(url)) {
+    return undefined;
+  }
+
+  return E(
+    'a',
+    {
+      class: 'btn pdk_dashboard-page__subscription-meta__action',
+      href: url,
+      target: '_blank',
+      rel: 'noopener noreferrer',
+      title: label,
+      'aria-label': label,
+    },
+    renderLinkIcon24(),
+  );
+}
+
+function renderSubscriptionMetadata(metadata?: Podkop.SubscriptionMetadata) {
+  if (!metadata || Object.keys(metadata).length <= 1) {
+    return undefined;
+  }
+
+  const title = metadata.title || metadata.fileName;
+  const traffic = metadata.traffic;
+  const used = formatBytes(traffic?.used) || '0 B';
+  const total = traffic?.isUnlimited
+    ? '∞'
+    : formatBytes(traffic?.total) || '0 B';
+  const expire = formatDate(metadata.expire);
+  const refillDate = formatDate(metadata.refillDate);
+
+  const rows = [
+    traffic
+      ? {
+          label: _('Traffic'),
+          value: `${used} / ${total}`,
+        }
+      : undefined,
+    expire ? { label: _('Expires'), value: expire } : undefined,
+    refillDate ? { label: _('Refill'), value: refillDate } : undefined,
+  ].filter(Boolean) as { label: string; value: string }[];
+
+  const actions = [
+    renderMetadataAction('Profile', metadata.webPageUrl),
+    renderMetadataAction('Support', metadata.supportUrl),
+    renderMetadataAction('More details', metadata.announceUrl),
+  ].filter(Boolean) as HTMLElement[];
+
+  return E('div', { class: 'pdk_dashboard-page__subscription-meta' }, [
+    E('div', { class: 'pdk_dashboard-page__subscription-meta__main' }, [
+      E(
+        'div',
+        { class: 'pdk_dashboard-page__subscription-meta__heading' },
+        _('Subscription info:'),
+      ),
+      title
+        ? E(
+            'div',
+            { class: 'pdk_dashboard-page__subscription-meta__title' },
+            title,
+          )
+        : '',
+      rows.length
+        ? E(
+            'div',
+            { class: 'pdk_dashboard-page__subscription-meta__facts' },
+            rows.map((row) =>
+              E(
+                'div',
+                { class: 'pdk_dashboard-page__subscription-meta__fact' },
+                [
+                  E(
+                    'span',
+                    { class: 'pdk_dashboard-page__subscription-meta__fact-key' },
+                    row.label,
+                  ),
+                  E(
+                    'span',
+                    {
+                      class:
+                        'pdk_dashboard-page__subscription-meta__fact-value',
+                    },
+                    row.value,
+                  ),
+                ],
+              ),
+            ),
+          )
+        : '',
+      actions.length
+        ? E(
+            'div',
+            { class: 'pdk_dashboard-page__subscription-meta__actions' },
+            actions,
+          )
+        : '',
+    ]),
+    metadata.announce
+      ? E(
+          'blockquote',
+          { class: 'pdk_dashboard-page__subscription-meta__announce' },
+          metadata.announce,
+        )
+      : '',
+  ]);
 }
 
 export function renderDefaultState({
@@ -118,6 +260,8 @@ export function renderDefaultState({
     );
   }
 
+  const metadataNode = renderSubscriptionMetadata(section.subscriptionMetadata);
+
   return E('div', { class: 'pdk_dashboard-page__outbound-section' }, [
     // Title with test latency
     E('div', { class: 'pdk_dashboard-page__outbound-section__title-section' }, [
@@ -142,7 +286,10 @@ export function renderDefaultState({
     E(
       'div',
       { class: 'pdk_dashboard-page__outbound-grid' },
-      section.outbounds.map((outbound) => renderOutbound(outbound)),
+      [
+        ...(metadataNode ? [metadataNode] : []),
+        ...section.outbounds.map((outbound) => renderOutbound(outbound)),
+      ],
     ),
   ]);
 }

@@ -44,6 +44,7 @@ PODKOP_PENDING_RELOAD_FILE="$PODKOP_RUNTIME_STATE_DIR/reload.pending"
 PODKOP_LIST_UPDATE_STATE_FILE="$PODKOP_RUNTIME_STATE_DIR/list-update.timestamp"
 PODKOP_SUBSCRIPTION_UPDATE_STATE_DIR="$PODKOP_RUNTIME_STATE_DIR/subscription-update"
 PODKOP_SUBSCRIPTION_LINKS_DIR="$PODKOP_RUNTIME_STATE_DIR/subscription-links"
+PODKOP_SUBSCRIPTION_METADATA_DIR="$PODKOP_RUNTIME_STATE_DIR/subscription-metadata"
 PODKOP_SUBSCRIPTION_UPDATE_LOCK_DIR="$PODKOP_RUNTIME_STATE_DIR/subscription-update.lock"
 PODKOP_RELOAD_LOCK_DIR="/var/run/podkop-plus.reload.lock"
 PODKOP_LIST_UPDATE_CRON_MARKER="# podkop-plus-list-update"
@@ -67,6 +68,7 @@ ensure_runtime_dirs() {
     mkdir -p "$PODKOP_RUNTIME_STATE_DIR"
     mkdir -p "$PODKOP_SUBSCRIPTION_UPDATE_STATE_DIR"
     mkdir -p "$PODKOP_SUBSCRIPTION_LINKS_DIR"
+    mkdir -p "$PODKOP_SUBSCRIPTION_METADATA_DIR"
 }
 
 get_subscription_json_path() {
@@ -93,6 +95,12 @@ get_subscription_links_path() {
     echo "$PODKOP_SUBSCRIPTION_LINKS_DIR/${section}.json"
 }
 
+get_subscription_metadata_path() {
+    local section="$1"
+
+    echo "$PODKOP_SUBSCRIPTION_METADATA_DIR/${section}.json"
+}
+
 write_subscription_outbound_links() {
     local section="$1"
     local links_json="$2"
@@ -106,6 +114,24 @@ write_subscription_outbound_links() {
         printf '%s\n' "$links_json" > "$tmpfile" && mv "$tmpfile" "$links_path"
     else
         rm -f "$links_path" "$tmpfile"
+    fi
+}
+
+write_subscription_metadata() {
+    local section="$1"
+    local metadata_path="$2"
+    local target_path tmpfile
+
+    mkdir -p "$PODKOP_SUBSCRIPTION_METADATA_DIR"
+    target_path="$(get_subscription_metadata_path "$section")"
+    tmpfile="${target_path}.$$"
+
+    if [ -n "$metadata_path" ] &&
+        [ -s "$metadata_path" ] &&
+        jq -e 'type == "object" and (keys | length > 1)' "$metadata_path" >/dev/null 2>&1; then
+        cp "$metadata_path" "$tmpfile" && mv "$tmpfile" "$target_path"
+    else
+        rm -f "$target_path" "$tmpfile"
     fi
 }
 
@@ -155,51 +181,63 @@ download_subscription_into_cache() {
     local subscription_json_path="$3"
     local subscription_url_cache_path="$4"
     local service_proxy_address="$5"
-    local raw_tmpfile normalized_tmpfile
+    local raw_tmpfile headers_tmpfile normalized_tmpfile metadata_tmpfile
 
     mkdir -p "$TMP_SUBSCRIPTION_FOLDER"
     raw_tmpfile="$(mktemp "$TMP_SUBSCRIPTION_FOLDER/${section}.download.XXXXXX")" || return 1
-    normalized_tmpfile="$(mktemp "$TMP_SUBSCRIPTION_FOLDER/${section}.normalized.XXXXXX")" || {
+    headers_tmpfile="$(mktemp "$TMP_SUBSCRIPTION_FOLDER/${section}.headers.XXXXXX")" || {
         rm -f "$raw_tmpfile"
         return 1
     }
+    normalized_tmpfile="$(mktemp "$TMP_SUBSCRIPTION_FOLDER/${section}.normalized.XXXXXX")" || {
+        rm -f "$raw_tmpfile" "$headers_tmpfile"
+        return 1
+    }
+    metadata_tmpfile="$(mktemp "$TMP_SUBSCRIPTION_FOLDER/${section}.metadata.XXXXXX")" || {
+        rm -f "$raw_tmpfile" "$headers_tmpfile" "$normalized_tmpfile"
+        return 1
+    }
 
-    if ! download_subscription "$subscription_url" "$raw_tmpfile" "$service_proxy_address" 3 2 10; then
-        rm -f "$raw_tmpfile" "$normalized_tmpfile"
+    if ! download_subscription "$subscription_url" "$raw_tmpfile" "$service_proxy_address" 3 2 10 "$headers_tmpfile"; then
+        rm -f "$raw_tmpfile" "$headers_tmpfile" "$normalized_tmpfile" "$metadata_tmpfile"
         return 1
     fi
 
+    subscription_extract_ui_metadata "$headers_tmpfile" "$raw_tmpfile" "$metadata_tmpfile" >/dev/null 2>&1 || rm -f "$metadata_tmpfile"
+
     if ! normalize_subscription_file "$raw_tmpfile" "$normalized_tmpfile" "$section"; then
         log "Downloaded subscription for rule '$section' is invalid" "error"
-        rm -f "$raw_tmpfile" "$normalized_tmpfile"
+        rm -f "$raw_tmpfile" "$headers_tmpfile" "$normalized_tmpfile" "$metadata_tmpfile"
         return 1
     fi
 
     if ! validate_subscription_file "$normalized_tmpfile"; then
         log "Normalized subscription for rule '$section' is invalid" "error"
-        rm -f "$raw_tmpfile" "$normalized_tmpfile"
+        rm -f "$raw_tmpfile" "$headers_tmpfile" "$normalized_tmpfile" "$metadata_tmpfile"
         return 1
     fi
 
     if ! subscription_url_is_current "$section" "$subscription_url"; then
         log "Subscription URL changed while updating rule '$section'; discarding superseded download" "warn"
-        rm -f "$raw_tmpfile" "$normalized_tmpfile"
+        rm -f "$raw_tmpfile" "$headers_tmpfile" "$normalized_tmpfile" "$metadata_tmpfile"
         return 4
     fi
 
     if [ -f "$subscription_json_path" ] && cmp -s "$normalized_tmpfile" "$subscription_json_path"; then
-        rm -f "$raw_tmpfile" "$normalized_tmpfile"
+        write_subscription_metadata "$section" "$metadata_tmpfile"
+        rm -f "$raw_tmpfile" "$headers_tmpfile" "$normalized_tmpfile" "$metadata_tmpfile"
         printf '%s' "$subscription_url" > "$subscription_url_cache_path"
         log "Subscription for rule '$section' is unchanged" "info"
         return 2
     fi
 
     mv "$normalized_tmpfile" "$subscription_json_path" || {
-        rm -f "$raw_tmpfile" "$normalized_tmpfile"
+        rm -f "$raw_tmpfile" "$headers_tmpfile" "$normalized_tmpfile" "$metadata_tmpfile"
         return 1
     }
 
-    rm -f "$raw_tmpfile"
+    write_subscription_metadata "$section" "$metadata_tmpfile"
+    rm -f "$raw_tmpfile" "$headers_tmpfile" "$metadata_tmpfile"
     printf '%s' "$subscription_url" > "$subscription_url_cache_path"
     return 0
 }
@@ -6220,6 +6258,28 @@ get_outbound_link() {
     jq -cn --arg link "$link" '{link: $link}'
 }
 
+get_subscription_metadata() {
+    local section="$1"
+    local metadata_path
+
+    ensure_runtime_dirs
+
+    case "$section" in
+    "" | */* | *..*)
+        printf '{}\n'
+        return 0
+        ;;
+    esac
+
+    metadata_path="$(get_subscription_metadata_path "$section")"
+    if [ -f "$metadata_path" ]; then
+        jq -c 'if type == "object" then . else {} end' "$metadata_path" 2>/dev/null || printf '{}\n'
+        return 0
+    fi
+
+    printf '{}\n'
+}
+
 validate_nfqws_strategy_json() {
     local raw_opt="${1:-}"
 
@@ -7011,6 +7071,8 @@ Available commands:
     show_system_info        Show system information
     get_status              Get Podkop Plus service status
     get_outbound_link       Get source proxy link for a generated outbound
+    get_subscription_metadata
+                            Get UI-only metadata for a subscription rule
     get_sing_box_status     Get sing-box service status
     get_zapret_status       Get zapret provider and Podkop-managed nfqws status
     get_system_info         Get system information in JSON format
@@ -7108,6 +7170,9 @@ get_status)
     ;;
 get_outbound_link)
     get_outbound_link "$2" "$3"
+    ;;
+get_subscription_metadata)
+    get_subscription_metadata "$2"
     ;;
 get_sing_box_status)
     get_sing_box_status

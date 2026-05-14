@@ -179,7 +179,7 @@ export function renderModal(
     stopRefreshTimer();
   };
 
-  const footerChildren = [
+  const footerChildren: HTMLElement[] = [
     renderButton({
       classNames: ['cbi-button-apply'],
       text: _('Download'),
@@ -188,8 +188,7 @@ export function renderModal(
     renderButton({
       classNames: ['cbi-button-apply'],
       text: _('Copy'),
-      onClick: () =>
-        copyToClipboard(`\`\`\`${name}\n${currentText}\n\`\`\``),
+      onClick: () => copyToClipboard(`\`\`\`${name}\n${currentText}\n\`\`\``),
     }),
     renderButton({
       classNames: ['cbi-button-remove'],

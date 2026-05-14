@@ -299,6 +299,10 @@ get_sing_box_version() {
     echo "${version:-1.0}"
 }
 
+get_subscription_user_agent() {
+    printf 'clash.meta; sing-box/%s; PodkopPlus/OpenWrt' "$(get_sing_box_version)"
+}
+
 generate_hwid() {
     local mac="" model="" raw_hash=""
 
@@ -325,16 +329,65 @@ download_subscription() {
     local retries="${4:-3}"
     local wait="${5:-2}"
     local timeout="${6:-10}"
-    local tmpfile attempt
+    local headers_filepath="${7:-}"
+    local tmpfile headers_tmpfile attempt wget_status
 
     tmpfile="${filepath}.part.$$"
+    headers_tmpfile=""
+    [ -n "$headers_filepath" ] && headers_tmpfile="${headers_filepath}.part.$$"
     rm -f "$tmpfile"
+    [ -n "$headers_tmpfile" ] && rm -f "$headers_tmpfile"
 
     for attempt in $(seq 1 "$retries"); do
         if [ -n "$http_proxy_address" ]; then
-            http_proxy="http://$http_proxy_address" https_proxy="http://$http_proxy_address" \
+            if [ -n "$headers_tmpfile" ]; then
+                curl -fL -sS \
+                    --connect-timeout "$timeout" \
+                    --speed-time "$timeout" \
+                    --speed-limit 1 \
+                    -x "http://$http_proxy_address" \
+                    -D "$headers_tmpfile" \
+                    -o "$tmpfile" \
+                    -H "User-Agent: $(get_subscription_user_agent)" \
+                    -H "X-HWID: $(generate_hwid)" \
+                    -H "X-Device-OS: OpenWrt Linux" \
+                    -H "X-Device-Model: $(get_device_model)" \
+                    -H "X-Ver-OS: $(get_kernel_version)" \
+                    -H "Accept-Language: ru-RU,en,*" \
+                    -H "X-Device-Locale: EN" \
+                    "$url"
+            else
+                http_proxy="http://$http_proxy_address" https_proxy="http://$http_proxy_address" \
+                    wget -T "$timeout" -O "$tmpfile" \
+                        --header "User-Agent: $(get_subscription_user_agent)" \
+                        --header "X-HWID: $(generate_hwid)" \
+                        --header "X-Device-OS: OpenWrt Linux" \
+                        --header "X-Device-Model: $(get_device_model)" \
+                        --header "X-Ver-OS: $(get_kernel_version)" \
+                        --header "Accept-Language: ru-RU,en,*" \
+                        --header "X-Device-Locale: EN" \
+                        "$url"
+            fi
+            wget_status=$?
+        else
+            if [ -n "$headers_tmpfile" ]; then
+                curl -fL -sS \
+                    --connect-timeout "$timeout" \
+                    --speed-time "$timeout" \
+                    --speed-limit 1 \
+                    -D "$headers_tmpfile" \
+                    -o "$tmpfile" \
+                    -H "User-Agent: $(get_subscription_user_agent)" \
+                    -H "X-HWID: $(generate_hwid)" \
+                    -H "X-Device-OS: OpenWrt Linux" \
+                    -H "X-Device-Model: $(get_device_model)" \
+                    -H "X-Ver-OS: $(get_kernel_version)" \
+                    -H "Accept-Language: ru-RU,en,*" \
+                    -H "X-Device-Locale: EN" \
+                    "$url"
+            else
                 wget -T "$timeout" -O "$tmpfile" \
-                    --header "User-Agent: singbox/$(get_sing_box_version)" \
+                    --header "User-Agent: $(get_subscription_user_agent)" \
                     --header "X-HWID: $(generate_hwid)" \
                     --header "X-Device-OS: OpenWrt Linux" \
                     --header "X-Device-Model: $(get_device_model)" \
@@ -342,29 +395,30 @@ download_subscription() {
                     --header "Accept-Language: ru-RU,en,*" \
                     --header "X-Device-Locale: EN" \
                     "$url"
-        else
-            wget -T "$timeout" -O "$tmpfile" \
-                --header "User-Agent: singbox/$(get_sing_box_version)" \
-                --header "X-HWID: $(generate_hwid)" \
-                --header "X-Device-OS: OpenWrt Linux" \
-                --header "X-Device-Model: $(get_device_model)" \
-                --header "X-Ver-OS: $(get_kernel_version)" \
-                --header "Accept-Language: ru-RU,en,*" \
-                --header "X-Device-Locale: EN" \
-                "$url"
+            fi
+            wget_status=$?
         fi
 
-        if [ $? -eq 0 ] && [ -s "$tmpfile" ]; then
+        if [ "$wget_status" -eq 0 ] && [ -s "$tmpfile" ]; then
             mv "$tmpfile" "$filepath"
+            if [ -n "$headers_tmpfile" ]; then
+                if [ -s "$headers_tmpfile" ]; then
+                    mv "$headers_tmpfile" "$headers_filepath"
+                else
+                    rm -f "$headers_filepath" "$headers_tmpfile"
+                fi
+            fi
             return 0
         fi
 
         rm -f "$tmpfile"
+        [ -n "$headers_tmpfile" ] && rm -f "$headers_tmpfile"
         log "Attempt $attempt/$retries to download subscription failed" "warn"
         sleep "$wait"
     done
 
     rm -f "$tmpfile"
+    [ -n "$headers_tmpfile" ] && rm -f "$headers_tmpfile"
     return 1
 }
 
@@ -380,7 +434,7 @@ check_subscription_connectivity() {
         if [ -n "$http_proxy_address" ]; then
             http_proxy="http://$http_proxy_address" https_proxy="http://$http_proxy_address" \
                 wget -q -T "$timeout" -O /dev/null \
-                    --header "User-Agent: singbox/$(get_sing_box_version)" \
+                    --header "User-Agent: $(get_subscription_user_agent)" \
                     --header "X-HWID: $(generate_hwid)" \
                     --header "X-Device-OS: OpenWrt Linux" \
                     --header "X-Device-Model: $(get_device_model)" \
@@ -390,7 +444,7 @@ check_subscription_connectivity() {
                     "$url" && return 0
         else
             wget -q -T "$timeout" -O /dev/null \
-                --header "User-Agent: singbox/$(get_sing_box_version)" \
+                --header "User-Agent: $(get_subscription_user_agent)" \
                 --header "X-HWID: $(generate_hwid)" \
                 --header "X-Device-OS: OpenWrt Linux" \
                 --header "X-Device-Model: $(get_device_model)" \

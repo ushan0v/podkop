@@ -107,6 +107,20 @@ async function markSubscriptionCopyableOutbounds(
   );
 }
 
+async function getSubscriptionMetadata(sectionName: string) {
+  const response = await PodkopShellMethods.getSubscriptionMetadata(sectionName);
+
+  if (
+    response.success &&
+    response.data &&
+    Object.keys(response.data).length > 1
+  ) {
+    return response.data;
+  }
+
+  return undefined;
+}
+
 export async function getDashboardSections(): Promise<IGetDashboardSectionsResponse> {
   const configSections = await getConfigSections();
   const clashProxies = await PodkopShellMethods.getClashApiProxies();
@@ -309,6 +323,9 @@ export async function getDashboardSections(): Promise<IGetDashboardSectionsRespo
           const fallbackUrltest = proxies.find(
             (proxy) => proxy.code === `${section['.name']}-urltest-out`,
           );
+          const subscriptionMetadata = await getSubscriptionMetadata(
+            section['.name'],
+          );
 
           const selectorOutbounds = (selector?.value?.all ?? []).flatMap(
             (code) => {
@@ -361,6 +378,7 @@ export async function getDashboardSections(): Promise<IGetDashboardSectionsRespo
               code: selector?.code || section['.name'],
               sectionName: section['.name'],
               displayName,
+              subscriptionMetadata,
               outbounds: [
                 {
                   code: fallbackUrltest?.code || '',
@@ -383,6 +401,7 @@ export async function getDashboardSections(): Promise<IGetDashboardSectionsRespo
             code: selector?.code || section['.name'],
             sectionName: section['.name'],
             displayName,
+            subscriptionMetadata,
             outbounds: await markSubscriptionCopyableOutbounds(
               section['.name'],
               outbounds,

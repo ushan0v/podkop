@@ -7,8 +7,8 @@ msgid ""
 msgstr ""
 "Project-Id-Version: PODKOP PLUS\n"
 "Report-Msgid-Bugs-To: \n"
-"POT-Creation-Date: 2026-05-13 00:19+0300\n"
-"PO-Revision-Date: 2026-05-13 00:19+0300\n"
+"POT-Creation-Date: 2026-05-14 04:44+0300\n"
+"PO-Revision-Date: 2026-05-14 04:44+0300\n"
 "Last-Translator: ushan0v\n"
 "Language-Team: none\n"
 "Language: ru\n"
@@ -334,6 +334,9 @@ msgstr "Исключите трафик протокола NTP из туннел
 
 msgid "Expecting: %s"
 msgstr "Ожидается: %s"
+
+msgid "Expires"
+msgstr "Истекает"
 
 msgid "Expose this section as a local HTTP+SOCKS proxy"
 msgstr "Открыть эту секцию как локальный HTTP+SOCKS прокси"
@@ -698,6 +701,9 @@ msgstr "Прокси-трафик не маршрутизируется чере
 msgid "Proxy traffic is routed via FakeIP"
 msgstr "Прокси-трафик направляется через FakeIP"
 
+msgid "Refill"
+msgstr "Сброс"
+
 msgid "Regional options cannot be used together"
 msgstr "Нельзя использовать несколько региональных опций одновременно"
 
@@ -880,6 +886,9 @@ msgstr "Остановить Podkop Plus"
 
 msgid "Subscription"
 msgstr "Подписка"
+
+msgid "Subscription info:"
+msgstr "Информация о подписке:"
 
 msgid "Subscription update interval"
 msgstr "Интервал обновления подписки"

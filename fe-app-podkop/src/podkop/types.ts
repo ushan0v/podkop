@@ -56,6 +56,7 @@ export namespace Podkop {
     CHECK_ZAPRET_RUNTIME = 'check_zapret_runtime',
     GET_STATUS = 'get_status',
     GET_OUTBOUND_LINK = 'get_outbound_link',
+    GET_SUBSCRIPTION_METADATA = 'get_subscription_metadata',
     CHECK_SING_BOX = 'check_sing_box',
     GET_SING_BOX_STATUS = 'get_sing_box_status',
     GET_ZAPRET_STATUS = 'get_zapret_status',
@@ -95,7 +96,30 @@ export namespace Podkop {
     code: string;
     sectionName: string;
     displayName: string;
+    subscriptionMetadata?: SubscriptionMetadata;
     outbounds: Outbound[];
+  }
+
+  export interface SubscriptionTraffic {
+    upload?: number;
+    download?: number;
+    used?: number;
+    total?: number;
+    remaining?: number;
+    isUnlimited?: boolean;
+  }
+
+  export interface SubscriptionMetadata {
+    version?: number;
+    title?: string;
+    traffic?: SubscriptionTraffic;
+    expire?: number;
+    refillDate?: number;
+    webPageUrl?: string;
+    supportUrl?: string;
+    announce?: string;
+    announceUrl?: string;
+    fileName?: string;
   }
 
   export type RuleAction = 'proxy' | 'vpn' | 'direct' | 'block' | 'zapret';
