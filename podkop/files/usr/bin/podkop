@@ -576,7 +576,10 @@ signature_finish() {
     echo "$hash"
 }
 
-build_restart_signature() {
+build_service_trigger_signature() {
+    # These settings are consumed by init.d/procd triggers, not by sing-box/nft
+    # runtime. Track them separately so config reloads can refresh procd without
+    # forcing an in-process runtime restart.
     local enable_badwan_interface_monitoring badwan_monitored_interfaces badwan_reload_delay
 
     signature_begin
@@ -1068,7 +1071,7 @@ get_remote_ruleset_update_interval() {
 
 capture_reload_state() {
     config_load "$PODKOP_CONFIG_NAME"
-    RELOAD_STATE_RESTART_SIGNATURE="$(build_restart_signature)"
+    RELOAD_STATE_SERVICE_TRIGGER_SIGNATURE="$(build_service_trigger_signature)"
     RELOAD_STATE_DNSMASQ_SIGNATURE="$(build_dnsmasq_signature)"
     RELOAD_STATE_SING_BOX_SIGNATURE="$(build_sing_box_signature)"
     RELOAD_STATE_NFT_SIGNATURE="$(build_nft_signature)"
@@ -1083,7 +1086,7 @@ write_reload_state() {
     mkdir -p "$PODKOP_RUNTIME_STATE_DIR"
     cat > "$PODKOP_RELOAD_STATE_FILE" <<EOF
 format=$PODKOP_RELOAD_STATE_FORMAT
-restart_signature=$RELOAD_STATE_RESTART_SIGNATURE
+service_trigger_signature=$RELOAD_STATE_SERVICE_TRIGGER_SIGNATURE
 dnsmasq_signature=$RELOAD_STATE_DNSMASQ_SIGNATURE
 sing_box_signature=$RELOAD_STATE_SING_BOX_SIGNATURE
 nft_signature=$RELOAD_STATE_NFT_SIGNATURE
@@ -1836,11 +1839,11 @@ reload() {
     local reload_reason="${1:-}"
     local status
     local force_runtime_reload=0
-    local previous_restart_signature previous_dnsmasq_signature previous_sing_box_signature previous_nft_signature
+    local previous_service_trigger_signature previous_dnsmasq_signature previous_sing_box_signature previous_nft_signature
     local previous_zapret_queue_signature previous_zapret_runtime_signature previous_list_signature previous_cron_signature
-    local previous_dont_touch_dhcp needs_init_restart needs_sing_box_reload needs_nft_rebuild needs_zapret_restart
+    local previous_dont_touch_dhcp needs_sing_box_reload needs_nft_rebuild needs_zapret_restart
     local needs_dnsmasq_configure needs_dnsmasq_restore needs_cron_refresh needs_list_update
-    local changed_dnsmasq changed_sing_box changed_nft changed_zapret_queue changed_zapret_runtime changed_cron changed_list
+    local changed_service_triggers changed_dnsmasq changed_sing_box changed_nft changed_zapret_queue changed_zapret_runtime changed_cron changed_list
 
     log "Podkop Plus reload"
     runtime_status_write "reloading" "reload"
@@ -1870,7 +1873,9 @@ reload() {
         return "$status"
     fi
 
-    previous_restart_signature="$(read_reload_state_value "restart_signature")"
+    previous_service_trigger_signature="$(read_reload_state_value "service_trigger_signature")"
+    [ -n "$previous_service_trigger_signature" ] ||
+        previous_service_trigger_signature="$(read_reload_state_value "restart_signature")"
     previous_dnsmasq_signature="$(read_reload_state_value "dnsmasq_signature")"
     previous_sing_box_signature="$(read_reload_state_value "sing_box_signature")"
     previous_nft_signature="$(read_reload_state_value "nft_signature")"
@@ -1881,7 +1886,6 @@ reload() {
     previous_dont_touch_dhcp="$(read_reload_state_value "dont_touch_dhcp")"
     capture_reload_state
 
-    needs_init_restart=0
     needs_sing_box_reload=0
     needs_nft_rebuild=0
     needs_zapret_restart=0
@@ -1889,6 +1893,7 @@ reload() {
     needs_dnsmasq_restore=0
     needs_cron_refresh=0
     needs_list_update=0
+    changed_service_triggers=0
     changed_dnsmasq=0
     changed_sing_box=0
     changed_nft=0
@@ -1897,15 +1902,7 @@ reload() {
     changed_cron=0
     changed_list=0
 
-    [ "$RELOAD_STATE_RESTART_SIGNATURE" != "$previous_restart_signature" ] && needs_init_restart=1
-
-    if [ "$needs_init_restart" -eq 1 ]; then
-        log "Reload requires runtime restart; refreshing Podkop in-process"
-        restart_runtime_for_reload
-        status="$?"
-        runtime_status_finish_action "reload" "$status"
-        return "$status"
-    fi
+    [ "$RELOAD_STATE_SERVICE_TRIGGER_SIGNATURE" != "$previous_service_trigger_signature" ] && changed_service_triggers=1
 
     if [ "$RELOAD_STATE_SING_BOX_SIGNATURE" != "$previous_sing_box_signature" ]; then
         changed_sing_box=1
@@ -1961,7 +1958,7 @@ reload() {
         needs_sing_box_reload=1
     fi
 
-    log "Reload signature changes: sing-box=$changed_sing_box nft=$changed_nft zapret_queue=$changed_zapret_queue zapret_runtime=$changed_zapret_runtime dnsmasq=$changed_dnsmasq cron=$changed_cron list=$changed_list forced=$force_runtime_reload" "debug"
+    log "Reload signature changes: service_triggers=$changed_service_triggers sing-box=$changed_sing_box nft=$changed_nft zapret_queue=$changed_zapret_queue zapret_runtime=$changed_zapret_runtime dnsmasq=$changed_dnsmasq cron=$changed_cron list=$changed_list forced=$force_runtime_reload" "debug"
     log "Reload plan: sing-box=$needs_sing_box_reload nft=$needs_nft_rebuild zapret=$needs_zapret_restart dnsmasq_configure=$needs_dnsmasq_configure dnsmasq_restore=$needs_dnsmasq_restore cron=$needs_cron_refresh list_update=$needs_list_update" "debug"
 
     if [ "$needs_sing_box_reload" -eq 0 ] &&
@@ -1971,6 +1968,7 @@ reload() {
         [ "$needs_dnsmasq_restore" -eq 0 ] &&
         [ "$needs_cron_refresh" -eq 0 ] &&
         [ "$needs_list_update" -eq 0 ]; then
+        write_reload_state
         log "Reload skipped: runtime-relevant configuration is unchanged"
         runtime_status_finish_action "reload" 0
         return 0

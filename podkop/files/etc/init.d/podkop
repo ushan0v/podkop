@@ -13,11 +13,8 @@ PODKOP_RELOAD_LOCK_DIR="/var/run/podkop-plus.reload.lock"
 PODKOP_RUNTIME_STATE_DIR="/var/run/podkop-plus"
 PODKOP_PENDING_RELOAD_FILE="$PODKOP_RUNTIME_STATE_DIR/reload.pending"
 PODKOP_INTERNAL_CONFIG_TRIGGER_GUARD="/var/run/podkop-plus.internal-config-change"
+PODKOP_CONFIG_CHANGE_REASON="on_config_change"
 config_load "$CONFIG_NAME"
-
-reload_lock_is_active() {
-    [ -d "$PODKOP_RELOAD_LOCK_DIR" ]
-}
 
 acquire_reload_lock() {
     local owner_pid
@@ -71,16 +68,27 @@ run_pending_reload_if_requested() {
     "$PODKOP_SERVICE_INIT" reload pending >/dev/null 2>&1 &
 }
 
-refresh_service_triggers() {
+sync_service_triggers() {
     config_load "$CONFIG_NAME"
-    _procd_call refresh_service_triggers_payload
+    _procd_call sync_service_triggers_payload
 }
 
-refresh_service_triggers_payload() {
+sync_service_triggers_payload() {
+    # rc.common registers triggers when the service is started. Config reloads can
+    # change Bad WAN interface triggers, so refresh the trigger set after a
+    # successful config-change reload without restarting the runtime.
     json_init
     json_add_string name "$NAME"
-    service_triggers > /dev/null
+    service_triggers
     _procd_ubus_call set > /dev/null 2>&1 || true
+}
+
+is_config_change_reload() {
+    [ "$1" = "$PODKOP_CONFIG_CHANGE_REASON" ]
+}
+
+runtime_is_running() {
+    "$PODKOP_BIN" get_status 2> /dev/null | grep -q '"running":1'
 }
 
 consume_internal_config_guard() {
@@ -142,31 +150,14 @@ stop_service() {
     "$PODKOP_BIN" stop
 }
 
-restart() {
-    echo "Restart Podkop Plus"
-
-    if ! acquire_reload_lock; then
-        mark_pending_reload "restart_busy"
-        return 0
-    fi
-
-    trap 'release_reload_lock' EXIT INT TERM
-    "$PODKOP_BIN" restart > /dev/null 2>&1
-    local status="$?"
-    trap - EXIT INT TERM
-    release_reload_lock
-    if [ "$status" -eq 0 ]; then
-        refresh_service_triggers
-    fi
-    run_pending_reload_if_requested
-
-    return "$status"
-}
-
 reload_service() {
     local reason="$1"
 
     if should_skip_internal_config_reload "$reason"; then
+        return 0
+    fi
+
+    if is_config_change_reload "$reason" && ! runtime_is_running; then
         return 0
     fi
 
@@ -178,8 +169,8 @@ reload_service() {
     trap 'release_reload_lock' EXIT INT TERM
     "$PODKOP_BIN" reload "$reason" > /dev/null 2>&1
     local status="$?"
-    if [ "$status" -eq 0 ] && [ "$reason" = "on_config_change" ]; then
-        refresh_service_triggers
+    if [ "$status" -eq 0 ] && is_config_change_reload "$reason"; then
+        sync_service_triggers
     fi
     trap - EXIT INT TERM
     release_reload_lock
@@ -199,8 +190,6 @@ status_service() {
 }
 
 service_triggers() {
-    echo "service_triggers start"
-
     config_get enable_badwan_interface_monitoring "settings" "enable_badwan_interface_monitoring"
     config_get badwan_monitored_interfaces "settings" "badwan_monitored_interfaces"
     config_get badwan_reload_delay "settings" "badwan_reload_delay" "2000"
@@ -208,7 +197,7 @@ service_triggers() {
     PROCD_RELOAD_DELAY=$badwan_reload_delay
 
     procd_open_trigger
-    procd_add_config_trigger "config.change" "$CONFIG_NAME" "$initscript" reload 'on_config_change'
+    procd_add_config_trigger "config.change" "$CONFIG_NAME" "$PODKOP_SERVICE_INIT" reload "$PODKOP_CONFIG_CHANGE_REASON"
 
     if [ "$enable_badwan_interface_monitoring" = "1" ]; then
         for iface in $badwan_monitored_interfaces; do
