@@ -1500,6 +1500,13 @@
     ]
   },
   {
+    "call": "Optional HTTP User-Agent for downloading the subscription.",
+    "key": "Optional HTTP User-Agent for downloading the subscription.",
+    "places": [
+      "../luci-app-podkop-plus/htdocs/luci-static/resources/view/podkop/section.js:1858"
+    ]
+  },
+  {
     "call": "Optional values must be attached with '=' here; a separate token would be ignored by nfqws.",
     "key": "Optional values must be attached with '=' here; a separate token would be ignored by nfqws.",
     "places": [
@@ -2414,6 +2421,13 @@
     "places": [
       "../luci-app-podkop-plus/htdocs/luci-static/resources/view/podkop/node.js:139",
       "../luci-app-podkop-plus/htdocs/luci-static/resources/view/podkop/section.js:2009"
+    ]
+  },
+  {
+    "call": "User-Agent",
+    "key": "User-Agent",
+    "places": [
+      "../luci-app-podkop-plus/htdocs/luci-static/resources/view/podkop/section.js:1857"
     ]
   },
   {

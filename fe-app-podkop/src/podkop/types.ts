@@ -150,6 +150,7 @@ export namespace Podkop {
     selector_proxy_links?: string[];
     urltest_proxy_links?: string[];
     subscription_url?: string;
+    subscription_user_agent?: string;
     subscription_update_interval?: string;
     subscription_update_interval_disabled?: '0' | '1';
     subscription_group_by_countries?: '0' | '1';

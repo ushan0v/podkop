@@ -635,6 +635,9 @@ msgstr ""
 msgid "Optional node used to download this remote rule set"
 msgstr "Необязательный узел, через который скачивается этот удалённый набор правил"
 
+msgid "Optional HTTP User-Agent for downloading the subscription."
+msgstr "Опциональный HTTP User-Agent для загрузки подписки."
+
 msgid "Optional values must be attached with '=' here; a separate token would be ignored by nfqws."
 msgstr "Необязательное значение здесь нужно передавать только через '='; отдельный токен nfqws проигнорирует."
 
@@ -1018,6 +1021,9 @@ msgstr "URLTest допустимое отклонение"
 
 msgid "URLTest URL"
 msgstr "URL URLTest"
+
+msgid "User-Agent"
+msgstr "User-Agent"
 
 msgid "Use a network interface as the outbound for this node"
 msgstr "Использовать сетевой интерфейс как outbound для этого узла"

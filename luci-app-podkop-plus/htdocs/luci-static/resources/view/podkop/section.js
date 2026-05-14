@@ -1853,6 +1853,18 @@ function createSectionContent(section) {
   o = section.taboption(
     "settings",
     form.Value,
+    "subscription_user_agent",
+    _("User-Agent"),
+    _("Optional HTTP User-Agent for downloading the subscription."),
+  );
+  o.depends({ action: "proxy", proxy_config_type: "subscription" });
+  o.default = "";
+  o.rmempty = true;
+  o.modalonly = true;
+
+  o = section.taboption(
+    "settings",
+    form.Value,
     "subscription_update_interval",
     _("Subscription update interval"),
     _(

@@ -83,6 +83,12 @@ get_subscription_url_cache_path() {
     echo "$TMP_SUBSCRIPTION_FOLDER/${section}.url"
 }
 
+get_subscription_user_agent_cache_path() {
+    local section="$1"
+
+    echo "$TMP_SUBSCRIPTION_FOLDER/${section}.user_agent"
+}
+
 get_subscription_update_timestamp_path() {
     local section="$1"
 
@@ -144,6 +150,19 @@ subscription_url_is_current() {
     [ "$current_subscription_url" = "$subscription_url" ]
 }
 
+subscription_config_is_current() {
+    local section="$1"
+    local subscription_url="$2"
+    local subscription_user_agent="${3:-}"
+    local current_subscription_url current_subscription_user_agent
+
+    current_subscription_url="$(uci -q get "$PODKOP_CONFIG_NAME.$section.subscription_url" 2>/dev/null)"
+    current_subscription_user_agent="$(uci -q get "$PODKOP_CONFIG_NAME.$section.subscription_user_agent" 2>/dev/null)"
+
+    [ "$current_subscription_url" = "$subscription_url" ] &&
+        [ "$current_subscription_user_agent" = "$subscription_user_agent" ]
+}
+
 subscription_cache_is_usable() {
     local subscription_json_path="$1"
 
@@ -159,10 +178,11 @@ wait_for_subscription_connectivity() {
     local attempts="${4:-3}"
     local wait="${5:-5}"
     local timeout="${6:-5}"
+    local subscription_user_agent="${7:-}"
     local attempt
 
     for attempt in $(seq 1 "$attempts"); do
-        if check_subscription_connectivity "$subscription_url" "$service_proxy_address" 1 0 "$timeout"; then
+        if check_subscription_connectivity "$subscription_url" "$service_proxy_address" 1 0 "$timeout" "$subscription_user_agent"; then
             log "Subscription connectivity check passed for rule '$section'" "info"
             return 0
         fi
@@ -181,9 +201,11 @@ download_subscription_into_cache() {
     local subscription_json_path="$3"
     local subscription_url_cache_path="$4"
     local service_proxy_address="$5"
-    local raw_tmpfile headers_tmpfile normalized_tmpfile metadata_tmpfile
+    local subscription_user_agent="${6:-}"
+    local subscription_user_agent_cache_path raw_tmpfile headers_tmpfile normalized_tmpfile metadata_tmpfile
 
     mkdir -p "$TMP_SUBSCRIPTION_FOLDER"
+    subscription_user_agent_cache_path="$(get_subscription_user_agent_cache_path "$section")"
     raw_tmpfile="$(mktemp "$TMP_SUBSCRIPTION_FOLDER/${section}.download.XXXXXX")" || return 1
     headers_tmpfile="$(mktemp "$TMP_SUBSCRIPTION_FOLDER/${section}.headers.XXXXXX")" || {
         rm -f "$raw_tmpfile"
@@ -198,7 +220,7 @@ download_subscription_into_cache() {
         return 1
     }
 
-    if ! download_subscription "$subscription_url" "$raw_tmpfile" "$service_proxy_address" 3 2 10 "$headers_tmpfile"; then
+    if ! download_subscription "$subscription_url" "$raw_tmpfile" "$service_proxy_address" 3 2 10 "$headers_tmpfile" "$subscription_user_agent"; then
         rm -f "$raw_tmpfile" "$headers_tmpfile" "$normalized_tmpfile" "$metadata_tmpfile"
         return 1
     fi
@@ -217,8 +239,8 @@ download_subscription_into_cache() {
         return 1
     fi
 
-    if ! subscription_url_is_current "$section" "$subscription_url"; then
-        log "Subscription URL changed while updating rule '$section'; discarding superseded download" "warn"
+    if ! subscription_config_is_current "$section" "$subscription_url" "$subscription_user_agent"; then
+        log "Subscription source settings changed while updating rule '$section'; discarding superseded download" "warn"
         rm -f "$raw_tmpfile" "$headers_tmpfile" "$normalized_tmpfile" "$metadata_tmpfile"
         return 4
     fi
@@ -227,6 +249,7 @@ download_subscription_into_cache() {
         write_subscription_metadata "$section" "$metadata_tmpfile"
         rm -f "$raw_tmpfile" "$headers_tmpfile" "$normalized_tmpfile" "$metadata_tmpfile"
         printf '%s' "$subscription_url" > "$subscription_url_cache_path"
+        printf '%s' "$subscription_user_agent" > "$subscription_user_agent_cache_path"
         log "Subscription for rule '$section' is unchanged" "info"
         return 2
     fi
@@ -239,6 +262,7 @@ download_subscription_into_cache() {
     write_subscription_metadata "$section" "$metadata_tmpfile"
     rm -f "$raw_tmpfile" "$headers_tmpfile" "$metadata_tmpfile"
     printf '%s' "$subscription_url" > "$subscription_url_cache_path"
+    printf '%s' "$subscription_user_agent" > "$subscription_user_agent_cache_path"
     return 0
 }
 
@@ -257,12 +281,14 @@ rule_is_subscription_proxy() {
 
 prepare_subscription_cache_for_startup() {
     local section="$1"
-    local subscription_url subscription_json_path subscription_url_cache_path cached_subscription_url
+    local subscription_url subscription_user_agent subscription_json_path subscription_url_cache_path \
+        subscription_user_agent_cache_path cached_subscription_url cached_subscription_user_agent
     local had_usable_cache cache_needs_refresh
 
     rule_is_subscription_proxy "$section" || return 0
 
     config_get subscription_url "$section" "subscription_url"
+    config_get subscription_user_agent "$section" "subscription_user_agent" ""
     if [ -z "$subscription_url" ]; then
         log "Subscription URL is not set for rule '$section'. Aborted." "fatal"
         exit 1
@@ -270,7 +296,9 @@ prepare_subscription_cache_for_startup() {
 
     subscription_json_path="$(get_subscription_json_path "$section")"
     subscription_url_cache_path="$(get_subscription_url_cache_path "$section")"
+    subscription_user_agent_cache_path="$(get_subscription_user_agent_cache_path "$section")"
     cached_subscription_url=""
+    cached_subscription_user_agent=""
     had_usable_cache=0
     cache_needs_refresh=0
 
@@ -284,19 +312,27 @@ prepare_subscription_cache_for_startup() {
         cached_subscription_url="$(cat "$subscription_url_cache_path" 2> /dev/null)"
     fi
 
-    if [ "$had_usable_cache" -eq 0 ] || [ "$cached_subscription_url" != "$subscription_url" ]; then
+    if [ -f "$subscription_user_agent_cache_path" ]; then
+        cached_subscription_user_agent="$(cat "$subscription_user_agent_cache_path" 2> /dev/null)"
+    fi
+
+    if [ "$had_usable_cache" -eq 0 ] ||
+        [ "$cached_subscription_url" != "$subscription_url" ] ||
+        [ "$cached_subscription_user_agent" != "$subscription_user_agent" ]; then
         cache_needs_refresh=1
     fi
 
     [ "$cache_needs_refresh" -eq 0 ] && return 0
 
     download_subscription_into_cache \
-        "$section" "$subscription_url" "$subscription_json_path" "$subscription_url_cache_path" ""
+        "$section" "$subscription_url" "$subscription_json_path" "$subscription_url_cache_path" "" "$subscription_user_agent"
     case "$?" in
     0 | 2) return 0 ;;
     esac
 
-    if [ "$had_usable_cache" -eq 1 ] && [ "$cached_subscription_url" = "$subscription_url" ]; then
+    if [ "$had_usable_cache" -eq 1 ] &&
+        [ "$cached_subscription_url" = "$subscription_url" ] &&
+        [ "$cached_subscription_user_agent" = "$subscription_user_agent" ]; then
         log "Keeping cached subscription for rule '$section' until a fresh download succeeds" "warn"
         return 0
     fi
@@ -618,14 +654,16 @@ append_sing_box_rule_signature() {
             signature_add "rule.$section.urltest_testing_url" "$urltest_testing_url"
             ;;
         subscription)
-            local subscription_url subscription_group_by_countries \
+            local subscription_url subscription_user_agent subscription_group_by_countries \
                 urltest_check_interval urltest_tolerance urltest_testing_url
             config_get subscription_url "$section" "subscription_url"
+            config_get subscription_user_agent "$section" "subscription_user_agent" ""
             config_get subscription_group_by_countries "$section" "subscription_group_by_countries"
             urltest_check_interval="$(get_urltest_check_interval_for_rule "$section")"
             config_get urltest_tolerance "$section" "urltest_tolerance" 50
             config_get urltest_testing_url "$section" "urltest_testing_url" "https://www.gstatic.com/generate_204"
             signature_add "rule.$section.subscription_url" "$subscription_url"
+            signature_add "rule.$section.subscription_user_agent" "$subscription_user_agent"
             signature_add "rule.$section.subscription_group_by_countries" "$subscription_group_by_countries"
             signature_add "rule.$section.urltest_check_interval" "$urltest_check_interval"
             signature_add "rule.$section.urltest_tolerance" "$urltest_tolerance"
@@ -860,14 +898,16 @@ build_list_update_signature() {
 
 append_subscription_update_cron_signature() {
     local section="$1"
-    local subscription_update_interval subscription_url
+    local subscription_update_interval subscription_url subscription_user_agent
 
     rule_is_subscription_proxy "$section" || return 0
 
     config_get subscription_url "$section" "subscription_url"
+    config_get subscription_user_agent "$section" "subscription_user_agent" ""
     subscription_update_interval="$(get_subscription_update_interval_for_rule "$section")"
 
     signature_add "subscription.$section.subscription_url" "$subscription_url"
+    signature_add "subscription.$section.subscription_user_agent" "$subscription_user_agent"
     signature_add "subscription.$section.subscription_update_interval" "$subscription_update_interval"
 }
 
@@ -3214,7 +3254,7 @@ subscription_update_section_is_due() {
 subscription_update_section() {
     local section="$1"
     local force="$2"
-    local subscription_url subscription_json_path subscription_url_cache_path update_result
+    local subscription_url subscription_user_agent subscription_json_path subscription_url_cache_path update_result
     local outbounds_count now
 
     rule_is_subscription_proxy "$section" || return 3
@@ -3229,6 +3269,7 @@ subscription_update_section() {
     fi
 
     config_get subscription_url "$section" "subscription_url"
+    config_get subscription_user_agent "$section" "subscription_user_agent" ""
     if [ -z "$subscription_url" ]; then
         echolog "Subscription URL is not set for rule '$section'"
         return 1
@@ -3241,7 +3282,7 @@ subscription_update_section() {
     echolog "Updating subscription for rule '$section'..."
 
     download_subscription_into_cache \
-        "$section" "$subscription_url" "$subscription_json_path" "$subscription_url_cache_path" ""
+        "$section" "$subscription_url" "$subscription_json_path" "$subscription_url_cache_path" "" "$subscription_user_agent"
     update_result=$?
 
     case "$update_result" in
@@ -3713,12 +3754,14 @@ configure_outbound_handler() {
             ;;
         subscription)
             local subscription_url subscription_json_path subscription_url_cache_path cached_subscription_url \
+                subscription_user_agent subscription_user_agent_cache_path cached_subscription_user_agent \
                 should_download had_usable_cache urltest_tag selector_tag urltest_outbounds \
                 selector_outbounds urltest_check_interval urltest_idle_timeout urltest_tolerance urltest_testing_url \
                 subscription_group_by_countries_raw subscription_group_by_countries subscription_outbound_tags_json \
                 update_result
 
             config_get subscription_url "$section" "subscription_url"
+            config_get subscription_user_agent "$section" "subscription_user_agent" ""
             urltest_check_interval="$(get_urltest_check_interval_for_config "$section")"
             urltest_idle_timeout="$(get_urltest_idle_timeout_for_config "$section")"
             config_get urltest_tolerance "$section" "urltest_tolerance" 50
@@ -3742,7 +3785,9 @@ configure_outbound_handler() {
             mkdir -p "$TMP_SUBSCRIPTION_FOLDER"
             subscription_json_path="$(get_subscription_json_path "$section")"
             subscription_url_cache_path="$(get_subscription_url_cache_path "$section")"
+            subscription_user_agent_cache_path="$(get_subscription_user_agent_cache_path "$section")"
             cached_subscription_url=""
+            cached_subscription_user_agent=""
             should_download=0
             had_usable_cache=0
 
@@ -3757,6 +3802,10 @@ configure_outbound_handler() {
                 cached_subscription_url="$(cat "$subscription_url_cache_path" 2>/dev/null)"
             fi
 
+            if [ -f "$subscription_user_agent_cache_path" ]; then
+                cached_subscription_user_agent="$(cat "$subscription_user_agent_cache_path" 2>/dev/null)"
+            fi
+
             if [ "$cached_subscription_url" != "$subscription_url" ]; then
                 if [ -n "$cached_subscription_url" ]; then
                     log "Subscription URL changed for rule '$section'" "warn"
@@ -3765,16 +3814,26 @@ configure_outbound_handler() {
                 should_download=1
             fi
 
+            if [ "$cached_subscription_user_agent" != "$subscription_user_agent" ]; then
+                if [ -n "$cached_subscription_user_agent" ] || [ -n "$subscription_user_agent" ]; then
+                    log "Subscription User-Agent changed for rule '$section'" "warn"
+                fi
+
+                should_download=1
+            fi
+
             if [ "$should_download" -eq 1 ]; then
                 log "Downloading subscription for rule '$section'"
                 download_subscription_into_cache \
-                    "$section" "$subscription_url" "$subscription_json_path" "$subscription_url_cache_path" ""
+                    "$section" "$subscription_url" "$subscription_json_path" "$subscription_url_cache_path" "" "$subscription_user_agent"
                 update_result="$?"
 
                 case "$update_result" in
                 0 | 2) ;;
                 *)
-                    if [ "$had_usable_cache" -eq 1 ] && [ "$cached_subscription_url" = "$subscription_url" ]; then
+                    if [ "$had_usable_cache" -eq 1 ] &&
+                        [ "$cached_subscription_url" = "$subscription_url" ] &&
+                        [ "$cached_subscription_user_agent" = "$subscription_user_agent" ]; then
                         log "Failed to refresh subscription for rule '$section', continuing with cached data" "warn"
                     else
                         log "Failed to download subscription for rule '$section'. Aborted." "fatal"

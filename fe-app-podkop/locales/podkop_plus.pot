@@ -898,6 +898,10 @@ msgstr ""
 msgid "Optional node used to download this remote rule set"
 msgstr ""
 
+#: ../luci-app-podkop-plus/htdocs/luci-static/resources/view/podkop/section.js:1858
+msgid "Optional HTTP User-Agent for downloading the subscription."
+msgstr ""
+
 #: ../luci-app-podkop-plus/htdocs/luci-static/resources/view/podkop/section.js:1330
 msgid "Optional values must be attached with '=' here; a separate token would be ignored by nfqws."
 msgstr ""
@@ -1429,6 +1433,10 @@ msgstr ""
 #: ../luci-app-podkop-plus/htdocs/luci-static/resources/view/podkop/node.js:139
 #: ../luci-app-podkop-plus/htdocs/luci-static/resources/view/podkop/section.js:2009
 msgid "URLTest URL"
+msgstr ""
+
+#: ../luci-app-podkop-plus/htdocs/luci-static/resources/view/podkop/section.js:1857
+msgid "User-Agent"
 msgstr ""
 
 #: ../luci-app-podkop-plus/htdocs/luci-static/resources/view/podkop/node.js:180
