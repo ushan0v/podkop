@@ -1563,6 +1563,62 @@ rule_is_enabled() {
     [ "$enabled" -eq 1 ]
 }
 
+_validate_download_lists_via_proxy_section_handler() {
+    local section="$1"
+    local action
+
+    [ "$section" = "$PODKOP_VALIDATE_DOWNLOAD_SECTION" ] || return 0
+
+    PODKOP_VALIDATE_DOWNLOAD_SECTION_FOUND=1
+    if ! rule_is_enabled "$section"; then
+        return 0
+    fi
+
+    PODKOP_VALIDATE_DOWNLOAD_SECTION_ENABLED=1
+    action="$(get_rule_action "$section")"
+    if [ "$action" = "proxy" ] || [ "$action" = "vpn" ]; then
+        PODKOP_VALIDATE_DOWNLOAD_SECTION_OUTBOUND=1
+    fi
+}
+
+validate_download_lists_via_proxy_section() {
+    local download_lists_via_proxy download_lists_via_proxy_section
+
+    config_get_bool download_lists_via_proxy "settings" "download_lists_via_proxy" 0
+    [ "$download_lists_via_proxy" -eq 1 ] || return 0
+
+    config_get download_lists_via_proxy_section "settings" "download_lists_via_proxy_section"
+    if [ -z "$download_lists_via_proxy_section" ]; then
+        log "Download Lists via Proxy/VPN is enabled, but no proxy/VPN rule is selected. Aborted." "fatal"
+        exit 1
+    fi
+
+    PODKOP_VALIDATE_DOWNLOAD_SECTION="$download_lists_via_proxy_section"
+    PODKOP_VALIDATE_DOWNLOAD_SECTION_FOUND=0
+    PODKOP_VALIDATE_DOWNLOAD_SECTION_ENABLED=0
+    PODKOP_VALIDATE_DOWNLOAD_SECTION_OUTBOUND=0
+    config_foreach _validate_download_lists_via_proxy_section_handler "rule"
+
+    if [ "$PODKOP_VALIDATE_DOWNLOAD_SECTION_FOUND" -eq 0 ]; then
+        log "Download Lists via Proxy/VPN references missing rule '$download_lists_via_proxy_section'. Select an enabled proxy/VPN rule or disable the option. Aborted." "fatal"
+        exit 1
+    fi
+
+    if [ "$PODKOP_VALIDATE_DOWNLOAD_SECTION_ENABLED" -eq 0 ]; then
+        log "Download Lists via Proxy/VPN references disabled rule '$download_lists_via_proxy_section'. Select an enabled proxy/VPN rule or disable the option. Aborted." "fatal"
+        exit 1
+    fi
+
+    if [ "$PODKOP_VALIDATE_DOWNLOAD_SECTION_OUTBOUND" -eq 0 ]; then
+        log "Download Lists via Proxy/VPN references rule '$download_lists_via_proxy_section', but it is not a proxy/VPN rule. Select an enabled proxy/VPN rule or disable the option. Aborted." "fatal"
+        exit 1
+    fi
+}
+
+validate_runtime_settings() {
+    validate_download_lists_via_proxy_section
+}
+
 commit_podkop_config() {
     # Podkop updates a small runtime flag in its own UCI config while starting
     # and stopping. Mark these commits so the init trigger can ignore the
@@ -1866,6 +1922,7 @@ start_main() {
     check_requirements
 
     config_foreach process_validate_rule "rule"
+    validate_runtime_settings
 
     br_netfilter_disable
 
@@ -2025,6 +2082,7 @@ reload() {
     config_load "$PODKOP_CONFIG_NAME"
     check_requirements
     config_foreach process_validate_rule "rule"
+    validate_runtime_settings
     ensure_runtime_dirs
 
     if ! podkop_is_running; then
@@ -3540,6 +3598,7 @@ subscription_update_common_locked() {
 
     echolog "Reloading sing-box to apply updated subscriptions..."
     config_load "$PODKOP_CONFIG_NAME"
+    validate_runtime_settings
     sing_box_configure_service
     PODKOP_NFT_POPULATE_ENABLED=0
     sing_box_init_config
