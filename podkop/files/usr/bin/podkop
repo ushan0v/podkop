@@ -2013,6 +2013,8 @@ start() {
     status="$?"
 
     runtime_status_finish_action "start" "$status"
+    [ "$status" -eq 0 ] && podkop_is_stably_running && run_pending_reload_if_requested
+    return "$status"
 }
 
 stop_impl() {
@@ -2266,6 +2268,8 @@ restart() {
     status="$?"
 
     runtime_status_finish_action "restart" "$status"
+    [ "$status" -eq 0 ] && podkop_is_stably_running && run_pending_reload_if_requested
+    return "$status"
 }
 
 package_manager_remove_if_installed() {

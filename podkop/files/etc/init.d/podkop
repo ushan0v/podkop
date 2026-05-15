@@ -142,6 +142,10 @@ runtime_is_running() {
     "$PODKOP_BIN" get_status 2> /dev/null | grep -q '"running":1'
 }
 
+runtime_lifecycle_is_busy() {
+    "$PODKOP_BIN" get_status 2> /dev/null | grep -q '"lifecycle_busy":1'
+}
+
 consume_internal_config_guard() {
     rm -f "$PODKOP_INTERNAL_CONFIG_TRIGGER_GUARD" 2> /dev/null
 }
@@ -236,6 +240,11 @@ reload_service() {
     local reason="$1"
 
     if should_skip_internal_config_reload "$reason"; then
+        return 0
+    fi
+
+    if runtime_lifecycle_is_busy; then
+        mark_pending_reload "${reason:-reload_busy}"
         return 0
     fi
 
