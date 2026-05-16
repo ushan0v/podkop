@@ -266,6 +266,26 @@ is_byedpi_present() {
     pkg_is_installed "byedpi" || [ -x /usr/bin/ciadpi ] || [ -x /etc/init.d/byedpi ]
 }
 
+warn_zapret_unavailable() {
+    reason="$1"
+
+    if [ "$ZAPRET_ALREADY_PRESENT" -eq 1 ]; then
+        warn "$reason Keeping the existing zapret provider."
+    else
+        warn "$reason Continuing without zapret provider."
+    fi
+}
+
+warn_byedpi_unavailable() {
+    reason="$1"
+
+    if [ "$BYEDPI_ALREADY_PRESENT" -eq 1 ]; then
+        warn "$reason Keeping the existing ByeDPI provider."
+    else
+        warn "$reason Continuing without ByeDPI provider."
+    fi
+}
+
 pkg_list_update() {
     if [ "$PKG_IS_APK" -eq 1 ]; then
         apk update </dev/null
@@ -1113,13 +1133,13 @@ resolve_zapret_release() {
 
     ZAPRET_RELEASE_JSON="$(http_get "$url" 2>/dev/null || true)"
     if [ -z "$ZAPRET_RELEASE_JSON" ]; then
-        warn "Failed to query zapret release metadata. Continuing without zapret provider."
+        warn_zapret_unavailable "Failed to query zapret release metadata."
         ZAPRET_SKIPPED_REASON="release metadata unavailable"
         return 0
     fi
 
     if ! printf '%s' "$ZAPRET_RELEASE_JSON" | jq -e . >/dev/null 2>&1; then
-        warn "GitHub returned an invalid zapret release response. Continuing without zapret provider."
+        warn_zapret_unavailable "GitHub returned an invalid zapret release response."
         ZAPRET_SKIPPED_REASON="invalid release metadata"
         clear_zapret_download_state
         return 0
@@ -1128,13 +1148,13 @@ resolve_zapret_release() {
     message="$(printf '%s' "$ZAPRET_RELEASE_JSON" | jq -r '.message // empty')"
     case "$message" in
         *"API rate limit"*|*"rate limit exceeded"*)
-            warn "GitHub API rate limit reached while resolving zapret. Continuing without zapret provider."
+            warn_zapret_unavailable "GitHub API rate limit reached while resolving zapret."
             ZAPRET_SKIPPED_REASON="GitHub API rate limit"
             clear_zapret_download_state
             return 0
             ;;
         "Not Found")
-            warn "No published releases found for remittor/zapret-openwrt. Continuing without zapret provider."
+            warn_zapret_unavailable "No published releases found for remittor/zapret-openwrt."
             ZAPRET_SKIPPED_REASON="release not found"
             clear_zapret_download_state
             return 0
@@ -1143,7 +1163,7 @@ resolve_zapret_release() {
 
     ZAPRET_RELEASE_TAG_RESOLVED="$(printf '%s' "$ZAPRET_RELEASE_JSON" | jq -r '.tag_name // empty')"
     if [ -z "$ZAPRET_RELEASE_TAG_RESOLVED" ]; then
-        warn "Failed to detect the zapret release tag. Continuing without zapret provider."
+        warn_zapret_unavailable "Failed to detect the zapret release tag."
         ZAPRET_SKIPPED_REASON="release tag unavailable"
         clear_zapret_download_state
         return 0
@@ -1160,7 +1180,7 @@ resolve_zapret_release() {
     done
 
     if [ -z "$ZAPRET_BUNDLE_NAME" ]; then
-        warn "No zapret package was found for architecture: $TARGET_ARCH. Tried: $ZAPRET_ARCH_CANDIDATES. Continuing without zapret provider."
+        warn_zapret_unavailable "No zapret package was found for architecture: $TARGET_ARCH. Tried: $ZAPRET_ARCH_CANDIDATES."
         ZAPRET_SKIPPED_REASON="package not found for architecture"
         clear_zapret_download_state
         return 0
@@ -1168,7 +1188,7 @@ resolve_zapret_release() {
 
     ZAPRET_BUNDLE_URL="$(printf '%s' "$ZAPRET_RELEASE_JSON" | jq -r --arg name "$ZAPRET_BUNDLE_NAME" '.assets[] | select(.name == $name) | .browser_download_url' | sed -n '1p')"
     if [ -z "$ZAPRET_BUNDLE_URL" ]; then
-        warn "Failed to resolve the zapret download URL for $ZAPRET_BUNDLE_NAME. Continuing without zapret provider."
+        warn_zapret_unavailable "Failed to resolve the zapret download URL for $ZAPRET_BUNDLE_NAME."
         ZAPRET_SKIPPED_REASON="download URL unavailable"
         clear_zapret_download_state
         return 0
@@ -1197,13 +1217,13 @@ resolve_byedpi_release() {
 
     response="$(http_get "$url" 2>/dev/null || true)"
     if [ -z "$response" ]; then
-        warn "Failed to query ByeDPI release metadata. Continuing without ByeDPI provider."
+        warn_byedpi_unavailable "Failed to query ByeDPI release metadata."
         BYEDPI_SKIPPED_REASON="release metadata unavailable"
         return 0
     fi
 
     if ! printf '%s' "$response" | jq -e . >/dev/null 2>&1; then
-        warn "GitHub returned an invalid ByeDPI release response. Continuing without ByeDPI provider."
+        warn_byedpi_unavailable "GitHub returned an invalid ByeDPI release response."
         BYEDPI_SKIPPED_REASON="invalid release metadata"
         clear_byedpi_download_state
         return 0
@@ -1212,13 +1232,13 @@ resolve_byedpi_release() {
     message="$(printf '%s' "$response" | jq -r '.message // empty')"
     case "$message" in
         *"API rate limit"*|*"rate limit exceeded"*)
-            warn "GitHub API rate limit reached while resolving ByeDPI. Continuing without ByeDPI provider."
+            warn_byedpi_unavailable "GitHub API rate limit reached while resolving ByeDPI."
             BYEDPI_SKIPPED_REASON="GitHub API rate limit"
             clear_byedpi_download_state
             return 0
             ;;
         "Not Found")
-            warn "No published releases found for DPITrickster/ByeDPI-OpenWrt. Continuing without ByeDPI provider."
+            warn_byedpi_unavailable "No published releases found for DPITrickster/ByeDPI-OpenWrt."
             BYEDPI_SKIPPED_REASON="release not found"
             clear_byedpi_download_state
             return 0
@@ -1243,7 +1263,7 @@ resolve_byedpi_release() {
     fi
 
     if [ -z "$tag" ]; then
-        warn "Failed to detect the ByeDPI release tag. Continuing without ByeDPI provider."
+        warn_byedpi_unavailable "Failed to detect the ByeDPI release tag."
         BYEDPI_SKIPPED_REASON="release tag unavailable"
         clear_byedpi_download_state
         return 0
@@ -1268,7 +1288,7 @@ resolve_byedpi_release() {
     done
 
     if [ -z "$BYEDPI_PACKAGE_NAME" ]; then
-        warn "No ByeDPI package was found for architecture: $TARGET_ARCH. Tried: $ZAPRET_ARCH_CANDIDATES. Continuing without ByeDPI provider."
+        warn_byedpi_unavailable "No ByeDPI package was found for architecture: $TARGET_ARCH. Tried: $ZAPRET_ARCH_CANDIDATES."
         BYEDPI_SKIPPED_REASON="package not found for architecture"
         clear_byedpi_download_state
         return 0
@@ -1276,7 +1296,7 @@ resolve_byedpi_release() {
 
     BYEDPI_PACKAGE_URL="$(printf '%s' "$BYEDPI_RELEASE_JSON" | jq -r --arg name "$BYEDPI_PACKAGE_NAME" '.assets[] | select(.name == $name) | .browser_download_url' | sed -n '1p')"
     if [ -z "$BYEDPI_PACKAGE_URL" ]; then
-        warn "Failed to resolve the ByeDPI download URL for $BYEDPI_PACKAGE_NAME. Continuing without ByeDPI provider."
+        warn_byedpi_unavailable "Failed to resolve the ByeDPI download URL for $BYEDPI_PACKAGE_NAME."
         BYEDPI_SKIPPED_REASON="download URL unavailable"
         clear_byedpi_download_state
         return 0
@@ -1286,20 +1306,30 @@ resolve_byedpi_release() {
 }
 
 decide_zapret_installation() {
+    case "$ZAPRET_INSTALL_CHOICE" in
+        0|no|NO|false|FALSE|n|N)
+            if is_zapret_present; then
+                ZAPRET_ALREADY_PRESENT=1
+                ZAPRET_SKIPPED_REASON="provider update disabled by installer option"
+                warn "Detected an existing zapret provider, but zapret update is disabled by installer option."
+            else
+                ZAPRET_SKIPPED_REASON="installation disabled by installer option"
+                warn "Continuing without zapret provider."
+            fi
+            return 0
+            ;;
+    esac
+
     if is_zapret_present; then
         ZAPRET_ALREADY_PRESENT=1
-        msg "Detected an existing zapret provider. Skipping zapret installation."
+        ZAPRET_REQUESTED=1
+        msg "Detected an existing zapret provider. Checking for an updated package."
         return 0
     fi
 
     case "$ZAPRET_INSTALL_CHOICE" in
         1|yes|YES|true|TRUE|y|Y)
             ZAPRET_REQUESTED=1
-            return 0
-            ;;
-        0|no|NO|false|FALSE|n|N)
-            ZAPRET_SKIPPED_REASON="installation disabled by installer option"
-            warn "Continuing without zapret provider."
             return 0
             ;;
     esac
@@ -1320,20 +1350,30 @@ decide_zapret_installation() {
 }
 
 decide_byedpi_installation() {
+    case "$BYEDPI_INSTALL_CHOICE" in
+        0|no|NO|false|FALSE|n|N)
+            if is_byedpi_present; then
+                BYEDPI_ALREADY_PRESENT=1
+                BYEDPI_SKIPPED_REASON="provider update disabled by installer option"
+                warn "Detected an existing ByeDPI provider, but ByeDPI update is disabled by installer option."
+            else
+                BYEDPI_SKIPPED_REASON="installation disabled by installer option"
+                warn "Continuing without ByeDPI provider."
+            fi
+            return 0
+            ;;
+    esac
+
     if is_byedpi_present; then
         BYEDPI_ALREADY_PRESENT=1
-        msg "Detected an existing ByeDPI provider. Skipping ByeDPI installation."
+        BYEDPI_REQUESTED=1
+        msg "Detected an existing ByeDPI provider. Checking for an updated package."
         return 0
     fi
 
     case "$BYEDPI_INSTALL_CHOICE" in
         1|yes|YES|true|TRUE|y|Y)
             BYEDPI_REQUESTED=1
-            return 0
-            ;;
-        0|no|NO|false|FALSE|n|N)
-            BYEDPI_SKIPPED_REASON="installation disabled by installer option"
-            warn "Continuing without ByeDPI provider."
             return 0
             ;;
     esac
@@ -1390,7 +1430,7 @@ download_and_extract_zapret_package() {
 
     bundle_file="$TMP_DIR/$ZAPRET_BUNDLE_NAME"
     if ! download_with_retry "$ZAPRET_BUNDLE_URL" "$bundle_file" "$ZAPRET_BUNDLE_NAME"; then
-        warn "Failed to download $ZAPRET_BUNDLE_NAME. Continuing without zapret provider."
+        warn_zapret_unavailable "Failed to download $ZAPRET_BUNDLE_NAME."
         ZAPRET_SKIPPED_REASON="download failed"
         clear_zapret_download_state
         return 0
@@ -1404,7 +1444,7 @@ download_and_extract_zapret_package() {
     fi
 
     if [ -z "$inner_package_path" ]; then
-        warn "Failed to locate the zapret package inside $ZAPRET_BUNDLE_NAME. Continuing without zapret provider."
+        warn_zapret_unavailable "Failed to locate the zapret package inside $ZAPRET_BUNDLE_NAME."
         ZAPRET_SKIPPED_REASON="package archive layout is unsupported"
         clear_zapret_download_state
         return 0
@@ -1415,14 +1455,14 @@ download_and_extract_zapret_package() {
     ZAPRET_PACKAGE_VERSION="$(extract_package_version "$ZAPRET_PACKAGE_NAME")"
 
     if ! unzip -p "$bundle_file" "$inner_package_path" > "$ZAPRET_PACKAGE_FILE"; then
-        warn "Failed to extract $ZAPRET_PACKAGE_NAME. Continuing without zapret provider."
+        warn_zapret_unavailable "Failed to extract $ZAPRET_PACKAGE_NAME."
         ZAPRET_SKIPPED_REASON="package extraction failed"
         clear_zapret_download_state
         return 0
     fi
 
     if [ ! -s "$ZAPRET_PACKAGE_FILE" ]; then
-        warn "The extracted zapret package is empty. Continuing without zapret provider."
+        warn_zapret_unavailable "The extracted zapret package is empty."
         ZAPRET_SKIPPED_REASON="empty package archive"
         clear_zapret_download_state
         return 0
@@ -1434,14 +1474,14 @@ download_byedpi_package() {
 
     BYEDPI_PACKAGE_FILE="$TMP_DIR/$BYEDPI_PACKAGE_NAME"
     if ! download_with_retry "$BYEDPI_PACKAGE_URL" "$BYEDPI_PACKAGE_FILE" "$BYEDPI_PACKAGE_NAME"; then
-        warn "Failed to download $BYEDPI_PACKAGE_NAME. Continuing without ByeDPI provider."
+        warn_byedpi_unavailable "Failed to download $BYEDPI_PACKAGE_NAME."
         BYEDPI_SKIPPED_REASON="download failed"
         clear_byedpi_download_state
         return 0
     fi
 
     if [ ! -s "$BYEDPI_PACKAGE_FILE" ]; then
-        warn "The downloaded ByeDPI package is empty. Continuing without ByeDPI provider."
+        warn_byedpi_unavailable "The downloaded ByeDPI package is empty."
         BYEDPI_SKIPPED_REASON="empty package"
         clear_byedpi_download_state
         return 0
@@ -1543,13 +1583,13 @@ main() {
 
     decide_zapret_installation
     decide_byedpi_installation
+    decide_sing_box_installation
     decide_i18n_installation
 
     deactivate_original_podkop_if_present
 
     pkg_list_update || fail "Failed to update package lists"
     ensure_bootstrap_tool "jq" "jq"
-    decide_sing_box_installation
 
     if [ "$ZAPRET_REQUESTED" -eq 1 ]; then
         ensure_bootstrap_tool "unzip" "unzip"
