@@ -65,11 +65,33 @@ const subscriptionLinkCache = new Map<
   { canCopyLink: boolean; expiresAt: number }
 >();
 
+async function getSubscriptionOutboundLinkStates(sectionName: string) {
+  const response = await PodkopShellMethods.getOutboundLinkStates(sectionName);
+
+  if (response.success && response.data) {
+    return response.data;
+  }
+
+  return {};
+}
+
 async function getSubscriptionOutboundCopyState(
   sectionName: string,
   outbound: Podkop.Outbound,
+  linkStates?: Podkop.GetOutboundLinkStates,
 ) {
-  if (!outbound.code || !isCopyableProxyOutboundType(outbound.type)) {
+  if (!outbound.code) {
+    return false;
+  }
+
+  if (
+    linkStates &&
+    Object.prototype.hasOwnProperty.call(linkStates, outbound.code)
+  ) {
+    return Boolean(linkStates[outbound.code]);
+  }
+
+  if (!isCopyableProxyOutboundType(outbound.type)) {
     return false;
   }
 
@@ -99,6 +121,7 @@ async function getSubscriptionOutboundCopyState(
 async function markSubscriptionCopyableOutbounds(
   sectionName: string,
   outbounds: Podkop.Outbound[],
+  linkStates?: Podkop.GetOutboundLinkStates,
 ) {
   return Promise.all(
     outbounds.map(async (outbound) => ({
@@ -106,6 +129,7 @@ async function markSubscriptionCopyableOutbounds(
       canCopyLink: await getSubscriptionOutboundCopyState(
         sectionName,
         outbound,
+        linkStates,
       ),
     })),
   );
@@ -357,6 +381,9 @@ export async function getDashboardSections(
           const subscriptionMetadata = await getSubscriptionMetadata(
             section['.name'],
           );
+          const subscriptionLinkStates = includeSubscriptionCopyState
+            ? await getSubscriptionOutboundLinkStates(section['.name'])
+            : {};
 
           const selectorOutbounds = (selector?.value?.all ?? []).flatMap(
             (code) => {
@@ -424,6 +451,7 @@ export async function getDashboardSections(
                   ? await markSubscriptionCopyableOutbounds(
                       section['.name'],
                       fallbackOutbounds,
+                      subscriptionLinkStates,
                     )
                   : fallbackOutbounds),
               ],
@@ -441,6 +469,7 @@ export async function getDashboardSections(
               ? await markSubscriptionCopyableOutbounds(
                   section['.name'],
                   outbounds,
+                  subscriptionLinkStates,
                 )
               : outbounds,
           };

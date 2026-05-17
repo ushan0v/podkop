@@ -734,6 +734,7 @@ var Podkop;
     AvailableMethods2["CHECK_BYEDPI_RUNTIME"] = "check_byedpi_runtime";
     AvailableMethods2["GET_STATUS"] = "get_status";
     AvailableMethods2["GET_OUTBOUND_LINK"] = "get_outbound_link";
+    AvailableMethods2["GET_OUTBOUND_LINK_STATES"] = "get_outbound_link_states";
     AvailableMethods2["GET_SUBSCRIPTION_METADATA"] = "get_subscription_metadata";
     AvailableMethods2["CHECK_SING_BOX"] = "check_sing_box";
     AvailableMethods2["GET_SING_BOX_STATUS"] = "get_sing_box_status";
@@ -782,6 +783,10 @@ var PodkopShellMethods = {
   getOutboundLink: async (section, tag) => callBaseMethod(
     Podkop.AvailableMethods.GET_OUTBOUND_LINK,
     [section, tag]
+  ),
+  getOutboundLinkStates: async (section) => callBaseMethod(
+    Podkop.AvailableMethods.GET_OUTBOUND_LINK_STATES,
+    [section]
   ),
   getSubscriptionMetadata: async (section) => callBaseMethod(
     Podkop.AvailableMethods.GET_SUBSCRIPTION_METADATA,
@@ -885,8 +890,21 @@ function getSectionProxyConfigType(section) {
 }
 var SUBSCRIPTION_LINK_CACHE_TTL_MS = 60 * 1e3;
 var subscriptionLinkCache = /* @__PURE__ */ new Map();
-async function getSubscriptionOutboundCopyState(sectionName, outbound) {
-  if (!outbound.code || !isCopyableProxyOutboundType(outbound.type)) {
+async function getSubscriptionOutboundLinkStates(sectionName) {
+  const response = await PodkopShellMethods.getOutboundLinkStates(sectionName);
+  if (response.success && response.data) {
+    return response.data;
+  }
+  return {};
+}
+async function getSubscriptionOutboundCopyState(sectionName, outbound, linkStates) {
+  if (!outbound.code) {
+    return false;
+  }
+  if (linkStates && Object.prototype.hasOwnProperty.call(linkStates, outbound.code)) {
+    return Boolean(linkStates[outbound.code]);
+  }
+  if (!isCopyableProxyOutboundType(outbound.type)) {
     return false;
   }
   const cacheKey = `${sectionName}:${outbound.code}`;
@@ -906,13 +924,14 @@ async function getSubscriptionOutboundCopyState(sectionName, outbound) {
   });
   return canCopyLink;
 }
-async function markSubscriptionCopyableOutbounds(sectionName, outbounds) {
+async function markSubscriptionCopyableOutbounds(sectionName, outbounds, linkStates) {
   return Promise.all(
     outbounds.map(async (outbound) => ({
       ...outbound,
       canCopyLink: await getSubscriptionOutboundCopyState(
         sectionName,
-        outbound
+        outbound,
+        linkStates
       )
     }))
   );
@@ -1119,6 +1138,7 @@ async function getDashboardSections(options = {}) {
         const subscriptionMetadata = await getSubscriptionMetadata(
           section[".name"]
         );
+        const subscriptionLinkStates = includeSubscriptionCopyState ? await getSubscriptionOutboundLinkStates(section[".name"]) : {};
         const selectorOutbounds = (selector?.value?.all ?? []).flatMap(
           (code) => {
             const item = proxies.find((proxy) => proxy.code === code);
@@ -1173,7 +1193,8 @@ async function getDashboardSections(options = {}) {
               },
               ...includeSubscriptionCopyState ? await markSubscriptionCopyableOutbounds(
                 section[".name"],
-                fallbackOutbounds
+                fallbackOutbounds,
+                subscriptionLinkStates
               ) : fallbackOutbounds
             ]
           };
@@ -1187,7 +1208,8 @@ async function getDashboardSections(options = {}) {
           subscriptionMetadata,
           outbounds: includeSubscriptionCopyState ? await markSubscriptionCopyableOutbounds(
             section[".name"],
-            outbounds
+            outbounds,
+            subscriptionLinkStates
           ) : outbounds
         };
       }

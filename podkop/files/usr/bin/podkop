@@ -6757,6 +6757,13 @@ get_outbound_link() {
     local links_path link
 
     ensure_runtime_dirs
+    case "$section" in
+    "" | */* | *..*)
+        jq -cn '{link: ""}'
+        return 0
+        ;;
+    esac
+
     links_path="$(get_subscription_links_path "$section")"
     link=""
 
@@ -6765,6 +6772,50 @@ get_outbound_link() {
     fi
 
     jq -cn --arg link "$link" '{link: $link}'
+}
+
+get_outbound_link_states() {
+    local section="$1"
+    local links_path
+
+    ensure_runtime_dirs
+    case "$section" in
+    "" | */* | *..*)
+        printf '{}\n'
+        return 0
+        ;;
+    esac
+
+    links_path="$(get_subscription_links_path "$section")"
+    if [ -f "$links_path" ]; then
+        jq -c '
+            if type == "object" then
+                with_entries(
+                    .value = (
+                        ((.value // "") | tostring | ascii_downcase)
+                        | (
+                            startswith("vless://") or
+                            startswith("vmess://") or
+                            startswith("trojan://") or
+                            startswith("ss://") or
+                            startswith("ssr://") or
+                            startswith("hysteria2://") or
+                            startswith("hy2://") or
+                            startswith("tuic://") or
+                            startswith("socks4://") or
+                            startswith("socks4a://") or
+                            startswith("socks5://")
+                        )
+                    )
+                )
+            else
+                {}
+            end
+        ' "$links_path" 2>/dev/null || printf '{}\n'
+        return 0
+    fi
+
+    printf '{}\n'
 }
 
 get_subscription_metadata() {
@@ -7707,6 +7758,9 @@ get_status)
     ;;
 get_outbound_link)
     get_outbound_link "$2" "$3"
+    ;;
+get_outbound_link_states)
+    get_outbound_link_states "$2"
     ;;
 get_subscription_metadata)
     get_subscription_metadata "$2"
