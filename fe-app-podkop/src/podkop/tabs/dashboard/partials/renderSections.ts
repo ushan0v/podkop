@@ -260,7 +260,9 @@ export function renderDefaultState({
     );
   }
 
-  const metadataNode = renderSubscriptionMetadata(section.subscriptionMetadata);
+  const metadataNodes = (section.subscriptionMetadata || [])
+    .map((metadata) => renderSubscriptionMetadata(metadata))
+    .filter(Boolean) as HTMLElement[];
 
   return E('div', { class: 'pdk_dashboard-page__outbound-section' }, [
     // Title with test latency
@@ -287,7 +289,7 @@ export function renderDefaultState({
       'div',
       { class: 'pdk_dashboard-page__outbound-grid' },
       [
-        ...(metadataNode ? [metadataNode] : []),
+        ...metadataNodes,
         ...section.outbounds.map((outbound) => renderOutbound(outbound)),
       ],
     ),

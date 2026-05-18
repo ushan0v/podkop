@@ -7,8 +7,8 @@ msgid ""
 msgstr ""
 "Project-Id-Version: PODKOP PLUS\n"
 "Report-Msgid-Bugs-To: \n"
-"POT-Creation-Date: 2026-05-16 20:43+0300\n"
-"PO-Revision-Date: 2026-05-16 20:43+0300\n"
+"POT-Creation-Date: 2026-05-18 01:56+0300\n"
+"PO-Revision-Date: 2026-05-18 01:56+0300\n"
 "Last-Translator: ushan0v\n"
 "Language-Team: none\n"
 "Language: ru\n"
@@ -22,18 +22,6 @@ msgstr "✔ Работает"
 
 msgid "✘ Stopped"
 msgstr "✘ Остановлен"
-
-msgid "A latency-tested group of proxy URLs for this node"
-msgstr "Группа URL прокси для этого узла с проверкой задержки"
-
-msgid "A latency-tested group of proxy URLs for this section"
-msgstr "Группа URL прокси для этой секции с проверкой задержки"
-
-msgid "A manual group of proxy URLs for this node"
-msgstr "Группа URL прокси для этого узла с ручным выбором"
-
-msgid "A manual group of proxy URLs for this section"
-msgstr "Группа URL прокси для этой секции с ручным выбором"
 
 msgid "Action"
 msgstr "Действие"
@@ -73,6 +61,9 @@ msgstr "Нужно указать хотя бы один корректный IP
 
 msgid "Auto refresh"
 msgstr "Автообновление"
+
+msgid "Auto select by URLTest"
+msgstr "Автовыбор по URLTest"
 
 msgid "Available actions"
 msgstr "Доступные действия"
@@ -167,9 +158,6 @@ msgstr "Проверки не выполнены"
 msgid "Checks passed"
 msgstr "Проверки пройдены"
 
-msgid "Choose how this outbound should be configured"
-msgstr "Выберите, как настроить этот outbound"
-
 msgid "ciadpi command options. Podkop Plus manages the listen address and port."
 msgstr "Параметры команды ciadpi. Адрес и порт прослушивания управляются Podkop Plus."
 
@@ -187,12 +175,6 @@ msgstr "Путь к файлу конфигурации"
 
 msgid "Configuration for Podkop Plus service"
 msgstr "Настройки сервиса Podkop Plus"
-
-msgid "Connection"
-msgstr "Подключение"
-
-msgid "Connection Type"
-msgstr "Тип подключения"
 
 msgid "Connection URL"
 msgstr "URL подключения"
@@ -257,9 +239,6 @@ msgstr "DNS через TLS (DoT)"
 msgid "DNS protocol"
 msgstr "Протокол DNS"
 
-msgid "DNS Protocol"
-msgstr "Протокол DNS"
-
 msgid "DNS Protocol Type"
 msgstr "Тип протокола DNS"
 
@@ -302,14 +281,14 @@ msgstr "Входящий"
 msgid "Download"
 msgstr "Скачать"
 
-msgid "Download external rule sets through one of the enabled proxy/VPN sections"
-msgstr "Скачивать внешние наборы правил через одну из включенных секций proxy/VPN"
+msgid "Download external rule sets through one of the enabled proxy/VPN/JSON outbound sections"
+msgstr "Скачивать внешние наборы правил через одну из включенных секций proxy/VPN/JSON outbound"
 
 msgid "Download Lists via Proxy/VPN"
 msgstr "Скачивать списки через Proxy/VPN"
 
-msgid "Download Lists via specific proxy/VPN section"
-msgstr "Скачивать списки через указанную секцию proxy/VPN"
+msgid "Download Lists via specific proxy/VPN/JSON outbound section"
+msgstr "Скачивать списки через конкретную секцию proxy/VPN/JSON outbound"
 
 msgid "Download Node"
 msgstr "Узел для скачивания"
@@ -328,9 +307,6 @@ msgstr "Изменить"
 
 msgid "Enable"
 msgstr "Включить"
-
-msgid "Enable a dedicated DNS resolver when this node uses an interface"
-msgstr "Включить отдельный DNS-резолвер, когда этот узел использует интерфейс"
 
 msgid "Enable autostart"
 msgstr "Включить автостарт"
@@ -355,18 +331,6 @@ msgstr "Введите полный объект outbound sing-box"
 
 msgid "Enter the subscription URL"
 msgstr "Введите URL подписки"
-
-msgid "Every 3 minutes"
-msgstr "Каждые 3 минуты"
-
-msgid "Every 30 seconds"
-msgstr "Каждые 30 секунд"
-
-msgid "Every 5 minutes"
-msgstr "Каждые 5 минут"
-
-msgid "Every minute"
-msgstr "Каждую минуту"
 
 msgid "Exact full domain"
 msgstr "Точный полный домен"
@@ -410,23 +374,11 @@ msgstr "Получить глобальную проверку"
 msgid "Global check"
 msgstr "Глобальная проверка"
 
-msgid "Group subscription proxies by country"
-msgstr "Группировать прокси подписки по странам"
-
-msgid "Group subscription proxies by the country flag at the beginning of the outbound tag"
-msgstr "Группирует прокси подписки по флагу страны в начале тега outbound"
-
 msgid "How often this remote rule set should be refreshed"
 msgstr "Как часто обновлять этот удалённый набор правил"
 
-msgid "How to configure the proxy connection for this section"
-msgstr "Как настроить прокси-подключение для этой секции"
-
 msgid "HTTP error"
 msgstr "Ошибка HTTP"
-
-msgid "Interface"
-msgstr "Интерфейс"
 
 msgid "Interface Monitoring"
 msgstr "Мониторинг интерфейса"
@@ -581,6 +533,9 @@ msgstr "IP-адреса"
 msgid "Issues detected"
 msgstr "Обнаружены проблемы"
 
+msgid "JSON outbound"
+msgstr "JSON outbound"
+
 msgid "Keyword must not contain spaces"
 msgstr "Ключевое слово не должно содержать пробелы"
 
@@ -662,9 +617,6 @@ msgstr "Нет правил, использующих ByeDPI"
 msgid "No rules use Zapret"
 msgstr "Нет правил, использующих Zapret"
 
-msgid "Node Type"
-msgstr "Тип узла"
-
 msgid "Not implement yet"
 msgstr "Ещё не реализовано"
 
@@ -683,9 +635,6 @@ msgstr "Время ожидания истекло"
 msgid "Option \"%s\" contains an invalid input value."
 msgstr "Параметр \"%s\" содержит некорректное значение."
 
-msgid "Optional HTTP User-Agent for downloading the subscription."
-msgstr "Опциональный HTTP User-Agent для загрузки подписки."
-
 msgid "Optional node used to download this remote rule set"
 msgstr "Необязательный узел, через который скачивается этот удалённый набор правил"
 
@@ -694,6 +643,9 @@ msgstr "Необязательное значение здесь нужно пе
 
 msgid "Outbound JSON"
 msgstr "JSON outbound"
+
+msgid "Outbound JSON cannot be empty"
+msgstr "JSON outbound не может быть пустым"
 
 msgid "Outdated"
 msgstr "Устаревшая"
@@ -764,9 +716,6 @@ msgstr "Порт не может быть пустым"
 msgid "Port for the local mixed proxy of this section"
 msgstr "Порт локального смешанного прокси для этой секции"
 
-msgid "Proxy Configuration URL"
-msgstr "URL конфигурации прокси"
-
 msgid "Proxy link is unavailable"
 msgstr "Ссылка прокси недоступна"
 
@@ -793,9 +742,6 @@ msgstr "Разрешать доменные имена перед маршрут
 
 msgid "Resolve real IP for routing"
 msgstr "Разрешать реальный IP для маршрутизации"
-
-msgid "Resolver For Interface Outbound"
-msgstr "Резолвер для outbound через интерфейс"
 
 msgid "Resource selection by hostname inside nfqws is not supported here; sing-box selects resources before NFQUEUE."
 msgstr "Выбор ресурсов по hostname внутри nfqws здесь не поддерживается; ресурсы выбирает sing-box до NFQUEUE."
@@ -890,12 +836,6 @@ msgstr "Выберите сетевой интерфейс, на который 
 msgid "Select the WAN interfaces to be monitored"
 msgstr "Выберите WAN интерфейсы для мониторинга"
 
-msgid "Selector connections"
-msgstr "Подключения selector"
-
-msgid "Selector Links"
-msgstr "Ссылки selector"
-
 msgid "Service list"
 msgstr "Список сервисов"
 
@@ -974,8 +914,8 @@ msgstr "Запустить Podkop Plus"
 msgid "Stop Podkop Plus"
 msgstr "Остановить Podkop Plus"
 
-msgid "Subscription"
-msgstr "Подписка"
+msgid "Subscription auto updates"
+msgstr "Автообновление подписок"
 
 msgid "Subscription info:"
 msgstr "Информация о подписке:"
@@ -1109,41 +1049,23 @@ msgstr "URL должен начинаться с vless://, ss://, trojan://, soc
 msgid "URL must use one of the following protocols:"
 msgstr "URL должен использовать один из следующих протоколов:"
 
-msgid "URLTest connections"
-msgstr "Подключения URLTest"
-
 msgid "URLTest interval"
 msgstr "Интервал URLTest"
-
-msgid "URLTest Interval"
-msgstr "Интервал URLTest"
-
-msgid "URLTest Links"
-msgstr "Ссылки URLTest"
 
 msgid "URLTest tolerance"
 msgstr "Допуск URLTest"
 
-msgid "URLTest Tolerance"
-msgstr "URLTest допустимое отклонение"
-
 msgid "URLTest URL"
 msgstr "URL URLTest"
 
-msgid "Use a network interface as the outbound for this node"
-msgstr "Использовать сетевой интерфейс как outbound для этого узла"
+msgid "Use format: URL | User-Agent"
+msgstr "Используйте формат: URL | User-Agent"
 
 msgid "Use sing-box duration format like 1d, 12h or 30m"
 msgstr "Используйте формат длительности sing-box, например 1d, 12h или 30m"
 
 msgid "Use sing-box duration format. Leave empty to disable automatic updates."
 msgstr "Используйте формат длительности sing-box. Оставьте поле пустым, чтобы отключить автоматическое обновление."
-
-msgid "Use sing-box duration format. Leave empty to disable periodic URLTest checks."
-msgstr "Используйте формат длительности sing-box. Оставьте поле пустым, чтобы отключить периодические проверки URLTest."
-
-msgid "User-Agent"
-msgstr "User-Agent"
 
 msgid "Valid"
 msgstr "Валидно"

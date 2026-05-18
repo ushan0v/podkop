@@ -325,11 +325,26 @@ function getRuleResolvedAction(section_id) {
       section_id,
       "proxy_config_type",
     );
-    if (`${action}` === "proxy" && proxyConfigType === "interface") {
-      return "vpn";
+    if (`${action}` === "proxy") {
+      if (proxyConfigType === "interface") {
+        return "vpn";
+      }
+
+      if (proxyConfigType === "outbound") {
+        return "outbound";
+      }
     }
 
     return `${action}`;
+  }
+
+  const proxyConfigType = uci.get(UCI_PACKAGE, section_id, "proxy_config_type");
+  if (proxyConfigType === "interface") {
+    return "vpn";
+  }
+
+  if (proxyConfigType === "outbound") {
+    return "outbound";
   }
 
   const connectionType = uci.get(UCI_PACKAGE, section_id, "connection_type");
@@ -359,6 +374,8 @@ function getActionOptionLabel(action) {
       return "Zapret";
     case "byedpi":
       return "ByeDPI";
+    case "outbound":
+      return _("JSON outbound");
     case "proxy":
     default:
       return "Proxy";
@@ -397,6 +414,7 @@ function populateActionOptionValues(option) {
   if (isByedpiInstalledForUi()) {
     option.value("byedpi", getActionOptionLabel("byedpi"));
   }
+  option.value("outbound", getActionOptionLabel("outbound"));
 }
 
 function setFlagOptionWidgetValue(section_id, optionName, enabled) {
@@ -686,6 +704,69 @@ function validateOptionalSingBoxDuration(value) {
   }
 
   return _("Use sing-box duration format like 1d, 12h or 30m");
+}
+
+function validateRequiredSingBoxDuration(value) {
+  const normalized = value ? `${value}`.trim() : "";
+
+  if (!normalized.length) {
+    return _("Use sing-box duration format like 1d, 12h or 30m");
+  }
+
+  if (isSingBoxDuration(normalized)) {
+    return true;
+  }
+
+  return _("Use sing-box duration format like 1d, 12h or 30m");
+}
+
+function parseSubscriptionUrlEntry(value) {
+  const normalized = value ? `${value}`.trim() : "";
+  const delimiter = " | ";
+  const delimiterIndex = normalized.lastIndexOf(delimiter);
+
+  if (!normalized.length) {
+    return { valid: true, url: "", userAgent: "" };
+  }
+
+  if (delimiterIndex >= 0) {
+    const url = normalized.slice(0, delimiterIndex).trim();
+    const userAgent = normalized
+      .slice(delimiterIndex + delimiter.length)
+      .trim();
+
+    if (!url || !userAgent) {
+      return {
+        valid: false,
+        message: _("Use format: URL | User-Agent"),
+      };
+    }
+
+    return { valid: true, url, userAgent };
+  }
+
+  if (/\s\||\|\s/.test(normalized)) {
+    return {
+      valid: false,
+      message: _("Use format: URL | User-Agent"),
+    };
+  }
+
+  return { valid: true, url: normalized, userAgent: "" };
+}
+
+function validateSubscriptionUrlEntry(_section_id, value) {
+  if (!value || value.length === 0) {
+    return true;
+  }
+
+  const parsed = parseSubscriptionUrlEntry(value);
+  if (!parsed.valid) {
+    return parsed.message;
+  }
+
+  const validation = main.validateUrl(parsed.url);
+  return validation.valid ? true : validation.message;
 }
 
 function parseRequiredValueOnSave(section_id) {
@@ -2054,9 +2135,9 @@ function validateByedpiStrategyToken(token, nextToken) {
         ? { valid: true, consumeNext: false }
         : {
             valid: false,
-            reason: _("ByeDPI option does not accept a compact value: %s").format(
-              short,
-            ),
+            reason: _(
+              "ByeDPI option does not accept a compact value: %s",
+            ).format(short),
             captureNextValue: false,
           };
     }
@@ -2503,7 +2584,9 @@ function createSectionContent(section) {
     form.TextValue,
     "byedpi_cmd_opts",
     _("ByeDPI Strategy"),
-    _("ciadpi command options. Podkop Plus manages the listen address and port."),
+    _(
+      "ciadpi command options. Podkop Plus manages the listen address and port.",
+    ),
   );
   o.depends("action", "byedpi");
   o.rows = 5;
@@ -2541,32 +2624,12 @@ function createSectionContent(section) {
 
   o = section.taboption(
     "settings",
-    form.ListValue,
-    "proxy_config_type",
-    _("Connection Type"),
-    _("How to configure the proxy connection for this section"),
-  );
-  o.value("url", _("Connection URL"));
-  o.value("selector", "Selector");
-  o.value("urltest", "URLTest");
-  o.value("subscription", _("Subscription"));
-  o.value("outbound", _("Outbound JSON"));
-  o.default = "url";
-  o.rmempty = false;
-  o.depends("action", "proxy");
-  o.modalonly = true;
-
-  o = section.taboption(
-    "settings",
-    form.TextValue,
-    "proxy_string",
-    _("Connection"),
+    form.DynamicList,
+    "selector_proxy_links",
+    _("Connection URL"),
     _("vless://, ss://, trojan://, socks4/5://, hy2/hysteria2:// links"),
   );
-  o.depends({ action: "proxy", proxy_config_type: "url" });
-  o.rows = 5;
-  o.wrap = "soft";
-  o.textarea = true;
+  o.depends("action", "proxy");
   o.modalonly = true;
   o.validate = function (_section_id, value) {
     if (!value || value.length === 0) {
@@ -2576,7 +2639,60 @@ function createSectionContent(section) {
     const validation = main.validateProxyUrl(value);
     return validation.valid ? true : validation.message;
   };
-  configureTextareaOption(o);
+
+  o = section.taboption(
+    "settings",
+    form.DynamicList,
+    "subscription_urls",
+    _("Subscription URL"),
+    _("Enter the subscription URL"),
+  );
+  o.depends("action", "proxy");
+  o.rmempty = true;
+  o.modalonly = true;
+  o.validate = validateSubscriptionUrlEntry;
+
+  o = section.taboption(
+    "settings",
+    form.Flag,
+    "subscription_update_enabled",
+    _("Subscription auto updates"),
+  );
+  o.default = "1";
+  o.rmempty = false;
+  o.depends({ action: "proxy", subscription_urls: /.+/ });
+  o.modalonly = true;
+
+  o = section.taboption(
+    "settings",
+    form.Value,
+    "subscription_update_interval",
+    _("Subscription update interval"),
+    _("Use sing-box duration format like 1d, 12h or 30m"),
+  );
+  o.default = "1h";
+  o.placeholder = "1h";
+  o.rmempty = false;
+  o.depends({
+    action: "proxy",
+    subscription_urls: /.+/,
+    subscription_update_enabled: "1",
+  });
+  o.modalonly = true;
+  o.validate = function (_section_id, value) {
+    return validateRequiredSingBoxDuration(value);
+  };
+
+  o = section.taboption(
+    "settings",
+    form.Flag,
+    "urltest_enabled",
+    _("Auto select by URLTest"),
+  );
+  o.default = "0";
+  o.rmempty = false;
+  o.depends("action", "proxy");
+  o.modalonly = true;
 
   o = section.taboption(
     "settings",
@@ -2585,14 +2701,14 @@ function createSectionContent(section) {
     _("Outbound JSON"),
     _("Enter a complete sing-box outbound object"),
   );
-  o.depends({ action: "proxy", proxy_config_type: "outbound" });
+  o.depends("action", "outbound");
   o.rows = 10;
   o.wrap = "soft";
   o.textarea = true;
   o.modalonly = true;
   o.validate = function (_section_id, value) {
     if (!value || value.length === 0) {
-      return true;
+      return _("Outbound JSON cannot be empty");
     }
 
     const validation = main.validateOutboundJson(value);
@@ -2603,154 +2719,17 @@ function createSectionContent(section) {
   o = section.taboption(
     "settings",
     form.Value,
-    "subscription_url",
-    _("Subscription URL"),
-    _("Enter the subscription URL"),
-  );
-  o.depends({ action: "proxy", proxy_config_type: "subscription" });
-  o.rmempty = true;
-  o.modalonly = true;
-  o.parse = parseRequiredValueOnSave;
-  o.validate = function (_section_id, value) {
-    if (!value || value.length === 0) {
-      return true;
-    }
-
-    const validation = main.validateUrl(value.trim());
-    return validation.valid ? true : validation.message;
-  };
-
-  o = section.taboption(
-    "settings",
-    form.Value,
-    "subscription_user_agent",
-    _("User-Agent"),
-    _("Optional HTTP User-Agent for downloading the subscription."),
-  );
-  o.depends({ action: "proxy", proxy_config_type: "subscription" });
-  o.default = "";
-  o.rmempty = true;
-  o.modalonly = true;
-
-  o = section.taboption(
-    "settings",
-    form.Value,
-    "subscription_update_interval",
-    _("Subscription update interval"),
-    _(
-      "Use sing-box duration format. Leave empty to disable automatic updates.",
-    ),
-  );
-  o.default = "1h";
-  o.placeholder = "1h";
-  o.rmempty = true;
-  o.forcewrite = true;
-  o.retain = true;
-  o.depends({ action: "proxy", proxy_config_type: "subscription" });
-  o.modalonly = true;
-  o.cfgvalue = function (section_id) {
-    return readDurationOptionWithDefault(
-      section_id,
-      "subscription_update_interval",
-      "1h",
-    );
-  };
-  o.write = function (section_id, value) {
-    writeOptionalDurationOption(
-      section_id,
-      "subscription_update_interval",
-      value,
-    );
-  };
-  o.remove = function (section_id) {
-    removeOptionalDurationOption(section_id, "subscription_update_interval");
-  };
-  o.validate = function (_section_id, value) {
-    return validateOptionalSingBoxDuration(value);
-  };
-
-  o = section.taboption(
-    "settings",
-    form.Flag,
-    "subscription_group_by_countries",
-    _("Group subscription proxies by country"),
-    _(
-      "Group subscription proxies by the country flag at the beginning of the outbound tag",
-    ),
-  );
-  o.default = "0";
-  o.rmempty = false;
-  o.depends({ action: "proxy", proxy_config_type: "subscription" });
-  o.modalonly = true;
-
-  o = section.taboption(
-    "settings",
-    form.DynamicList,
-    "selector_proxy_links",
-    _("Selector connections"),
-    _("A manual group of proxy URLs for this section"),
-  );
-  o.depends({ action: "proxy", proxy_config_type: "selector" });
-  o.modalonly = true;
-  o.validate = function (_section_id, value) {
-    if (!value || value.length === 0) {
-      return true;
-    }
-
-    const validation = main.validateProxyUrl(value);
-    return validation.valid ? true : validation.message;
-  };
-
-  o = section.taboption(
-    "settings",
-    form.DynamicList,
-    "urltest_proxy_links",
-    _("URLTest connections"),
-    _("A latency-tested group of proxy URLs for this section"),
-  );
-  o.depends({ action: "proxy", proxy_config_type: "urltest" });
-  o.modalonly = true;
-  o.validate = function (_section_id, value) {
-    if (!value || value.length === 0) {
-      return true;
-    }
-
-    const validation = main.validateProxyUrl(value);
-    return validation.valid ? true : validation.message;
-  };
-
-  o = section.taboption(
-    "settings",
-    form.Value,
     "urltest_check_interval",
     _("URLTest interval"),
-    _(
-      "Use sing-box duration format. Leave empty to disable periodic URLTest checks.",
-    ),
+    _("Use sing-box duration format like 1d, 12h or 30m"),
   );
   o.default = "3m";
   o.placeholder = "3m";
-  o.rmempty = true;
-  o.forcewrite = true;
-  o.retain = true;
-  o.depends({ action: "proxy", proxy_config_type: "urltest" });
-  o.depends({ action: "proxy", proxy_config_type: "subscription" });
+  o.rmempty = false;
+  o.depends({ action: "proxy", urltest_enabled: "1" });
   o.modalonly = true;
-  o.cfgvalue = function (section_id) {
-    return readDurationOptionWithDefault(
-      section_id,
-      "urltest_check_interval",
-      "3m",
-    );
-  };
-  o.write = function (section_id, value) {
-    writeOptionalDurationOption(section_id, "urltest_check_interval", value);
-  };
-  o.remove = function (section_id) {
-    removeOptionalDurationOption(section_id, "urltest_check_interval");
-  };
   o.validate = function (_section_id, value) {
-    return validateOptionalSingBoxDuration(value);
+    return validateRequiredSingBoxDuration(value);
   };
 
   o = section.taboption(
@@ -2762,8 +2741,7 @@ function createSectionContent(section) {
   );
   o.default = "50";
   o.rmempty = false;
-  o.depends({ action: "proxy", proxy_config_type: "urltest" });
-  o.depends({ action: "proxy", proxy_config_type: "subscription" });
+  o.depends({ action: "proxy", urltest_enabled: "1" });
   o.modalonly = true;
   o.validate = function (_section_id, value) {
     if (!value || value.length === 0) {
@@ -2805,8 +2783,7 @@ function createSectionContent(section) {
   );
   o.default = "https://www.gstatic.com/generate_204";
   o.rmempty = false;
-  o.depends({ action: "proxy", proxy_config_type: "urltest" });
-  o.depends({ action: "proxy", proxy_config_type: "subscription" });
+  o.depends({ action: "proxy", urltest_enabled: "1" });
   o.modalonly = true;
   o.validate = function (_section_id, value) {
     if (!value || value.length === 0) {
@@ -2929,6 +2906,7 @@ function createSectionContent(section) {
   o.default = "0";
   o.rmempty = false;
   o.depends("action", "proxy");
+  o.depends("action", "outbound");
   o.depends("action", "vpn");
   o.depends("action", "byedpi");
   o.modalonly = true;
@@ -2942,6 +2920,7 @@ function createSectionContent(section) {
   );
   o.rmempty = false;
   o.depends({ action: "proxy", mixed_proxy_enabled: "1" });
+  o.depends({ action: "outbound", mixed_proxy_enabled: "1" });
   o.depends({ action: "vpn", mixed_proxy_enabled: "1" });
   o.depends({ action: "byedpi", mixed_proxy_enabled: "1" });
   o.modalonly = true;
@@ -2963,16 +2942,23 @@ function createSectionContent(section) {
     form.Flag,
     "resolve_real_ip_for_routing",
     _("Resolve real IP for routing"),
-    _("Resolve domain names before routing so sing-box can use real destination IPs."),
+    _(
+      "Resolve domain names before routing so sing-box can use real destination IPs.",
+    ),
   );
   o.default = "0";
   o.rmempty = false;
   o.depends("action", "proxy");
+  o.depends("action", "outbound");
   o.depends("action", "vpn");
   o.depends("action", "byedpi");
   o.modalonly = true;
   o.cfgvalue = function (section_id) {
-    const value = uci.get(UCI_PACKAGE, section_id, "resolve_real_ip_for_routing");
+    const value = uci.get(
+      UCI_PACKAGE,
+      section_id,
+      "resolve_real_ip_for_routing",
+    );
     if (value !== null && value !== undefined && value !== "") {
       return value;
     }

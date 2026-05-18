@@ -100,7 +100,7 @@ export namespace Podkop {
     sectionName: string;
     displayName: string;
     proxyConfigType?: ProxyConfigType;
-    subscriptionMetadata?: SubscriptionMetadata;
+    subscriptionMetadata?: SubscriptionMetadata[];
     outbounds: Outbound[];
   }
 
@@ -128,6 +128,7 @@ export namespace Podkop {
 
   export type RuleAction =
     | 'proxy'
+    | 'outbound'
     | 'vpn'
     | 'direct'
     | 'block'
@@ -160,12 +161,14 @@ export namespace Podkop {
     byedpi_cmd_opts?: string;
     cmd_opts?: string;
     selector_proxy_links?: string[];
+    subscription_urls?: string[];
     urltest_proxy_links?: string[];
     subscription_url?: string;
     subscription_user_agent?: string;
+    subscription_update_enabled?: '0' | '1';
     subscription_update_interval?: string;
     subscription_update_interval_disabled?: '0' | '1';
-    subscription_group_by_countries?: '0' | '1';
+    urltest_enabled?: '0' | '1';
     urltest_check_interval_disabled?: '0' | '1';
     outbound_json?: string;
     interface?: string;

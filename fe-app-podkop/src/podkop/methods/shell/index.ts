@@ -35,7 +35,7 @@ export const PodkopShellMethods = {
       [section],
     ),
   getSubscriptionMetadata: async (section: string) =>
-    callBaseMethod<Podkop.SubscriptionMetadata>(
+    callBaseMethod<Podkop.SubscriptionMetadata | Podkop.SubscriptionMetadata[]>(
       Podkop.AvailableMethods.GET_SUBSCRIPTION_METADATA,
       [section],
     ),
