@@ -88,6 +88,7 @@ BYEDPI_PACKAGE_FILE=""
 BYEDPI_PACKAGE_VERSION=""
 
 OPTIONAL_INSTALLED_VERSION=""
+INSTALLER_LANG="en"
 
 command -v apk >/dev/null 2>&1 && PKG_IS_APK=1
 
@@ -546,17 +547,70 @@ confirm_prompt() {
         return 0
     fi
 
-    printf '%s [y/N]: ' "$prompt_text"
-    read -r answer || return 1
+    while :; do
+        printf '%s [y/N]: ' "$prompt_text"
+        read -r answer || return 1
 
-    case "$answer" in
-        y|Y|yes|YES|Yes)
-            return 0
+        case "$answer" in
+            y|Y)
+                return 0
+                ;;
+            n|N|"")
+                return 1
+                ;;
+            *)
+                warn "Please answer y or n."
+                ;;
+        esac
+    done
+}
+
+localized_prompt() {
+    prompt_id="$1"
+
+    case "${INSTALLER_LANG:-en}:$prompt_id" in
+        ru:remove_dns_proxy)
+            printf '%s' "Удалить конфликтующий пакет https-dns-proxy и продолжить?"
             ;;
-        *)
-            return 1
+        *:remove_dns_proxy)
+            printf '%s' "Remove the conflicting https-dns-proxy package and continue?"
+            ;;
+        ru:install_awg)
+            printf '%s' "Установить службу AmneziaWG?"
+            ;;
+        *:install_awg)
+            printf '%s' "Install the AmneziaWG service?"
+            ;;
+        ru:install_zapret)
+            printf '%s' "Установить службу Zapret?"
+            ;;
+        *:install_zapret)
+            printf '%s' "Install the Zapret service?"
+            ;;
+        ru:install_byedpi)
+            printf '%s' "Установить службу ByeDPI?"
+            ;;
+        *:install_byedpi)
+            printf '%s' "Install the ByeDPI service?"
+            ;;
+        ru:install_sing_box_extended)
+            printf '%s' "Установить неофициальный sing-box-extended для поддержки XHTTP вместо обычного стабильного sing-box?"
+            ;;
+        *:install_sing_box_extended)
+            printf '%s' "Install unofficial sing-box-extended for XHTTP support instead of the regular stable sing-box?"
+            ;;
+        ru:replace_sing_box_extended)
+            printf '%s' "Заменить установленный sing-box-extended на обычный стабильный sing-box?"
+            ;;
+        *:replace_sing_box_extended)
+            printf '%s' "Replace the installed sing-box-extended with the regular stable sing-box?"
             ;;
     esac
+}
+
+get_luci_main_lang() {
+    command_exists uci || return 0
+    uci -q get luci.main.lang 2>/dev/null || true
 }
 
 sanitize_semver() {
@@ -748,54 +802,13 @@ resolve_podkop_plus_release() {
     fi
 }
 
-is_original_podkop_present() {
-    pkg_is_installed "podkop" ||
-        pkg_is_installed "luci-app-podkop" ||
-        [ -x /etc/init.d/podkop ] ||
-        [ -x /usr/bin/podkop ] ||
-        [ -d /usr/lib/podkop ] ||
-        [ -f /usr/share/luci/menu.d/luci-app-podkop.json ] ||
-        [ -f /usr/share/rpcd/acl.d/luci-app-podkop.json ]
-}
-
-migrate_podkop_plus_config_if_needed() {
-    [ -f /etc/config/podkop-plus ] && return 0
-
-    if [ -f /etc/config/podkop_plus ]; then
-        cp /etc/config/podkop_plus /etc/config/podkop-plus || fail "Failed to migrate the Podkop Plus config to /etc/config/podkop-plus"
-        chmod 0644 /etc/config/podkop-plus || true
-        msg "Migrated the Podkop Plus config to /etc/config/podkop-plus"
-        return 0
-    fi
-
-    [ -f /etc/config/podkop ] || return 0
-
-    if ! pkg_is_installed "luci-app-podkop-plus" &&
-        [ ! -x /etc/init.d/podkop-plus ] &&
-        [ ! -x /usr/bin/podkop-plus ] &&
-        [ ! -d /usr/lib/podkop-plus ]; then
-        return 0
-    fi
-
-    if is_original_podkop_present; then
-        warn "Detected the original Podkop installation together with a shared legacy config at /etc/config/podkop."
-        warn "Podkop Plus will not import this shared config automatically. The new version will use /etc/config/podkop-plus."
-        return 0
-    fi
-
-    cp /etc/config/podkop /etc/config/podkop-plus || fail "Failed to migrate the Podkop Plus config to /etc/config/podkop-plus"
-    chmod 0644 /etc/config/podkop-plus || true
-
-    msg "Migrated the Podkop Plus config to /etc/config/podkop-plus"
-}
-
 remove_conflicting_dns_proxy() {
     if ! pkg_is_installed "https-dns-proxy"; then
         return 0
     fi
 
     warn "Detected conflicting package: https-dns-proxy"
-    confirm_prompt "Remove https-dns-proxy and continue?" || fail "Please remove https-dns-proxy manually and run the installer again"
+    confirm_prompt "$(localized_prompt remove_dns_proxy)" || fail "Please remove https-dns-proxy manually and run the installer again"
 
     pkg_remove_if_installed "luci-app-https-dns-proxy"
     pkg_remove_if_installed "https-dns-proxy"
@@ -889,7 +902,7 @@ decide_sing_box_installation() {
             return 0
         fi
 
-        if confirm_prompt "Replace sing-box-extended with the regular stable sing-box package?"; then
+        if confirm_prompt "$(localized_prompt replace_sing_box_extended)"; then
             SING_BOX_ACTION="install_stock"
         else
             SING_BOX_ACTION="preserve_extended"
@@ -906,7 +919,7 @@ decide_sing_box_installation() {
             return 0
         fi
 
-        if confirm_prompt "Install sing-box-extended for XHTTP support instead of the regular sing-box binary?"; then
+        if confirm_prompt "$(localized_prompt install_sing_box_extended)"; then
             SING_BOX_ACTION="install_extended"
         fi
         return 0
@@ -920,7 +933,7 @@ decide_sing_box_installation() {
         return 0
     fi
 
-    if confirm_prompt "Install sing-box-extended for XHTTP support instead of the regular sing-box binary?"; then
+    if confirm_prompt "$(localized_prompt install_sing_box_extended)"; then
         SING_BOX_ACTION="install_extended"
     else
         SING_BOX_ACTION="keep"
@@ -1852,7 +1865,7 @@ decide_zapret_installation() {
         return 0
     fi
 
-    if confirm_prompt "Install optional zapret external provider for action=zapret?"; then
+    if confirm_prompt "$(localized_prompt install_zapret)"; then
         ZAPRET_REQUESTED=1
         return 0
     fi
@@ -1896,7 +1909,7 @@ decide_byedpi_installation() {
         return 0
     fi
 
-    if confirm_prompt "Install optional ByeDPI provider for action=byedpi?"; then
+    if confirm_prompt "$(localized_prompt install_byedpi)"; then
         BYEDPI_REQUESTED=1
         return 0
     fi
@@ -1944,7 +1957,7 @@ decide_awg_installation() {
         return 0
     fi
 
-    if confirm_prompt "Install optional AmneziaWG OpenWrt packages for action=vpn interfaces?"; then
+    if confirm_prompt "$(localized_prompt install_awg)"; then
         AWG_REQUESTED=1
         return 0
     fi
@@ -1954,17 +1967,26 @@ decide_awg_installation() {
 }
 
 decide_i18n_installation() {
-    if pkg_is_installed "luci-i18n-podkop-plus-ru"; then
-        PODKOP_PLUS_I18N_REQUESTED=1
-        msg "Detected the installed Russian interface language package. It will be reinstalled."
-        return 0
-    fi
+    luci_lang="$(get_luci_main_lang)"
+
+    case "$luci_lang" in
+        ru|ru_*|ru-*)
+            INSTALLER_LANG="ru"
+            PODKOP_PLUS_I18N_REQUESTED=1
+            msg "Выбран русский язык LuCI. Пакет русского интерфейса будет установлен."
+            return 0
+            ;;
+    esac
+
+    INSTALLER_LANG="en"
 
     if confirm_prompt "Установить русский язык интерфейса? (Install the Russian interface language package?)"; then
+        INSTALLER_LANG="ru"
         PODKOP_PLUS_I18N_REQUESTED=1
         return 0
     fi
 
+    INSTALLER_LANG="en"
     warn "Continuing without the Russian interface language package."
 }
 
@@ -2200,11 +2222,11 @@ main() {
     sync_time
     check_system
 
+    decide_i18n_installation
     decide_zapret_installation
     decide_byedpi_installation
     decide_awg_installation
     decide_sing_box_installation
-    decide_i18n_installation
 
     deactivate_original_podkop_if_present
 
@@ -2216,7 +2238,6 @@ main() {
     fi
 
     resolve_podkop_plus_release
-    migrate_podkop_plus_config_if_needed
     remove_conflicting_dns_proxy
     remove_old_sing_box_if_needed
 
