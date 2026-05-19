@@ -33,6 +33,7 @@ declare global {
 
   const uci: {
     load: (packages: string | string[]) => Promise<string>;
+    unload?: (packages: string | string[]) => void;
     sections: (conf: string, type?: string, cb?: () => void) => Promise<T>;
   };
 

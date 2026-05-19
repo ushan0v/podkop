@@ -13,6 +13,7 @@ export const styles = `
 .pdk_dashboard-page {
     width: 100%;
     --dashboard-grid-columns: 4;
+    --dashboard-grid-min-width: 180px;
 }
 
 @media (max-width: 900px) {
@@ -21,10 +22,17 @@ export const styles = `
     }
 }
 
+@media (max-width: 560px) {
+    .pdk_dashboard-page {
+        --dashboard-grid-columns: 1;
+        --dashboard-grid-min-width: 0;
+    }
+}
+
 .pdk_dashboard-page__widgets-section {
     margin-top: 10px;
     display: grid;
-    grid-template-columns: repeat(var(--dashboard-grid-columns), 1fr);
+    grid-template-columns: repeat(var(--dashboard-grid-columns), minmax(var(--dashboard-grid-min-width), 1fr));
     grid-gap: 10px;
 }
 
@@ -32,6 +40,7 @@ export const styles = `
     border: 2px var(--background-color-low, lightgray) solid;
     border-radius: 4px;
     padding: 10px;
+    min-width: 0;
 }
 
 .pdk_dashboard-page__widgets-section__item__title {}
@@ -61,11 +70,15 @@ export const styles = `
     display: flex;
     align-items: center;
     justify-content: space-between;
+    gap: 8px 10px;
+    min-width: 0;
 }
 
 .pdk_dashboard-page__outbound-section__title-section__title {
     color: var(--text-color-high);
     font-weight: 700;
+    min-width: 0;
+    overflow-wrap: anywhere;
 }
 
 .pdk_dashboard-page__outbound-section__title-section__actions {
@@ -73,7 +86,6 @@ export const styles = `
     align-items: center;
     justify-content: flex-end;
     gap: 6px;
-    margin-left: 10px;
     flex: 0 0 auto;
 }
 
@@ -103,7 +115,7 @@ export const styles = `
 .pdk_dashboard-page__outbound-grid {
     margin-top: 5px;
     display: grid;
-    grid-template-columns: repeat(var(--dashboard-grid-columns), 1fr);
+    grid-template-columns: repeat(var(--dashboard-grid-columns), minmax(var(--dashboard-grid-min-width), 1fr));
     grid-gap: 10px;
 }
 
@@ -240,6 +252,7 @@ export const styles = `
     border-radius: 4px;
     padding: 10px;
     transition: border 0.2s ease;
+    min-width: 0;
 }
 
 .pdk_dashboard-page__outbound-grid__item--selectable {
@@ -289,10 +302,14 @@ export const styles = `
     display: flex;
     align-items: center;
     justify-content: space-between;
+    gap: 8px;
     margin-top: 10px;
 }
 
-.pdk_dashboard-page__outbound-grid__item__type {}
+.pdk_dashboard-page__outbound-grid__item__type {
+    min-width: 0;
+    overflow-wrap: anywhere;
+}
 
 .pdk_dashboard-page__outbound-grid__item__latency--empty {
     color: var(--primary-color-low, lightgray);

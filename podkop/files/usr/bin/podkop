@@ -168,16 +168,6 @@ write_outbound_metadata() {
     fi
 }
 
-cleanup_subscription_source_metadata_files() {
-    local section="$1"
-    local metadata_path
-
-    for metadata_path in "$PODKOP_SUBSCRIPTION_METADATA_DIR/${section}-subscription-"*.json; do
-        [ -e "$metadata_path" ] || continue
-        rm -f "$metadata_path"
-    done
-}
-
 subscription_metadata_append_file() {
     local array_path="$1"
     local metadata_path="$2"
@@ -199,6 +189,68 @@ subscription_metadata_append_file() {
         --arg source_section "$source_section" \
         '($array[0] // []) + [($metadata[0] + {sourceIndex: $source_index, sourceSection: $source_section})]' > "$tmpfile" 2>/dev/null &&
         mv "$tmpfile" "$array_path" || rm -f "$tmpfile"
+}
+
+subscription_metadata_append_cached_source() {
+    local array_path="$1"
+    local section="$2"
+    local source_index="${3:-0}"
+    local source_section="${4:-}"
+    local target_path existing_metadata_input tmpfile
+
+    [ -n "$array_path" ] || return 0
+    [ -n "$section" ] || return 0
+
+    target_path="$(get_subscription_metadata_path "$section")"
+    existing_metadata_input="$target_path"
+    [ -f "$existing_metadata_input" ] || existing_metadata_input="/dev/null"
+
+    tmpfile="${array_path}.$$"
+    if jq -cn \
+        --slurpfile array "$array_path" \
+        --slurpfile existing "$existing_metadata_input" \
+        --argjson source_index "$source_index" \
+        --arg source_section "$source_section" '
+            def source_index_of: (.sourceIndex? // .source_index? // null);
+            def source_section_of: (.sourceSection? // .source_section? // "");
+            ($array[0] // []) as $current |
+            (
+                ($existing[0] // [])
+                | if type == "array" then . elif type == "object" then [.] else [] end
+            ) as $items |
+            ($items | any(type == "object" and (source_section_of != "" or source_index_of != null))) as $has_source_markers |
+            (
+                if $has_source_markers then
+                    $items
+                    | map(select(
+                        type == "object" and
+                        (keys | length > 1) and
+                        (
+                            (source_section_of != "" and source_section_of == $source_section) or
+                            (source_section_of == "" and source_index_of == $source_index)
+                        )
+                    ))
+                    | first
+                else
+                    $items[$source_index - 1]
+                end
+            ) as $item |
+            if $item == null then
+                empty
+            else
+                $current + [($item + {sourceIndex: $source_index, sourceSection: $source_section})]
+            end
+        ' > "$tmpfile" 2>/dev/null &&
+        [ -s "$tmpfile" ] &&
+        jq -e 'type == "array"' "$tmpfile" >/dev/null 2>&1; then
+        mv "$tmpfile" "$array_path" || {
+            rm -f "$tmpfile"
+            return 1
+        }
+    else
+        rm -f "$tmpfile"
+        return 1
+    fi
 }
 
 write_subscription_metadata_json() {
@@ -227,7 +279,6 @@ write_subscription_metadata_json() {
         rm -f "$target_path" "$tmpfile"
     fi
 
-    cleanup_subscription_source_metadata_files "$section"
 }
 
 write_subscription_source_metadata_json() {
@@ -632,7 +683,17 @@ ensure_subscription_cache_for_source() {
         cache_needs_refresh=1
     fi
 
-    [ "$cache_needs_refresh" -eq 0 ] && return 0
+    if [ "$cache_needs_refresh" -eq 0 ]; then
+        if [ -n "$SUBSCRIPTION_SECTION_METADATA_TMP" ]; then
+            if subscription_metadata_append_cached_source "$SUBSCRIPTION_SECTION_METADATA_TMP" "$section" "$source_index" "$source_section"; then
+                return 0
+            fi
+
+            return 0
+        else
+            return 0
+        fi
+    fi
 
     metadata_output_path=""
     if [ -n "$SUBSCRIPTION_SECTION_METADATA_TMP" ]; then
@@ -656,6 +717,7 @@ ensure_subscription_cache_for_source() {
         [ "$cached_subscription_url" = "$subscription_url" ] &&
         [ "$cached_subscription_user_agent" = "$subscription_user_agent" ]; then
         log "Keeping cached subscription for rule '$section' until a fresh download succeeds" "warn"
+        subscription_metadata_append_cached_source "$SUBSCRIPTION_SECTION_METADATA_TMP" "$section" "$source_index" "$source_section" || true
         return 0
     fi
 
@@ -708,6 +770,8 @@ prepare_subscription_cache_for_startup() {
         metadata_count="$(jq -r 'length' "$metadata_tmpfile" 2>/dev/null)"
         if [ -n "$metadata_count" ] && [ "$metadata_count" -gt 0 ]; then
             write_subscription_metadata_json "$section" "$metadata_tmpfile"
+        else
+            write_subscription_metadata_json "$section" ""
         fi
         rm -f "$metadata_tmpfile"
     fi
@@ -743,6 +807,29 @@ acquire_runtime_dir_lock() {
     rmdir "$lock_dir" 2>/dev/null || return 1
     mkdir "$lock_dir" 2>/dev/null || return 1
     printf '%s\n' "$$" > "$lock_dir/pid"
+}
+
+acquire_runtime_dir_lock_wait() {
+    local lock_dir="$1"
+    local timeout="${2:-300}"
+    local start now elapsed
+
+    start="$(date +%s 2>/dev/null)"
+    case "$start" in
+    '' | *[!0-9]*) start=0 ;;
+    esac
+
+    while ! acquire_runtime_dir_lock "$lock_dir"; do
+        now="$(date +%s 2>/dev/null)"
+        case "$now" in
+        '' | *[!0-9]*) now="$start" ;;
+        esac
+        elapsed=$((now - start))
+        [ "$elapsed" -lt "$timeout" ] || return 1
+        sleep 2
+    done
+
+    return 0
 }
 
 release_runtime_dir_lock() {
@@ -4607,6 +4694,16 @@ subscription_update_handler() {
     esac
 }
 
+subscription_update_abort_cleanup() {
+    local status="${1:-1}"
+
+    trap - EXIT INT TERM
+    runtime_status_mark_failure "subscription_update"
+    release_runtime_dir_lock "$PODKOP_RELOAD_LOCK_DIR"
+    release_runtime_dir_lock "$PODKOP_SUBSCRIPTION_UPDATE_LOCK_DIR"
+    exit "$status"
+}
+
 subscription_update_common_locked() {
     local force="$1"
     local target_section="${2:-}"
@@ -4684,21 +4781,32 @@ subscription_update_common() {
     config_load "$PODKOP_CONFIG_NAME"
     ensure_runtime_dirs
 
-    if ! acquire_runtime_dir_lock "$PODKOP_SUBSCRIPTION_UPDATE_LOCK_DIR"; then
+    if [ "$force" -eq 1 ]; then
+        if ! acquire_runtime_dir_lock_wait "$PODKOP_SUBSCRIPTION_UPDATE_LOCK_DIR" 300; then
+            echolog "Subscription update is already running"
+            mark_pending_reload "subscription_update_busy"
+            return 1
+        fi
+    elif ! acquire_runtime_dir_lock "$PODKOP_SUBSCRIPTION_UPDATE_LOCK_DIR"; then
         echolog "Subscription update is already running"
-        [ "$force" -eq 1 ] && mark_pending_reload "subscription_update_busy"
         return 0
     fi
 
-    if ! acquire_runtime_dir_lock "$PODKOP_RELOAD_LOCK_DIR"; then
+    if [ "$force" -eq 1 ]; then
+        if ! acquire_runtime_dir_lock_wait "$PODKOP_RELOAD_LOCK_DIR" 300; then
+            release_runtime_dir_lock "$PODKOP_SUBSCRIPTION_UPDATE_LOCK_DIR"
+            echolog "Podkop reload is already running; skipping subscription update"
+            mark_pending_reload "reload_busy"
+            return 1
+        fi
+    elif ! acquire_runtime_dir_lock "$PODKOP_RELOAD_LOCK_DIR"; then
         release_runtime_dir_lock "$PODKOP_SUBSCRIPTION_UPDATE_LOCK_DIR"
         echolog "Podkop reload is already running; skipping subscription update"
-        [ "$force" -eq 1 ] && mark_pending_reload "reload_busy"
         return 0
     fi
 
     runtime_status_write "updating_subscription" "subscription_update"
-    trap 'runtime_status_mark_failure "subscription_update"' EXIT INT TERM
+    trap 'subscription_update_abort_cleanup "$?"' EXIT INT TERM
 
     subscription_update_common_locked "$force" "$target_section" "$target_source_index"
     result=$?
@@ -5577,6 +5685,7 @@ configure_outbound_handler() {
     proxy_config_type="$(get_proxy_config_type "$section")"
 
     if [ "$action" = "zapret" ]; then
+        write_subscription_metadata_json "$section" ""
         if ! is_zapret_installed; then
             return 0
         fi
@@ -5611,6 +5720,7 @@ configure_outbound_handler() {
         byedpi_port="$(get_byedpi_rule_port "$byedpi_index")"
         outbound_tag="$(get_outbound_tag_by_section "$section")"
         config=$(sing_box_cm_add_socks_outbound "$config" "$outbound_tag" "$BYEDPI_LISTEN_ADDRESS" "$byedpi_port" "5" "" "" "" "")
+        write_subscription_metadata_json "$section" ""
         return 0
     fi
 
@@ -5625,6 +5735,7 @@ configure_outbound_handler() {
 
         config=$(sing_box_cf_add_json_outbound "$config" "$section" "$outbound_json")
         write_subscription_outbound_links "$section" "{}"
+        write_subscription_metadata_json "$section" ""
         return 0
     fi
 
@@ -5632,7 +5743,8 @@ configure_outbound_handler() {
         local selector_proxy_links urltest_proxy_links proxy_string subscription_urls subscription_url \
             udp_over_tcp urltest_enabled urltest_tag selector_tag selector_outbounds selector_default \
             urltest_check_interval urltest_idle_timeout urltest_tolerance urltest_testing_url outbounds_count \
-            detect_server_country urltest_outbounds urltest_outbounds_count
+            detect_server_country urltest_outbounds urltest_outbounds_count has_subscription_sources \
+            metadata_tmpfile metadata_count
 
         config_get selector_proxy_links "$section" "selector_proxy_links"
         config_get urltest_proxy_links "$section" "urltest_proxy_links"
@@ -5642,6 +5754,7 @@ configure_outbound_handler() {
         config_get udp_over_tcp "$section" "enable_udp_over_tcp"
         config_get_bool urltest_enabled "$section" "urltest_enabled" 0
         config_get_bool detect_server_country "$section" "detect_server_country" 0
+        rule_has_subscription_urls "$section" && has_subscription_sources=1 || has_subscription_sources=0
 
         PROXY_GROUP_SECTION="$section"
         PROXY_GROUP_MANUAL_INDEX=0
@@ -5658,8 +5771,29 @@ configure_outbound_handler() {
             proxy_group_add_legacy_proxy_string_links "$section" "$udp_over_tcp"
         fi
 
-        if rule_has_subscription_urls "$section"; then
+        metadata_tmpfile=""
+        if [ "$has_subscription_sources" -eq 1 ]; then
+            metadata_tmpfile="$(mktemp "$TMP_SUBSCRIPTION_FOLDER/${section}.metadata-section.XXXXXX" 2>/dev/null || true)"
+            if [ -n "$metadata_tmpfile" ]; then
+                printf '[]\n' > "$metadata_tmpfile"
+                SUBSCRIPTION_SECTION_METADATA_TMP="$metadata_tmpfile"
+            else
+                SUBSCRIPTION_SECTION_METADATA_TMP=""
+            fi
             for_each_subscription_source "$section" proxy_group_add_subscription_source
+            SUBSCRIPTION_SECTION_METADATA_TMP=""
+
+            if [ -n "$metadata_tmpfile" ]; then
+                metadata_count="$(jq -r 'length' "$metadata_tmpfile" 2>/dev/null)"
+                if [ -n "$metadata_count" ] && [ "$metadata_count" -gt 0 ]; then
+                    write_subscription_metadata_json "$section" "$metadata_tmpfile"
+                else
+                    write_subscription_metadata_json "$section" ""
+                fi
+                rm -f "$metadata_tmpfile"
+            fi
+        else
+            write_subscription_metadata_json "$section" ""
         fi
 
         if [ "$PROXY_GROUP_DETECT_COUNTRIES" -eq 1 ]; then
@@ -5751,11 +5885,13 @@ configure_outbound_handler() {
         fi
 
         config=$(sing_box_cm_add_interface_outbound "$config" "$outbound_tag" "$interface_name" "$domain_resolver_tag")
+        write_subscription_metadata_json "$section" ""
         return 0
     fi
 
     case "$action" in
     block | direct)
+        write_subscription_metadata_json "$section" ""
         return 0
         ;;
     "")

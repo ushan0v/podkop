@@ -223,7 +223,10 @@ function buildProxyGroupOutbounds(
         code: item.code,
         displayName: isFastest
           ? _('Fastest')
-          : getProxyUrlName(link) || item.value.name || item.code,
+          : getProxyUrlName(link) ||
+            outboundMetadata?.names?.[item.code] ||
+            item.value.name ||
+            item.code,
         latency: item.value.history?.[0]?.delay || 0,
         type: item.value.type || '',
         selected: selector?.value?.now === item.code,
@@ -319,7 +322,64 @@ async function markSubscriptionCopyableOutbounds(
   );
 }
 
-async function getSubscriptionMetadata(sectionName: string) {
+function metadataMatchesCurrentSource(
+  sectionName: string,
+  sourceCount: number,
+  metadata: Podkop.SubscriptionMetadata,
+) {
+  const legacyMetadata = metadata as Podkop.SubscriptionMetadata & {
+    source_index?: number;
+    source_section?: string;
+  };
+  const sourceIndex = metadata.sourceIndex ?? legacyMetadata.source_index;
+  const sourceSection =
+    metadata.sourceSection || legacyMetadata.source_section || '';
+  const hasSourceIndex = typeof sourceIndex === 'number';
+  const hasSourceSection = sourceSection !== '';
+
+  if (!hasSourceIndex && !hasSourceSection) {
+    return sourceCount <= 1;
+  }
+
+  if (sourceCount > 1 && !hasSourceSection) {
+    return false;
+  }
+
+  if (hasSourceIndex && (sourceIndex < 1 || sourceIndex > sourceCount)) {
+    return false;
+  }
+
+  if (hasSourceSection) {
+    const expectedSourcePrefix = `${sectionName}-subscription-`;
+
+    if (!sourceSection.startsWith(expectedSourcePrefix)) {
+      return false;
+    }
+
+    const sourceSectionIndex = Number(
+      sourceSection.slice(expectedSourcePrefix.length),
+    );
+
+    if (
+      !Number.isInteger(sourceSectionIndex) ||
+      sourceSectionIndex < 1 ||
+      sourceSectionIndex > sourceCount
+    ) {
+      return false;
+    }
+
+    if (hasSourceIndex && sourceIndex !== sourceSectionIndex) {
+      return false;
+    }
+  }
+
+  return true;
+}
+
+async function getSubscriptionMetadata(
+  sectionName: string,
+  sourceCount: number,
+) {
   const response =
     await PodkopShellMethods.getSubscriptionMetadata(sectionName);
 
@@ -331,7 +391,10 @@ async function getSubscriptionMetadata(sectionName: string) {
     ? response.data
     : [response.data];
   const visibleMetadataItems = metadataItems.filter(
-    (metadata) => metadata && Object.keys(metadata).length > 1,
+    (metadata) =>
+      metadata &&
+      Object.keys(metadata).length > 1 &&
+      metadataMatchesCurrentSource(sectionName, sourceCount, metadata),
   );
 
   if (visibleMetadataItems.length > 0) {
@@ -359,7 +422,7 @@ export async function getDashboardSections(
   const configSections = await getConfigSections();
   const clashProxies = await PodkopShellMethods.getClashApiProxies();
 
-  if (!clashProxies.success) {
+  if (!clashProxies.success || !clashProxies.data?.proxies) {
     return {
       success: false,
       data: [],
@@ -491,21 +554,18 @@ export async function getDashboardSections(
         if (sectionAction === 'proxy' && shouldUseProxyGroup(section)) {
           const subscriptionSourceCount = getSubscriptionSourceCount(section);
           const subscriptionEnabled = subscriptionSourceCount > 0;
-          const [
-            outboundMetadata,
-            subscriptionMetadata,
-            outboundLinkStates,
-          ] = await Promise.all([
-            subscriptionEnabled
-              ? getOutboundMetadata(sectionName)
-              : Promise.resolve(undefined),
-            subscriptionEnabled
-              ? getSubscriptionMetadata(sectionName)
-              : Promise.resolve(undefined),
-            includeSubscriptionCopyState
-              ? getSubscriptionOutboundLinkStates(sectionName)
-              : Promise.resolve({}),
-          ]);
+          const [outboundMetadata, subscriptionMetadata, outboundLinkStates] =
+            await Promise.all([
+              subscriptionEnabled
+                ? getOutboundMetadata(sectionName)
+                : Promise.resolve(undefined),
+              subscriptionEnabled
+                ? getSubscriptionMetadata(sectionName, subscriptionSourceCount)
+                : Promise.resolve(undefined),
+              includeSubscriptionCopyState
+                ? getSubscriptionOutboundLinkStates(sectionName)
+                : Promise.resolve({}),
+            ]);
           const { selector, outbounds } = buildProxyGroupOutbounds(
             section,
             proxies,

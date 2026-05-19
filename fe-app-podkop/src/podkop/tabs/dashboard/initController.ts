@@ -14,32 +14,36 @@ import { fetchServicesInfo } from '../../fetchers';
 import { getClashApiSecret } from '../../methods/custom/getClashApiSecret';
 import { Podkop } from '../../types';
 
-const SECTIONS_REFRESH_INTERVAL_MS = 5000;
+const SECTIONS_REFRESH_INTERVAL_MS = 10000;
 let sectionsRefreshTimer: ReturnType<typeof setInterval> | null = null;
-let sectionsRefreshInFlight = false;
+let sectionsRefreshPromise: Promise<boolean> | null = null;
+let sectionsRefreshQueued = false;
+let dashboardMounted = false;
+let dashboardMountId = 0;
 
 // Fetchers
 
-async function fetchDashboardSections() {
-  if (sectionsRefreshInFlight) {
-    return;
-  }
+async function fetchDashboardSectionsOnce(mountId: number) {
+  const prev = store.get().sectionsWidget;
+  const hasRenderedData = prev.data.length > 0;
 
-  sectionsRefreshInFlight = true;
+  store.set({
+    sectionsWidget: {
+      ...prev,
+      failed: false,
+      loading: prev.loading && !hasRenderedData,
+    },
+  });
+
   try {
-    const prev = store.get().sectionsWidget;
-
-    store.set({
-      sectionsWidget: {
-        ...prev,
-        failed: false,
-      },
-    });
-
     const { data, success } = await CustomPodkopMethods.getDashboardSections();
 
+    if (!dashboardMounted || mountId !== dashboardMountId) {
+      return false;
+    }
+
     if (!success) {
-      logger.error('[DASHBOARD]', 'fetchDashboardSections: failed to fetch');
+      throw new Error('failed to fetch dashboard sections');
     }
 
     const current = store.get().sectionsWidget;
@@ -49,12 +53,68 @@ async function fetchDashboardSections() {
         ...current,
         latencyFetching: false,
         loading: false,
-        failed: !success,
+        failed: false,
         data,
       },
     });
+
+    return true;
+  } catch (error) {
+    logger.error('[DASHBOARD]', 'fetchDashboardSections: failed', error);
+
+    if (!dashboardMounted || mountId !== dashboardMountId) {
+      return false;
+    }
+
+    const current = store.get().sectionsWidget;
+
+    store.set({
+      sectionsWidget: {
+        ...current,
+        latencyFetching: false,
+        loading: false,
+        failed: current.data.length === 0,
+        data: current.data,
+      },
+    });
+
+    return false;
+  }
+}
+
+async function fetchDashboardSections(options: { force?: boolean } = {}) {
+  if (sectionsRefreshPromise) {
+    if (options.force) {
+      sectionsRefreshQueued = true;
+    }
+
+    return sectionsRefreshPromise;
+  }
+
+  const mountId = dashboardMountId;
+  const promise = (async () => {
+    let success = false;
+
+    do {
+      sectionsRefreshQueued = false;
+      success = await fetchDashboardSectionsOnce(mountId);
+    } while (
+      sectionsRefreshQueued &&
+      dashboardMounted &&
+      mountId === dashboardMountId
+    );
+
+    return success;
+  })();
+
+  sectionsRefreshPromise = promise;
+
+  try {
+    return await promise;
   } finally {
-    sectionsRefreshInFlight = false;
+    if (sectionsRefreshPromise === promise) {
+      sectionsRefreshPromise = null;
+    }
   }
 }
 
@@ -163,7 +223,7 @@ async function connectToClashSockets() {
 
 async function handleChooseOutbound(selector: string, tag: string) {
   await PodkopShellMethods.setClashApiGroupProxy(selector, tag);
-  await fetchDashboardSections();
+  await fetchDashboardSections({ force: true });
 }
 
 async function handleTestGroupLatency(tag: string) {
@@ -175,7 +235,7 @@ async function handleTestGroupLatency(tag: string) {
   });
 
   await PodkopShellMethods.getClashApiGroupLatency(tag);
-  await fetchDashboardSections();
+  await fetchDashboardSections({ force: true });
 
   store.set({
     sectionsWidget: {
@@ -194,7 +254,7 @@ async function handleTestProxyLatency(tag: string) {
   });
 
   await PodkopShellMethods.getClashApiProxyLatency(tag);
-  await fetchDashboardSections();
+  await fetchDashboardSections({ force: true });
 
   store.set({
     sectionsWidget: {
@@ -248,9 +308,13 @@ async function handleUpdateSubscription(section: Podkop.OutboundGroup) {
     }
 
     showToast(_('Subscription update completed'), 'success');
-    await fetchDashboardSections();
+  } catch (error) {
+    logger.error('[DASHBOARD]', 'handleUpdateSubscription: failed', error);
+    showToast(_('Failed to update subscriptions'), 'error');
   } finally {
     setSubscriptionUpdating(section.sectionName, false);
+    void fetchDashboardSections({ force: true });
+    void fetchServicesInfo();
   }
 }
 
@@ -260,6 +324,10 @@ async function renderSectionsWidget() {
   logger.debug('[DASHBOARD]', 'renderSectionsWidget');
   const sectionsWidget = store.get().sectionsWidget;
   const container = document.getElementById('dashboard-sections-grid');
+
+  if (!container) {
+    return;
+  }
 
   if (sectionsWidget.loading || sectionsWidget.failed) {
     const renderedWidget = renderSections({
@@ -281,7 +349,7 @@ async function renderSectionsWidget() {
     });
 
     return preserveScrollForPage(() => {
-      container!.replaceChildren(renderedWidget);
+      container.replaceChildren(renderedWidget);
     });
   }
 
@@ -314,7 +382,7 @@ async function renderSectionsWidget() {
   );
 
   return preserveScrollForPage(() => {
-    container!.replaceChildren(...renderedWidgets);
+    container.replaceChildren(...renderedWidgets);
   });
 }
 
@@ -324,6 +392,10 @@ async function renderBandwidthWidget() {
 
   const container = document.getElementById('dashboard-widget-traffic');
 
+  if (!container) {
+    return;
+  }
+
   if (traffic.loading || traffic.failed) {
     const renderedWidget = renderWidget({
       loading: traffic.loading,
@@ -332,7 +404,7 @@ async function renderBandwidthWidget() {
       items: [],
     });
 
-    return container!.replaceChildren(renderedWidget);
+    return container.replaceChildren(renderedWidget);
   }
 
   const renderedWidget = renderWidget({
@@ -345,7 +417,7 @@ async function renderBandwidthWidget() {
     ],
   });
 
-  container!.replaceChildren(renderedWidget);
+  container.replaceChildren(renderedWidget);
 }
 
 async function renderTrafficTotalWidget() {
@@ -353,6 +425,10 @@ async function renderTrafficTotalWidget() {
   const trafficTotalWidget = store.get().trafficTotalWidget;
 
   const container = document.getElementById('dashboard-widget-traffic-total');
+
+  if (!container) {
+    return;
+  }
 
   if (trafficTotalWidget.loading || trafficTotalWidget.failed) {
     const renderedWidget = renderWidget({
@@ -362,7 +438,7 @@ async function renderTrafficTotalWidget() {
       items: [],
     });
 
-    return container!.replaceChildren(renderedWidget);
+    return container.replaceChildren(renderedWidget);
   }
 
   const renderedWidget = renderWidget({
@@ -381,7 +457,7 @@ async function renderTrafficTotalWidget() {
     ],
   });
 
-  container!.replaceChildren(renderedWidget);
+  container.replaceChildren(renderedWidget);
 }
 
 async function renderSystemInfoWidget() {
@@ -389,6 +465,10 @@ async function renderSystemInfoWidget() {
   const systemInfoWidget = store.get().systemInfoWidget;
 
   const container = document.getElementById('dashboard-widget-system-info');
+
+  if (!container) {
+    return;
+  }
 
   if (systemInfoWidget.loading || systemInfoWidget.failed) {
     const renderedWidget = renderWidget({
@@ -398,7 +478,7 @@ async function renderSystemInfoWidget() {
       items: [],
     });
 
-    return container!.replaceChildren(renderedWidget);
+    return container.replaceChildren(renderedWidget);
   }
 
   const renderedWidget = renderWidget({
@@ -417,7 +497,7 @@ async function renderSystemInfoWidget() {
     ],
   });
 
-  container!.replaceChildren(renderedWidget);
+  container.replaceChildren(renderedWidget);
 }
 
 async function renderServicesInfoWidget() {
@@ -425,6 +505,10 @@ async function renderServicesInfoWidget() {
   const servicesInfoWidget = store.get().servicesInfoWidget;
 
   const container = document.getElementById('dashboard-widget-service-info');
+
+  if (!container) {
+    return;
+  }
 
   if (servicesInfoWidget.loading || servicesInfoWidget.failed) {
     const renderedWidget = renderWidget({
@@ -434,7 +518,7 @@ async function renderServicesInfoWidget() {
       items: [],
     });
 
-    return container!.replaceChildren(renderedWidget);
+    return container.replaceChildren(renderedWidget);
   }
 
   const renderedWidget = renderWidget({
@@ -467,7 +551,7 @@ async function renderServicesInfoWidget() {
     ],
   });
 
-  container!.replaceChildren(renderedWidget);
+  container.replaceChildren(renderedWidget);
 }
 
 async function onStoreUpdate(
@@ -500,13 +584,15 @@ async function onPageMount() {
   // Cleanup before mount
   onPageUnmount();
 
+  dashboardMounted = true;
+  dashboardMountId += 1;
+
   // Add new listener
   store.subscribe(onStoreUpdate);
 
-  // Initial sections fetch
-  await fetchDashboardSections();
-  await fetchServicesInfo();
-  await connectToClashSockets();
+  void fetchDashboardSections({ force: true });
+  void fetchServicesInfo();
+  void connectToClashSockets();
 
   sectionsRefreshTimer = setInterval(() => {
     void fetchDashboardSections();
@@ -514,11 +600,15 @@ async function onPageMount() {
 }
 
 function onPageUnmount() {
+  dashboardMounted = false;
+  dashboardMountId += 1;
+
   if (sectionsRefreshTimer) {
     clearInterval(sectionsRefreshTimer);
     sectionsRefreshTimer = null;
   }
-  sectionsRefreshInFlight = false;
+  sectionsRefreshQueued = false;
+  sectionsRefreshPromise = null;
   // Remove old listener
   store.unsubscribe(onStoreUpdate);
   // Clear store

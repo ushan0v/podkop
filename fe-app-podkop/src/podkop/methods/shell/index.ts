@@ -2,6 +2,8 @@ import { callBaseMethod } from './callBaseMethod';
 import { ClashAPI, Podkop } from '../../types';
 import { executeShellCommand } from '../../../helpers';
 
+const SUBSCRIPTION_UPDATE_TIMEOUT_MS = 10 * 60 * 1000;
+
 export const PodkopShellMethods = {
   checkDNSAvailable: async () =>
     callBaseMethod<Podkop.DnsCheckResult>(
@@ -127,12 +129,12 @@ export const PodkopShellMethods = {
     const args = [
       Podkop.AvailableMethods.SUBSCRIPTION_UPDATE,
       ...(section ? [section] : []),
-      ...(section && sourceIndex ? [String(sourceIndex)] : []),
+      ...(section && sourceIndex !== undefined ? [String(sourceIndex)] : []),
     ];
     const response = await executeShellCommand({
       command: '/usr/bin/podkop-plus',
       args,
-      timeout: 120000,
+      timeout: SUBSCRIPTION_UPDATE_TIMEOUT_MS,
     });
 
     if (response.stderr || (response.code && response.code !== 0)) {

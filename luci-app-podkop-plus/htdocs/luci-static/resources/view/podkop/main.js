@@ -686,6 +686,7 @@ var COMMAND_SCHEDULING = {
 
 // src/podkop/methods/custom/getConfigSections.ts
 async function getConfigSections() {
+  uci.unload?.(PODKOP_UCI_PACKAGE);
   return uci.load(PODKOP_UCI_PACKAGE).then(() => uci.sections(PODKOP_UCI_PACKAGE));
 }
 
@@ -764,6 +765,7 @@ var Podkop;
 })(Podkop || (Podkop = {}));
 
 // src/podkop/methods/shell/index.ts
+var SUBSCRIPTION_UPDATE_TIMEOUT_MS = 10 * 60 * 1e3;
 var PodkopShellMethods = {
   checkDNSAvailable: async () => callBaseMethod(
     Podkop.AvailableMethods.CHECK_DNS_AVAILABLE
@@ -861,12 +863,12 @@ var PodkopShellMethods = {
     const args = [
       Podkop.AvailableMethods.SUBSCRIPTION_UPDATE,
       ...section ? [section] : [],
-      ...section && sourceIndex ? [String(sourceIndex)] : []
+      ...section && sourceIndex !== void 0 ? [String(sourceIndex)] : []
     ];
     const response = await executeShellCommand({
       command: "/usr/bin/podkop-plus",
       args,
-      timeout: 12e4
+      timeout: SUBSCRIPTION_UPDATE_TIMEOUT_MS
     });
     if (response.stderr || response.code && response.code !== 0) {
       return {
@@ -1032,7 +1034,7 @@ function buildProxyGroupOutbounds(section, proxies, outboundMetadata) {
     return [
       {
         code: item.code,
-        displayName: isFastest ? _("Fastest") : getProxyUrlName(link) || item.value.name || item.code,
+        displayName: isFastest ? _("Fastest") : getProxyUrlName(link) || outboundMetadata?.names?.[item.code] || item.value.name || item.code,
         latency: item.value.history?.[0]?.delay || 0,
         type: item.value.type || "",
         selected: selector?.value?.now === item.code,
@@ -1095,14 +1097,46 @@ async function markSubscriptionCopyableOutbounds(sectionName, outbounds, linkSta
     }))
   );
 }
-async function getSubscriptionMetadata(sectionName) {
+function metadataMatchesCurrentSource(sectionName, sourceCount, metadata) {
+  const legacyMetadata = metadata;
+  const sourceIndex = metadata.sourceIndex ?? legacyMetadata.source_index;
+  const sourceSection = metadata.sourceSection || legacyMetadata.source_section || "";
+  const hasSourceIndex = typeof sourceIndex === "number";
+  const hasSourceSection = sourceSection !== "";
+  if (!hasSourceIndex && !hasSourceSection) {
+    return sourceCount <= 1;
+  }
+  if (sourceCount > 1 && !hasSourceSection) {
+    return false;
+  }
+  if (hasSourceIndex && (sourceIndex < 1 || sourceIndex > sourceCount)) {
+    return false;
+  }
+  if (hasSourceSection) {
+    const expectedSourcePrefix = `${sectionName}-subscription-`;
+    if (!sourceSection.startsWith(expectedSourcePrefix)) {
+      return false;
+    }
+    const sourceSectionIndex = Number(
+      sourceSection.slice(expectedSourcePrefix.length)
+    );
+    if (!Number.isInteger(sourceSectionIndex) || sourceSectionIndex < 1 || sourceSectionIndex > sourceCount) {
+      return false;
+    }
+    if (hasSourceIndex && sourceIndex !== sourceSectionIndex) {
+      return false;
+    }
+  }
+  return true;
+}
+async function getSubscriptionMetadata(sectionName, sourceCount) {
   const response = await PodkopShellMethods.getSubscriptionMetadata(sectionName);
   if (!response.success || !response.data) {
     return void 0;
   }
   const metadataItems = Array.isArray(response.data) ? response.data : [response.data];
   const visibleMetadataItems = metadataItems.filter(
-    (metadata) => metadata && Object.keys(metadata).length > 1
+    (metadata) => metadata && Object.keys(metadata).length > 1 && metadataMatchesCurrentSource(sectionName, sourceCount, metadata)
   );
   if (visibleMetadataItems.length > 0) {
     return visibleMetadataItems;
@@ -1120,7 +1154,7 @@ async function getDashboardSections(options = {}) {
   const includeSubscriptionCopyState = options.includeSubscriptionCopyState ?? true;
   const configSections = await getConfigSections();
   const clashProxies = await PodkopShellMethods.getClashApiProxies();
-  if (!clashProxies.success) {
+  if (!clashProxies.success || !clashProxies.data?.proxies) {
     return {
       success: false,
       data: []
@@ -1233,13 +1267,9 @@ async function getDashboardSections(options = {}) {
       if (sectionAction === "proxy" && shouldUseProxyGroup(section)) {
         const subscriptionSourceCount = getSubscriptionSourceCount(section);
         const subscriptionEnabled = subscriptionSourceCount > 0;
-        const [
-          outboundMetadata,
-          subscriptionMetadata,
-          outboundLinkStates
-        ] = await Promise.all([
+        const [outboundMetadata, subscriptionMetadata, outboundLinkStates] = await Promise.all([
           subscriptionEnabled ? getOutboundMetadata(sectionName) : Promise.resolve(void 0),
-          subscriptionEnabled ? getSubscriptionMetadata(sectionName) : Promise.resolve(void 0),
+          subscriptionEnabled ? getSubscriptionMetadata(sectionName, subscriptionSourceCount) : Promise.resolve(void 0),
           includeSubscriptionCopyState ? getSubscriptionOutboundLinkStates(sectionName) : Promise.resolve({})
         ]);
         const { selector, outbounds } = buildProxyGroupOutbounds(
@@ -3233,25 +3263,29 @@ async function fetchPodkopStatus() {
 }
 
 // src/podkop/tabs/dashboard/initController.ts
-var SECTIONS_REFRESH_INTERVAL_MS = 5e3;
+var SECTIONS_REFRESH_INTERVAL_MS = 1e4;
 var sectionsRefreshTimer = null;
-var sectionsRefreshInFlight = false;
-async function fetchDashboardSections() {
-  if (sectionsRefreshInFlight) {
-    return;
-  }
-  sectionsRefreshInFlight = true;
+var sectionsRefreshPromise = null;
+var sectionsRefreshQueued = false;
+var dashboardMounted = false;
+var dashboardMountId = 0;
+async function fetchDashboardSectionsOnce(mountId) {
+  const prev = store.get().sectionsWidget;
+  const hasRenderedData = prev.data.length > 0;
+  store.set({
+    sectionsWidget: {
+      ...prev,
+      failed: false,
+      loading: prev.loading && !hasRenderedData
+    }
+  });
   try {
-    const prev = store.get().sectionsWidget;
-    store.set({
-      sectionsWidget: {
-        ...prev,
-        failed: false
-      }
-    });
     const { data, success } = await CustomPodkopMethods.getDashboardSections();
+    if (!dashboardMounted || mountId !== dashboardMountId) {
+      return false;
+    }
     if (!success) {
-      logger.error("[DASHBOARD]", "fetchDashboardSections: failed to fetch");
+      throw new Error("failed to fetch dashboard sections");
     }
     const current = store.get().sectionsWidget;
     store.set({
@@ -3259,12 +3293,52 @@ async function fetchDashboardSections() {
         ...current,
         latencyFetching: false,
         loading: false,
-        failed: !success,
+        failed: false,
         data
       }
     });
+    return true;
+  } catch (error) {
+    logger.error("[DASHBOARD]", "fetchDashboardSections: failed", error);
+    if (!dashboardMounted || mountId !== dashboardMountId) {
+      return false;
+    }
+    const current = store.get().sectionsWidget;
+    store.set({
+      sectionsWidget: {
+        ...current,
+        latencyFetching: false,
+        loading: false,
+        failed: current.data.length === 0,
+        data: current.data
+      }
+    });
+    return false;
+  }
+}
+async function fetchDashboardSections(options = {}) {
+  if (sectionsRefreshPromise) {
+    if (options.force) {
+      sectionsRefreshQueued = true;
+    }
+    return sectionsRefreshPromise;
+  }
+  const mountId = dashboardMountId;
+  const promise = (async () => {
+    let success = false;
+    do {
+      sectionsRefreshQueued = false;
+      success = await fetchDashboardSectionsOnce(mountId);
+    } while (sectionsRefreshQueued && dashboardMounted && mountId === dashboardMountId);
+    return success;
+  })();
+  sectionsRefreshPromise = promise;
+  try {
+    return await promise;
   } finally {
-    sectionsRefreshInFlight = false;
+    if (sectionsRefreshPromise === promise) {
+      sectionsRefreshPromise = null;
+    }
   }
 }
 function setSubscriptionUpdating(sectionName, updating) {
@@ -3362,7 +3436,7 @@ async function connectToClashSockets() {
 }
 async function handleChooseOutbound(selector, tag) {
   await PodkopShellMethods.setClashApiGroupProxy(selector, tag);
-  await fetchDashboardSections();
+  await fetchDashboardSections({ force: true });
 }
 async function handleTestGroupLatency(tag) {
   store.set({
@@ -3372,7 +3446,7 @@ async function handleTestGroupLatency(tag) {
     }
   });
   await PodkopShellMethods.getClashApiGroupLatency(tag);
-  await fetchDashboardSections();
+  await fetchDashboardSections({ force: true });
   store.set({
     sectionsWidget: {
       ...store.get().sectionsWidget,
@@ -3388,7 +3462,7 @@ async function handleTestProxyLatency(tag) {
     }
   });
   await PodkopShellMethods.getClashApiProxyLatency(tag);
-  await fetchDashboardSections();
+  await fetchDashboardSections({ force: true });
   store.set({
     sectionsWidget: {
       ...store.get().sectionsWidget,
@@ -3426,15 +3500,22 @@ async function handleUpdateSubscription(section) {
       return;
     }
     showToast(_("Subscription update completed"), "success");
-    await fetchDashboardSections();
+  } catch (error) {
+    logger.error("[DASHBOARD]", "handleUpdateSubscription: failed", error);
+    showToast(_("Failed to update subscriptions"), "error");
   } finally {
     setSubscriptionUpdating(section.sectionName, false);
+    void fetchDashboardSections({ force: true });
+    void fetchServicesInfo();
   }
 }
 async function renderSectionsWidget() {
   logger.debug("[DASHBOARD]", "renderSectionsWidget");
   const sectionsWidget = store.get().sectionsWidget;
   const container = document.getElementById("dashboard-sections-grid");
+  if (!container) {
+    return;
+  }
   if (sectionsWidget.loading || sectionsWidget.failed) {
     const renderedWidget = renderSections({
       loading: sectionsWidget.loading,
@@ -3495,6 +3576,9 @@ async function renderBandwidthWidget() {
   logger.debug("[DASHBOARD]", "renderBandwidthWidget");
   const traffic = store.get().bandwidthWidget;
   const container = document.getElementById("dashboard-widget-traffic");
+  if (!container) {
+    return;
+  }
   if (traffic.loading || traffic.failed) {
     const renderedWidget2 = renderWidget({
       loading: traffic.loading,
@@ -3519,6 +3603,9 @@ async function renderTrafficTotalWidget() {
   logger.debug("[DASHBOARD]", "renderTrafficTotalWidget");
   const trafficTotalWidget = store.get().trafficTotalWidget;
   const container = document.getElementById("dashboard-widget-traffic-total");
+  if (!container) {
+    return;
+  }
   if (trafficTotalWidget.loading || trafficTotalWidget.failed) {
     const renderedWidget2 = renderWidget({
       loading: trafficTotalWidget.loading,
@@ -3549,6 +3636,9 @@ async function renderSystemInfoWidget() {
   logger.debug("[DASHBOARD]", "renderSystemInfoWidget");
   const systemInfoWidget = store.get().systemInfoWidget;
   const container = document.getElementById("dashboard-widget-system-info");
+  if (!container) {
+    return;
+  }
   if (systemInfoWidget.loading || systemInfoWidget.failed) {
     const renderedWidget2 = renderWidget({
       loading: systemInfoWidget.loading,
@@ -3579,6 +3669,9 @@ async function renderServicesInfoWidget() {
   logger.debug("[DASHBOARD]", "renderServicesInfoWidget");
   const servicesInfoWidget = store.get().servicesInfoWidget;
   const container = document.getElementById("dashboard-widget-service-info");
+  if (!container) {
+    return;
+  }
   if (servicesInfoWidget.loading || servicesInfoWidget.failed) {
     const renderedWidget2 = renderWidget({
       loading: servicesInfoWidget.loading,
@@ -3630,20 +3723,25 @@ async function onStoreUpdate(next, prev, diff) {
 }
 async function onPageMount() {
   onPageUnmount();
+  dashboardMounted = true;
+  dashboardMountId += 1;
   store.subscribe(onStoreUpdate);
-  await fetchDashboardSections();
-  await fetchServicesInfo();
-  await connectToClashSockets();
+  void fetchDashboardSections({ force: true });
+  void fetchServicesInfo();
+  void connectToClashSockets();
   sectionsRefreshTimer = setInterval(() => {
     void fetchDashboardSections();
   }, SECTIONS_REFRESH_INTERVAL_MS);
 }
 function onPageUnmount() {
+  dashboardMounted = false;
+  dashboardMountId += 1;
   if (sectionsRefreshTimer) {
     clearInterval(sectionsRefreshTimer);
     sectionsRefreshTimer = null;
   }
-  sectionsRefreshInFlight = false;
+  sectionsRefreshQueued = false;
+  sectionsRefreshPromise = null;
   store.unsubscribe(onStoreUpdate);
   store.reset([
     "bandwidthWidget",
@@ -3713,6 +3811,7 @@ var styles = `
 .pdk_dashboard-page {
     width: 100%;
     --dashboard-grid-columns: 4;
+    --dashboard-grid-min-width: 180px;
 }
 
 @media (max-width: 900px) {
@@ -3721,10 +3820,17 @@ var styles = `
     }
 }
 
+@media (max-width: 560px) {
+    .pdk_dashboard-page {
+        --dashboard-grid-columns: 1;
+        --dashboard-grid-min-width: 0;
+    }
+}
+
 .pdk_dashboard-page__widgets-section {
     margin-top: 10px;
     display: grid;
-    grid-template-columns: repeat(var(--dashboard-grid-columns), 1fr);
+    grid-template-columns: repeat(var(--dashboard-grid-columns), minmax(var(--dashboard-grid-min-width), 1fr));
     grid-gap: 10px;
 }
 
@@ -3732,6 +3838,7 @@ var styles = `
     border: 2px var(--background-color-low, lightgray) solid;
     border-radius: 4px;
     padding: 10px;
+    min-width: 0;
 }
 
 .pdk_dashboard-page__widgets-section__item__title {}
@@ -3761,11 +3868,15 @@ var styles = `
     display: flex;
     align-items: center;
     justify-content: space-between;
+    gap: 8px 10px;
+    min-width: 0;
 }
 
 .pdk_dashboard-page__outbound-section__title-section__title {
     color: var(--text-color-high);
     font-weight: 700;
+    min-width: 0;
+    overflow-wrap: anywhere;
 }
 
 .pdk_dashboard-page__outbound-section__title-section__actions {
@@ -3773,7 +3884,6 @@ var styles = `
     align-items: center;
     justify-content: flex-end;
     gap: 6px;
-    margin-left: 10px;
     flex: 0 0 auto;
 }
 
@@ -3803,7 +3913,7 @@ var styles = `
 .pdk_dashboard-page__outbound-grid {
     margin-top: 5px;
     display: grid;
-    grid-template-columns: repeat(var(--dashboard-grid-columns), 1fr);
+    grid-template-columns: repeat(var(--dashboard-grid-columns), minmax(var(--dashboard-grid-min-width), 1fr));
     grid-gap: 10px;
 }
 
@@ -3940,6 +4050,7 @@ var styles = `
     border-radius: 4px;
     padding: 10px;
     transition: border 0.2s ease;
+    min-width: 0;
 }
 
 .pdk_dashboard-page__outbound-grid__item--selectable {
@@ -3989,10 +4100,14 @@ var styles = `
     display: flex;
     align-items: center;
     justify-content: space-between;
+    gap: 8px;
     margin-top: 10px;
 }
 
-.pdk_dashboard-page__outbound-grid__item__type {}
+.pdk_dashboard-page__outbound-grid__item__type {
+    min-width: 0;
+    overflow-wrap: anywhere;
+}
 
 .pdk_dashboard-page__outbound-grid__item__latency--empty {
     color: var(--primary-color-low, lightgray);
