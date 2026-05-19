@@ -564,6 +564,7 @@ sing_box_cf_prepare_subscription_batch() {
                 outbounds: [],
                 tags: [],
                 names: [],
+                servers: [],
                 links: [],
                 skipped: 0,
                 skipped_names: [],
@@ -583,6 +584,7 @@ sing_box_cf_prepare_subscription_batch() {
                 | .outbounds += [($outbound | del(.tag, .remark, .share_link) + {tag: $tag})]
                 | .tags += [$tag]
                 | .names += [$display_name]
+                | .servers += [($outbound.server // "")]
                 | .links += [($outbound.share_link // "")]
                 | .taken[$tag] = true
               end
@@ -674,6 +676,33 @@ sing_box_cf_prepared_links_json() {
     ' 2>/dev/null
 }
 
+sing_box_cf_prepared_names_json() {
+    local prepared_json="$1"
+
+    printf '%s' "$prepared_json" | jq -c '
+        (.tags // []) as $tags
+        | (.names // []) as $names
+        | reduce range(0; ($tags | length)) as $index (
+            {};
+            .[$tags[$index]] = (($names[$index] // $tags[$index]) | tostring)
+        )
+    ' 2>/dev/null
+}
+
+sing_box_cf_prepared_servers_json() {
+    local prepared_json="$1"
+
+    printf '%s' "$prepared_json" | jq -c '
+        (.tags // []) as $tags
+        | (.servers // []) as $servers
+        | reduce range(0; ($tags | length)) as $index (
+            {};
+            (($servers[$index] // "") | tostring) as $server
+            | if $server != "" then .[$tags[$index]] = $server else . end
+        )
+    ' 2>/dev/null
+}
+
 sing_box_cf_prepared_names_lines() {
     local prepared_json="$1"
 
@@ -690,6 +719,7 @@ sing_box_cf_subscription_prepared_slice() {
             outbounds: ((.outbounds // [])[$start:$end]),
             tags: ((.tags // [])[$start:$end]),
             names: ((.names // [])[$start:$end]),
+            servers: ((.servers // [])[$start:$end]),
             links: ((.links // [])[$start:$end]),
             skipped: 0,
             skipped_names: [],
@@ -700,13 +730,17 @@ sing_box_cf_subscription_prepared_slice() {
 
 sing_box_cf_append_subscription_prepared_metadata() {
     local prepared_json="$1"
-    local tags_json links_json names
+    local tags_json links_json names_json servers_json names
 
     tags_json="$(printf '%s' "$prepared_json" | jq -c '.tags // []' 2>/dev/null)"
     [ -n "$tags_json" ] || tags_json="[]"
 
     links_json="$(sing_box_cf_prepared_links_json "$prepared_json")"
     [ -n "$links_json" ] || links_json="{}"
+    names_json="$(sing_box_cf_prepared_names_json "$prepared_json")"
+    [ -n "$names_json" ] || names_json="{}"
+    servers_json="$(sing_box_cf_prepared_servers_json "$prepared_json")"
+    [ -n "$servers_json" ] || servers_json="{}"
 
     SUBSCRIPTION_OUTBOUND_TAGS_JSON="$(printf '%s' "$SUBSCRIPTION_OUTBOUND_TAGS_JSON" |
         jq -c --argjson tags "$tags_json" '. + $tags' 2>/dev/null)"
@@ -715,6 +749,14 @@ sing_box_cf_append_subscription_prepared_metadata() {
     SUBSCRIPTION_OUTBOUND_LINKS_JSON="$(printf '%s' "$SUBSCRIPTION_OUTBOUND_LINKS_JSON" |
         jq -c --argjson links "$links_json" '. + $links' 2>/dev/null)"
     [ -n "$SUBSCRIPTION_OUTBOUND_LINKS_JSON" ] || SUBSCRIPTION_OUTBOUND_LINKS_JSON="{}"
+
+    SUBSCRIPTION_OUTBOUND_NAMES_JSON="$(printf '%s' "$SUBSCRIPTION_OUTBOUND_NAMES_JSON" |
+        jq -c --argjson names "$names_json" '. + $names' 2>/dev/null)"
+    [ -n "$SUBSCRIPTION_OUTBOUND_NAMES_JSON" ] || SUBSCRIPTION_OUTBOUND_NAMES_JSON="{}"
+
+    SUBSCRIPTION_OUTBOUND_SERVERS_JSON="$(printf '%s' "$SUBSCRIPTION_OUTBOUND_SERVERS_JSON" |
+        jq -c --argjson servers "$servers_json" '. + $servers' 2>/dev/null)"
+    [ -n "$SUBSCRIPTION_OUTBOUND_SERVERS_JSON" ] || SUBSCRIPTION_OUTBOUND_SERVERS_JSON="{}"
 
     names="$(sing_box_cf_prepared_names_lines "$prepared_json")"
     if [ -n "$names" ]; then
@@ -748,6 +790,10 @@ sing_box_cf_apply_subscription_batch() {
     SUBSCRIPTION_OUTBOUND_NAMES="$(sing_box_cf_prepared_names_lines "$prepared_json")"
     SUBSCRIPTION_OUTBOUND_LINKS_JSON="$(sing_box_cf_prepared_links_json "$prepared_json")"
     [ -n "$SUBSCRIPTION_OUTBOUND_LINKS_JSON" ] || SUBSCRIPTION_OUTBOUND_LINKS_JSON="{}"
+    SUBSCRIPTION_OUTBOUND_NAMES_JSON="$(sing_box_cf_prepared_names_json "$prepared_json")"
+    [ -n "$SUBSCRIPTION_OUTBOUND_NAMES_JSON" ] || SUBSCRIPTION_OUTBOUND_NAMES_JSON="{}"
+    SUBSCRIPTION_OUTBOUND_SERVERS_JSON="$(sing_box_cf_prepared_servers_json "$prepared_json")"
+    [ -n "$SUBSCRIPTION_OUTBOUND_SERVERS_JSON" ] || SUBSCRIPTION_OUTBOUND_SERVERS_JSON="{}"
     SING_BOX_CF_LAST_CONFIG="$SING_BOX_CF_VALIDATED_CONFIG"
 
     return 0
@@ -823,6 +869,8 @@ sing_box_cf_apply_subscription_outbounds_chunked() {
     SING_BOX_CF_FALLBACK_SKIPPED_COUNT=0
     SUBSCRIPTION_OUTBOUND_TAGS_JSON="[]"
     SUBSCRIPTION_OUTBOUND_LINKS_JSON="{}"
+    SUBSCRIPTION_OUTBOUND_NAMES_JSON="{}"
+    SUBSCRIPTION_OUTBOUND_SERVERS_JSON="{}"
     SUBSCRIPTION_OUTBOUND_NAMES=""
 
     if [ "$outbounds_count" -le 8 ]; then
@@ -858,6 +906,8 @@ sing_box_cf_add_subscription_outbounds() {
     SUBSCRIPTION_OUTBOUND_TAGS=""
     SUBSCRIPTION_OUTBOUND_TAGS_JSON="[]"
     SUBSCRIPTION_OUTBOUND_LINKS_JSON="{}"
+    SUBSCRIPTION_OUTBOUND_NAMES_JSON="{}"
+    SUBSCRIPTION_OUTBOUND_SERVERS_JSON="{}"
     SUBSCRIPTION_OUTBOUND_NAMES=""
     SING_BOX_CF_LAST_CONFIG="$config"
 

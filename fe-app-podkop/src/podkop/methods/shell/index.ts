@@ -35,6 +35,11 @@ export const PodkopShellMethods = {
       Podkop.AvailableMethods.GET_OUTBOUND_LINK_STATES,
       [section],
     ),
+  getOutboundMetadata: async (section: string) =>
+    callBaseMethod<Podkop.GetOutboundMetadata>(
+      Podkop.AvailableMethods.GET_OUTBOUND_METADATA,
+      [section],
+    ),
   getSubscriptionMetadata: async (section: string) =>
     callBaseMethod<Podkop.SubscriptionMetadata | Podkop.SubscriptionMetadata[]>(
       Podkop.AvailableMethods.GET_SUBSCRIPTION_METADATA,

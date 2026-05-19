@@ -48,6 +48,8 @@ PODKOP_LIST_UPDATE_STATE_FILE="$PODKOP_RUNTIME_STATE_DIR/list-update.timestamp"
 PODKOP_SUBSCRIPTION_UPDATE_STATE_DIR="$PODKOP_RUNTIME_STATE_DIR/subscription-update"
 PODKOP_SUBSCRIPTION_LINKS_DIR="$PODKOP_RUNTIME_STATE_DIR/subscription-links"
 PODKOP_SUBSCRIPTION_METADATA_DIR="$PODKOP_RUNTIME_STATE_DIR/subscription-metadata"
+PODKOP_OUTBOUND_METADATA_DIR="$PODKOP_RUNTIME_STATE_DIR/outbound-metadata"
+PODKOP_SERVER_COUNTRY_CACHE_FILE="$PODKOP_RUNTIME_STATE_DIR/server-country-cache.json"
 PODKOP_SUBSCRIPTION_UPDATE_LOCK_DIR="$PODKOP_RUNTIME_STATE_DIR/subscription-update.lock"
 PODKOP_RELOAD_LOCK_DIR="/var/run/podkop-plus.reload.lock"
 PODKOP_LIST_UPDATE_CRON_MARKER="# podkop-plus-list-update"
@@ -76,6 +78,7 @@ ensure_runtime_dirs() {
     mkdir -p "$PODKOP_SUBSCRIPTION_UPDATE_STATE_DIR"
     mkdir -p "$PODKOP_SUBSCRIPTION_LINKS_DIR"
     mkdir -p "$PODKOP_SUBSCRIPTION_METADATA_DIR"
+    mkdir -p "$PODKOP_OUTBOUND_METADATA_DIR"
 }
 
 get_subscription_json_path() {
@@ -114,6 +117,12 @@ get_subscription_metadata_path() {
     echo "$PODKOP_SUBSCRIPTION_METADATA_DIR/${section}.json"
 }
 
+get_outbound_metadata_path() {
+    local section="$1"
+
+    echo "$PODKOP_OUTBOUND_METADATA_DIR/${section}.json"
+}
+
 write_subscription_outbound_links() {
     local section="$1"
     local links_json="$2"
@@ -127,6 +136,35 @@ write_subscription_outbound_links() {
         printf '%s\n' "$links_json" > "$tmpfile" && mv "$tmpfile" "$links_path"
     else
         rm -f "$links_path" "$tmpfile"
+    fi
+}
+
+write_outbound_metadata() {
+    local section="$1"
+    local names_json="$2"
+    local countries_json="$3"
+    local metadata_path tmpfile
+
+    mkdir -p "$PODKOP_OUTBOUND_METADATA_DIR"
+    metadata_path="$(get_outbound_metadata_path "$section")"
+    tmpfile="${metadata_path}.$$"
+    [ -n "$names_json" ] || names_json="{}"
+    [ -n "$countries_json" ] || countries_json="{}"
+
+    if ! printf '%s' "$names_json" | jq -e 'type == "object"' >/dev/null 2>&1; then
+        log "Invalid outbound name metadata for rule '$section'; writing empty names" "warn"
+        names_json="{}"
+    fi
+    if ! printf '%s' "$countries_json" | jq -e 'type == "object"' >/dev/null 2>&1; then
+        log "Invalid outbound country metadata for rule '$section'; writing empty countries" "warn"
+        countries_json="{}"
+    fi
+
+    if jq -cn --argjson names "$names_json" --argjson countries "$countries_json" \
+        '{names: ($names // {}), countries: ($countries // {})}' > "$tmpfile" 2>/dev/null; then
+        mv "$tmpfile" "$metadata_path"
+    else
+        rm -f "$tmpfile"
     fi
 }
 
@@ -1123,26 +1161,35 @@ append_sing_box_rule_signature() {
     proxy)
         local selector_proxy_links subscription_urls udp_over_tcp urltest_enabled \
             urltest_check_interval urltest_tolerance urltest_testing_url subscription_update_enabled \
-            subscription_update_interval
+            subscription_update_interval detect_server_country urltest_exclude_countries \
+            urltest_exclude_outbounds urltest_exclude_regex
         proxy_config_type="$(get_proxy_config_type "$section")"
         config_get selector_proxy_links "$section" "selector_proxy_links"
         config_get subscription_urls "$section" "subscription_urls"
         config_get_bool udp_over_tcp "$section" "enable_udp_over_tcp" 0
         config_get_bool urltest_enabled "$section" "urltest_enabled" 0
+        config_get_bool detect_server_country "$section" "detect_server_country" 0
         urltest_check_interval="$(get_urltest_check_interval_for_rule "$section")"
         config_get urltest_tolerance "$section" "urltest_tolerance" 50
         config_get urltest_testing_url "$section" "urltest_testing_url" "https://www.gstatic.com/generate_204"
         config_get_bool subscription_update_enabled "$section" "subscription_update_enabled" 1
         subscription_update_interval="$(get_subscription_update_interval_for_rule "$section")"
+        config_get urltest_exclude_countries "$section" "urltest_exclude_countries"
+        config_get urltest_exclude_outbounds "$section" "urltest_exclude_outbounds"
+        config_get urltest_exclude_regex "$section" "urltest_exclude_regex"
 
         signature_add "rule.$section.proxy_config_type" "$proxy_config_type"
         signature_add "rule.$section.selector_proxy_links" "$selector_proxy_links"
         signature_add "rule.$section.subscription_urls" "$subscription_urls"
         signature_add "rule.$section.enable_udp_over_tcp" "$udp_over_tcp"
         signature_add "rule.$section.urltest_enabled" "$urltest_enabled"
+        signature_add "rule.$section.detect_server_country" "$detect_server_country"
         signature_add "rule.$section.urltest_check_interval" "$urltest_check_interval"
         signature_add "rule.$section.urltest_tolerance" "$urltest_tolerance"
         signature_add "rule.$section.urltest_testing_url" "$urltest_testing_url"
+        signature_add "rule.$section.urltest_exclude_countries" "$urltest_exclude_countries"
+        signature_add "rule.$section.urltest_exclude_outbounds" "$urltest_exclude_outbounds"
+        signature_add "rule.$section.urltest_exclude_regex" "$urltest_exclude_regex"
         signature_add "rule.$section.subscription_update_enabled" "$subscription_update_enabled"
         signature_add "rule.$section.subscription_update_interval" "$subscription_update_interval"
 
@@ -3145,6 +3192,37 @@ validate_subscription_source_entry() {
     fi
 }
 
+validate_country_code_option() {
+    local value="$1"
+    local section="$2"
+    local normalized
+
+    [ -n "$value" ] || return 0
+    normalized="$(printf '%s' "$value" | tr 'a-z' 'A-Z')"
+    if printf '%s' "$normalized" | grep -Eq '^[A-Z][A-Z]$'; then
+        return 0
+    fi
+
+    log "Invalid country code '$value' in rule '$section'. Aborted." "fatal"
+    exit 1
+}
+
+validate_urltest_exclude_regex_option() {
+    local value="$1"
+    local section="$2"
+    local grep_status
+
+    [ -n "$value" ] || return 0
+    printf '%s\n' "__podkop_regex_validation__" | grep -E -e "$value" >/dev/null 2>&1
+    grep_status=$?
+    if [ "$grep_status" -ne 2 ]; then
+        return 0
+    fi
+
+    log "Invalid URLTest exclude regular expression '$value' in rule '$section'. Aborted." "fatal"
+    exit 1
+}
+
 ruleset_kind_from_reference_hint() {
     local reference="$1"
 
@@ -3327,6 +3405,8 @@ process_validate_rule() {
         if [ "$urltest_enabled" -eq 1 ]; then
             urltest_check_interval="$(get_urltest_check_interval_for_rule "$section")"
             validate_required_sing_box_duration_option "$urltest_check_interval" "rule.$section.urltest_check_interval"
+            config_list_foreach "$section" "urltest_exclude_countries" validate_country_code_option "$section"
+            config_list_foreach "$section" "urltest_exclude_regex" validate_urltest_exclude_regex_option "$section"
         fi
 
         if rule_has_subscription_urls "$section"; then
@@ -4839,6 +4919,511 @@ json_objects_merge() {
     printf '%s\n' "$result"
 }
 
+config_list_append_json() {
+    local value="$1"
+
+    CONFIG_LIST_VALUES_JSON="$(json_array_append_string "$CONFIG_LIST_VALUES_JSON" "$value")" || CONFIG_LIST_VALUES_JSON="[]"
+}
+
+config_list_to_json() {
+    local section="$1"
+    local option="$2"
+
+    CONFIG_LIST_VALUES_JSON="[]"
+    config_list_foreach "$section" "$option" config_list_append_json
+    printf '%s\n' "$CONFIG_LIST_VALUES_JSON"
+}
+
+get_urltest_regex_excluded_tags_json() {
+    local tags_json="$1"
+    local names_json="$2"
+    local regex_json="$3"
+    local tag_count regex_count index regex_index tag name regex result_json
+
+    result_json="[]"
+    tag_count="$(printf '%s' "$tags_json" | jq -r 'length' 2>/dev/null)"
+    regex_count="$(printf '%s' "$regex_json" | jq -r 'length' 2>/dev/null)"
+    case "$tag_count:$regex_count" in
+    *[!0-9:]* | :* | *:)
+        printf '[]\n'
+        return 0
+        ;;
+    esac
+
+    [ "$tag_count" -gt 0 ] && [ "$regex_count" -gt 0 ] || {
+        printf '[]\n'
+        return 0
+    }
+
+    index=0
+    while [ "$index" -lt "$tag_count" ]; do
+        tag="$(printf '%s' "$tags_json" | jq -r --argjson index "$index" '.[$index] // empty' 2>/dev/null)"
+        index=$((index + 1))
+        [ -n "$tag" ] || continue
+
+        name="$(printf '%s' "$names_json" | jq -r --arg tag "$tag" '.[$tag] // $tag' 2>/dev/null)"
+        [ -n "$name" ] || name="$tag"
+
+        regex_index=0
+        while [ "$regex_index" -lt "$regex_count" ]; do
+            regex="$(printf '%s' "$regex_json" | jq -r --argjson index "$regex_index" '.[$index] // empty' 2>/dev/null)"
+            regex_index=$((regex_index + 1))
+            [ -n "$regex" ] || continue
+
+            if printf '%s\n' "$name" | grep -E -e "$regex" >/dev/null 2>&1; then
+                result_json="$(json_array_append_string "$result_json" "$tag")" || result_json="[]"
+                break
+            fi
+        done
+    done
+
+    printf '%s\n' "$result_json"
+}
+
+is_ipv6_literal() {
+    local value="$1"
+
+    case "$value" in
+    *:*) ;;
+    *) return 1 ;;
+    esac
+
+    printf '%s' "$value" | grep -Eq '^[0-9A-Fa-f:.]+$'
+}
+
+normalize_country_server_key() {
+    printf '%s' "$1" | trim_string | tr 'A-Z' 'a-z'
+}
+
+resolve_country_server_ip() {
+    local server="$1"
+    local normalized ip
+
+    normalized="$(normalize_country_server_key "$server")"
+    [ -n "$normalized" ] || return 1
+
+    if is_ipv4 "$normalized" || is_ipv6_literal "$normalized"; then
+        printf '%s\n' "$normalized"
+        return 0
+    fi
+
+    is_domain "$normalized" || return 1
+
+    if command -v dig >/dev/null 2>&1; then
+        ip="$(dig +short "$normalized" A +time=2 +tries=1 2>/dev/null | awk '
+            /^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$/ { print; exit }
+        ')"
+        if [ -z "$ip" ]; then
+            ip="$(dig +short "$normalized" AAAA +time=2 +tries=1 2>/dev/null | awk '
+                /^[0-9A-Fa-f:]+$/ { print; exit }
+            ')"
+        fi
+    elif command -v nslookup >/dev/null 2>&1; then
+        ip="$(nslookup "$normalized" 2>/dev/null | awk '
+            /^Address[[:space:]]*[0-9]*:[[:space:]]*[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$/ { print $NF; exit }
+            /^Address[[:space:]]*[0-9]*:[[:space:]]*[0-9A-Fa-f:]+$/ { print $NF; exit }
+        ')"
+    fi
+
+    [ -n "$ip" ] || return 1
+    printf '%s\n' "$ip"
+}
+
+read_server_country_cache() {
+    if [ -s "$PODKOP_SERVER_COUNTRY_CACHE_FILE" ] &&
+        jq -e 'type == "object"' "$PODKOP_SERVER_COUNTRY_CACHE_FILE" >/dev/null 2>&1; then
+        jq -c '.' "$PODKOP_SERVER_COUNTRY_CACHE_FILE" 2>/dev/null
+        return 0
+    fi
+
+    printf '{}\n'
+}
+
+write_server_country_cache_patch() {
+    local patch_json="$1"
+    local cache_json tmpfile
+
+    [ -n "$patch_json" ] || return 0
+    printf '%s' "$patch_json" | jq -e 'type == "object"' >/dev/null 2>&1 || return 0
+
+    mkdir -p "$PODKOP_RUNTIME_STATE_DIR"
+    cache_json="$(read_server_country_cache)"
+    tmpfile="${PODKOP_SERVER_COUNTRY_CACHE_FILE}.$$"
+
+    if jq -cn --argjson cache "$cache_json" --argjson patch "$patch_json" '$cache + $patch' > "$tmpfile" 2>/dev/null; then
+        mv "$tmpfile" "$PODKOP_SERVER_COUNTRY_CACHE_FILE"
+    else
+        rm -f "$tmpfile"
+    fi
+}
+
+country_is_lookup_ips_individually() {
+    local ips_json="$1"
+    local ip_count index ip body_tmp http_code body_error country
+    local result_tmp result_json jq_status
+
+    result_tmp="$(mktemp)" || return 1
+    : > "$result_tmp"
+
+    ip_count="$(printf '%s' "$ips_json" | jq -r 'length' 2>/dev/null)"
+    case "$ip_count" in
+    '' | *[!0-9]*)
+        rm -f "$result_tmp"
+        return 1
+        ;;
+    esac
+
+    index=0
+    while [ "$index" -lt "$ip_count" ]; do
+        ip="$(printf '%s' "$ips_json" | jq -r --argjson index "$index" '.[$index] // empty' 2>/dev/null)"
+        index=$((index + 1))
+        [ -n "$ip" ] || continue
+
+        body_tmp="$(mktemp)" || {
+            rm -f "$result_tmp"
+            return 1
+        }
+        http_code="$(curl -sS -m 10 -o "$body_tmp" -w '%{http_code}' \
+            "https://api.country.is/${ip}" 2>/dev/null || true)"
+        body_error="$(jq -r '.error.code // .code // .error // empty' "$body_tmp" 2>/dev/null)"
+
+        if [ "$body_error" = "rate_limit" ] || [ "$http_code" = "429" ]; then
+            log "country.is rate_limit response while detecting server countries" "warn"
+            rm -f "$body_tmp"
+            break
+        fi
+
+        if [ "$http_code" = "200" ]; then
+            country="$(jq -r 'select((.ip // "") != "" and (.country // "") != "") | .country' "$body_tmp" 2>/dev/null)"
+            if [ -n "$country" ] && [ "$country" != "null" ]; then
+                printf '%s\t%s\n' "$ip" "$country" >> "$result_tmp"
+            fi
+        elif [ "$http_code" != "404" ]; then
+            log "country.is single lookup failed with HTTP status ${http_code:-unknown}" "warn"
+        fi
+
+        rm -f "$body_tmp"
+        [ $((index % 10)) -eq 0 ] && [ "$index" -lt "$ip_count" ] && sleep 1
+    done
+
+    result_json="$(jq -Rn '
+        reduce inputs as $line (
+            {};
+            ($line | split("\t")) as $parts
+            | if ($parts | length) >= 2 then .[$parts[0]] = $parts[1] else . end
+        )
+    ' < "$result_tmp" 2>/dev/null)"
+    jq_status=$?
+    rm -f "$result_tmp"
+
+    [ "$jq_status" -eq 0 ] || return 1
+    [ -n "$result_json" ] || result_json="{}"
+    printf '%s\n' "$result_json"
+}
+
+country_is_lookup_ips() {
+    local ips_json="$1"
+    local ip_count start end batch_json body_tmp http_code body_error
+    local result_tmp result_json fallback_ips_json fallback_json jq_status
+
+    result_tmp="$(mktemp)" || return 1
+    : > "$result_tmp"
+
+    ip_count="$(printf '%s' "$ips_json" | jq -r 'length' 2>/dev/null)"
+    case "$ip_count" in
+    '' | *[!0-9]*)
+        rm -f "$result_tmp"
+        return 1
+        ;;
+    esac
+
+    start=0
+    while [ "$start" -lt "$ip_count" ]; do
+        end=$((start + 100))
+        batch_json="$(printf '%s' "$ips_json" | jq -c --argjson start "$start" --argjson end "$end" '.[$start:$end]' 2>/dev/null)"
+        if [ -z "$batch_json" ] || [ "$batch_json" = "[]" ]; then
+            break
+        fi
+
+        body_tmp="$(mktemp)" || {
+            rm -f "$result_tmp"
+            return 1
+        }
+
+        http_code="$(curl -sS -m 10 -o "$body_tmp" -w '%{http_code}' \
+            -H 'Content-Type: application/json' \
+            -d "$batch_json" \
+            'https://api.country.is/' 2>/dev/null || true)"
+
+        body_error="$(jq -r '.error.code // .code // .error // empty' "$body_tmp" 2>/dev/null)"
+        if [ "$body_error" = "rate_limit" ]; then
+            log "country.is rate_limit response while detecting server countries" "warn"
+            rm -f "$body_tmp"
+            break
+        fi
+
+        if [ "$http_code" = "200" ]; then
+            jq -r '.[]? | select((.ip // "") != "" and (.country // "") != "") | [.ip, .country] | @tsv' \
+                "$body_tmp" >> "$result_tmp" 2>/dev/null || true
+        elif [ "$http_code" = "429" ]; then
+            log "country.is rate limit reached while detecting server countries" "warn"
+            rm -f "$body_tmp"
+            break
+        else
+            log "country.is lookup failed with HTTP status ${http_code:-unknown}" "warn"
+        fi
+
+        rm -f "$body_tmp"
+        start="$end"
+        [ "$start" -lt "$ip_count" ] && sleep 1
+    done
+
+    result_json="$(jq -Rn '
+        reduce inputs as $line (
+            {};
+            ($line | split("\t")) as $parts
+            | if ($parts | length) >= 2 then .[$parts[0]] = $parts[1] else . end
+        )
+    ' < "$result_tmp" 2>/dev/null)"
+    jq_status=$?
+    rm -f "$result_tmp"
+
+    [ "$jq_status" -eq 0 ] || return 1
+    [ -n "$result_json" ] || result_json="{}"
+
+    fallback_ips_json="$(jq -cn --argjson ips "$ips_json" --argjson result "$result_json" '
+        $ips | map(select(($result[.] // "") == ""))
+    ' 2>/dev/null)"
+    if [ -n "$fallback_ips_json" ] && [ "$fallback_ips_json" != "[]" ]; then
+        log "country.is batch response missed some IPs; retrying them individually" "info"
+        fallback_json="$(country_is_lookup_ips_individually "$fallback_ips_json" 2>/dev/null || printf '{}')"
+        [ -n "$fallback_json" ] || fallback_json="{}"
+        result_json="$(jq -cn --argjson batch "$result_json" --argjson fallback "$fallback_json" '$batch + $fallback' 2>/dev/null)"
+        [ -n "$result_json" ] || result_json="{}"
+    fi
+
+    printf '%s\n' "$result_json"
+}
+
+detect_server_countries_for_tags() {
+    local servers_json="$1"
+    local section="${2:-}"
+    local cache_json cached_countries_json missing_tmp resolved_tmp ips_json ip_country_json
+    local resolved_countries_json cache_patch_json now line tag server_key server ip
+    local server_count cached_count missing_count resolved_count resolved_ip_count ip_country_count detected_count unresolved_count log_prefix
+
+    if [ -z "$servers_json" ] || ! printf '%s' "$servers_json" | jq -e 'type == "object"' >/dev/null 2>&1; then
+        printf '{}\n'
+        return 0
+    fi
+
+    if [ -n "$section" ]; then
+        log_prefix="rule '$section'"
+    else
+        log_prefix="current proxy rule"
+    fi
+
+    server_count="$(printf '%s' "$servers_json" | jq -r 'length' 2>/dev/null)"
+    case "$server_count" in
+    '' | *[!0-9]*) server_count=0 ;;
+    esac
+    if [ "$server_count" -eq 0 ]; then
+        log "Country detection skipped for $log_prefix: no servers to check" "debug"
+        printf '{}\n'
+        return 0
+    fi
+
+    cache_json="$(read_server_country_cache)"
+    cached_countries_json="$(jq -cn --argjson servers "$servers_json" --argjson cache "$cache_json" '
+        reduce ($servers | to_entries[]) as $entry (
+            {};
+            ($entry.value | tostring | ascii_downcase) as $server
+            | ($cache[$server].country // "") as $country
+            | if $country != "" then .[$entry.key] = $country else . end
+        )
+    ' 2>/dev/null)"
+    [ -n "$cached_countries_json" ] || cached_countries_json="{}"
+    cached_count="$(printf '%s' "$cached_countries_json" | jq -r 'length' 2>/dev/null)"
+    case "$cached_count" in
+    '' | *[!0-9]*) cached_count=0 ;;
+    esac
+
+    missing_tmp="$(mktemp)" || {
+        printf '%s\n' "$cached_countries_json"
+        return 0
+    }
+    resolved_tmp="$(mktemp)" || {
+        rm -f "$missing_tmp"
+        printf '%s\n' "$cached_countries_json"
+        return 0
+    }
+
+    jq -r --argjson cache "$cache_json" '
+        to_entries[]?
+        | (.value | tostring | ascii_downcase) as $server
+        | select($server != "" and (($cache[$server].country // "") == ""))
+        | [.key, $server, .value] | @tsv
+    ' <<EOF > "$missing_tmp" 2>/dev/null
+$servers_json
+EOF
+
+    missing_count="$(wc -l < "$missing_tmp" 2>/dev/null | tr -d ' ')"
+    case "$missing_count" in
+    '' | *[!0-9]*) missing_count=0 ;;
+    esac
+    log "Country detection for $log_prefix: $server_count server(s), $cached_count cached, $missing_count new" "info"
+
+    while IFS="$(printf '\t')" read -r tag server_key server || [ -n "$tag" ]; do
+        [ -n "$tag" ] || continue
+        ip="$(resolve_country_server_ip "$server")" || continue
+        [ -n "$ip" ] || continue
+        printf '%s\t%s\t%s\n' "$tag" "$server_key" "$ip" >> "$resolved_tmp"
+    done < "$missing_tmp"
+
+    resolved_count="$(wc -l < "$resolved_tmp" 2>/dev/null | tr -d ' ')"
+    case "$resolved_count" in
+    '' | *[!0-9]*) resolved_count=0 ;;
+    esac
+    resolved_ip_count="$(cut -f 3 "$resolved_tmp" 2>/dev/null | sort -u | wc -l | tr -d ' ')"
+    case "$resolved_ip_count" in
+    '' | *[!0-9]*) resolved_ip_count=0 ;;
+    esac
+
+    if [ ! -s "$resolved_tmp" ]; then
+        if [ "$missing_count" -gt 0 ]; then
+            log "Country detection for $log_prefix: failed to resolve IP address for $missing_count server(s)" "warn"
+        fi
+        rm -f "$missing_tmp" "$resolved_tmp"
+        printf '%s\n' "$cached_countries_json"
+        return 0
+    fi
+
+    unresolved_count=$((missing_count - resolved_count))
+    [ "$unresolved_count" -le 0 ] || log "Country detection for $log_prefix: failed to resolve IP address for $unresolved_count server(s)" "warn"
+    log "Country detection for $log_prefix: querying country.is for $resolved_ip_count IP address(es)" "info"
+
+    ips_json="$(cut -f 3 "$resolved_tmp" | sort -u | jq -R -s -c 'split("\n") | map(select(length > 0))' 2>/dev/null)"
+    [ -n "$ips_json" ] || ips_json="[]"
+    ip_country_json="$(country_is_lookup_ips "$ips_json" 2>/dev/null || printf '{}')"
+    [ -n "$ip_country_json" ] || ip_country_json="{}"
+    ip_country_count="$(printf '%s' "$ip_country_json" | jq -r 'length' 2>/dev/null)"
+    case "$ip_country_count" in
+    '' | *[!0-9]*) ip_country_count=0 ;;
+    esac
+    if [ "$ip_country_count" -eq 0 ]; then
+        log "Country detection for $log_prefix: country.is did not return countries for requested IPs" "warn"
+    else
+        log "Country detection for $log_prefix: country.is returned $ip_country_count country result(s)" "info"
+    fi
+
+    resolved_countries_json="$(jq -Rn --argjson ip_country "$ip_country_json" '
+        reduce inputs as $line (
+            {};
+            ($line | split("\t")) as $parts
+            | if ($parts | length) >= 3 then
+                ($ip_country[$parts[2]] // "") as $country
+                | if $country != "" then .[$parts[0]] = $country else . end
+              else
+                .
+              end
+        )
+    ' < "$resolved_tmp" 2>/dev/null)"
+    [ -n "$resolved_countries_json" ] || resolved_countries_json="{}"
+    detected_count="$(printf '%s' "$resolved_countries_json" | jq -r 'length' 2>/dev/null)"
+    case "$detected_count" in
+    '' | *[!0-9]*) detected_count=0 ;;
+    esac
+
+    now="$(date +%s 2>/dev/null)"
+    case "$now" in
+    '' | *[!0-9]*) now=0 ;;
+    esac
+
+    cache_patch_json="$(jq -Rn --argjson ip_country "$ip_country_json" --argjson updated_at "$now" '
+        reduce inputs as $line (
+            {};
+            ($line | split("\t")) as $parts
+            | if ($parts | length) >= 3 then
+                ($ip_country[$parts[2]] // "") as $country
+                | if $country != "" then
+                    .[$parts[1]] = { ip: $parts[2], country: $country, updated_at: $updated_at }
+                  else
+                    .
+                  end
+              else
+                .
+              end
+        )
+    ' < "$resolved_tmp" 2>/dev/null)"
+    [ -n "$cache_patch_json" ] || cache_patch_json="{}"
+    write_server_country_cache_patch "$cache_patch_json"
+
+    rm -f "$missing_tmp" "$resolved_tmp"
+    log "Country detection for $log_prefix: detected countries for $detected_count new server(s)" "info"
+    jq -cn --argjson cached "$cached_countries_json" --argjson resolved "$resolved_countries_json" '$cached + $resolved' 2>/dev/null ||
+        printf '%s\n' "$cached_countries_json"
+}
+
+filter_urltest_outbounds() {
+    local section="$1"
+    local tags_json="$2"
+    local names_json="$3"
+    local countries_json="$4"
+    local country_filter_enabled="$5"
+    local exclude_names_json exclude_regex_json exclude_regex_tags_json exclude_countries_json filtered_json filtered_count original_count
+
+    exclude_names_json="$(config_list_to_json "$section" "urltest_exclude_outbounds")"
+    exclude_regex_json="$(config_list_to_json "$section" "urltest_exclude_regex")"
+    exclude_regex_tags_json="$(get_urltest_regex_excluded_tags_json "$tags_json" "$names_json" "$exclude_regex_json")"
+    [ -n "$exclude_regex_tags_json" ] || exclude_regex_tags_json="[]"
+    exclude_countries_json="[]"
+    if [ "$country_filter_enabled" -eq 1 ]; then
+        exclude_countries_json="$(config_list_to_json "$section" "urltest_exclude_countries" |
+            jq -c 'map(tostring | ascii_upcase | select(length == 2))' 2>/dev/null)"
+        [ -n "$exclude_countries_json" ] || exclude_countries_json="[]"
+    fi
+
+    filtered_json="$(jq -cn \
+        --argjson tags "$tags_json" \
+        --argjson names "$names_json" \
+        --argjson countries "$countries_json" \
+        --argjson exclude_names "$exclude_names_json" \
+        --argjson exclude_regex_tags "$exclude_regex_tags_json" \
+        --argjson exclude_countries "$exclude_countries_json" '
+        reduce ($tags // [])[] as $tag (
+            [];
+            ($names[$tag] // $tag) as $name
+            | (($countries[$tag] // "") | ascii_upcase) as $country
+            | if
+                (($exclude_names | index($name)) != null) or
+                (($exclude_names | index($tag)) != null) or
+                ($country != "" and (($exclude_countries | index($country)) != null)) or
+                (($exclude_regex_tags | index($tag)) != null)
+              then
+                .
+              else
+                . + [$tag]
+              end
+        )
+    ' 2>/dev/null)"
+
+    [ -n "$filtered_json" ] || filtered_json="$tags_json"
+    filtered_count="$(printf '%s' "$filtered_json" | jq -r 'length' 2>/dev/null)"
+    original_count="$(printf '%s' "$tags_json" | jq -r 'length' 2>/dev/null)"
+
+    if [ -z "$filtered_count" ] || [ "$filtered_count" -eq 0 ]; then
+        log "URLTest filters excluded all outbounds for rule '$section'; URLTest will be disabled for this rule" "warn"
+        printf '[]\n'
+        return 0
+    fi
+
+    if [ -n "$original_count" ] && [ "$filtered_count" -lt "$original_count" ]; then
+        log "URLTest filters excluded $((original_count - filtered_count)) outbound(s) for rule '$section'" "info"
+    fi
+
+    printf '%s\n' "$filtered_json"
+}
+
 is_truthy_option() {
     local value="$1"
 
@@ -4878,9 +5463,16 @@ get_urltest_idle_timeout_for_config() {
 proxy_group_append_outbound() {
     local tag="$1"
     local link="${2:-}"
+    local display_name="${3:-$tag}"
+    local server="${4:-}"
 
     PROXY_GROUP_OUTBOUND_TAGS_JSON="$(json_array_append_string "$PROXY_GROUP_OUTBOUND_TAGS_JSON" "$tag")" || {
         log "Failed to append outbound '$tag' for proxy rule '$PROXY_GROUP_SECTION'. Aborted." "fatal"
+        exit 1
+    }
+
+    PROXY_GROUP_NAMES_JSON="$(json_object_set_string "$PROXY_GROUP_NAMES_JSON" "$tag" "$display_name")" || {
+        log "Failed to record outbound name for proxy rule '$PROXY_GROUP_SECTION'. Aborted." "fatal"
         exit 1
     }
 
@@ -4890,18 +5482,28 @@ proxy_group_append_outbound() {
             exit 1
         }
     fi
+
+    if [ -n "$server" ]; then
+        PROXY_GROUP_SERVERS_JSON="$(json_object_set_string "$PROXY_GROUP_SERVERS_JSON" "$tag" "$server")" || {
+            log "Failed to record outbound server for proxy rule '$PROXY_GROUP_SECTION'. Aborted." "fatal"
+            exit 1
+        }
+    fi
 }
 
 proxy_group_add_manual_link() {
     local link="$1"
     local section="$2"
     local udp_over_tcp="$3"
-    local outbound_tag
+    local outbound_tag display_name server
 
     PROXY_GROUP_MANUAL_INDEX=$((PROXY_GROUP_MANUAL_INDEX + 1))
     config="$(sing_box_cf_add_proxy_outbound "$config" "$section-$PROXY_GROUP_MANUAL_INDEX" "$link" "$udp_over_tcp")"
     outbound_tag="$(get_outbound_tag_by_section "$section-$PROXY_GROUP_MANUAL_INDEX")"
-    proxy_group_append_outbound "$outbound_tag" "$link"
+    display_name="$(subscription_url_get_fragment "$link")"
+    [ -n "$display_name" ] || display_name="$outbound_tag"
+    server="$(printf '%s' "$config" | jq -r --arg tag "$outbound_tag" '.outbounds[]? | select(.tag == $tag) | .server // empty' 2>/dev/null)"
+    proxy_group_append_outbound "$outbound_tag" "$link" "$display_name" "$server"
 }
 
 proxy_group_add_legacy_proxy_string_links() {
@@ -4953,6 +5555,14 @@ proxy_group_add_subscription_source() {
     }
     PROXY_GROUP_LINKS_JSON="$(json_objects_merge "$PROXY_GROUP_LINKS_JSON" "$SUBSCRIPTION_OUTBOUND_LINKS_JSON")" || {
         log "Failed to merge subscription outbound links for rule '$section'. Aborted." "fatal"
+        exit 1
+    }
+    PROXY_GROUP_NAMES_JSON="$(json_objects_merge "$PROXY_GROUP_NAMES_JSON" "$SUBSCRIPTION_OUTBOUND_NAMES_JSON")" || {
+        log "Failed to merge subscription outbound names for rule '$section'. Aborted." "fatal"
+        exit 1
+    }
+    PROXY_GROUP_SERVERS_JSON="$(json_objects_merge "$PROXY_GROUP_SERVERS_JSON" "$SUBSCRIPTION_OUTBOUND_SERVERS_JSON")" || {
+        log "Failed to merge subscription outbound servers for rule '$section'. Aborted." "fatal"
         exit 1
     }
 }
@@ -5021,7 +5631,8 @@ configure_outbound_handler() {
     if [ "$action" = "proxy" ]; then
         local selector_proxy_links urltest_proxy_links proxy_string subscription_urls subscription_url \
             udp_over_tcp urltest_enabled urltest_tag selector_tag selector_outbounds selector_default \
-            urltest_check_interval urltest_idle_timeout urltest_tolerance urltest_testing_url outbounds_count
+            urltest_check_interval urltest_idle_timeout urltest_tolerance urltest_testing_url outbounds_count \
+            detect_server_country urltest_outbounds urltest_outbounds_count
 
         config_get selector_proxy_links "$section" "selector_proxy_links"
         config_get urltest_proxy_links "$section" "urltest_proxy_links"
@@ -5030,11 +5641,16 @@ configure_outbound_handler() {
         config_get subscription_url "$section" "subscription_url"
         config_get udp_over_tcp "$section" "enable_udp_over_tcp"
         config_get_bool urltest_enabled "$section" "urltest_enabled" 0
+        config_get_bool detect_server_country "$section" "detect_server_country" 0
 
         PROXY_GROUP_SECTION="$section"
         PROXY_GROUP_MANUAL_INDEX=0
         PROXY_GROUP_OUTBOUND_TAGS_JSON="[]"
         PROXY_GROUP_LINKS_JSON="{}"
+        PROXY_GROUP_NAMES_JSON="{}"
+        PROXY_GROUP_SERVERS_JSON="{}"
+        PROXY_GROUP_COUNTRIES_JSON="{}"
+        PROXY_GROUP_DETECT_COUNTRIES="$detect_server_country"
 
         config_list_foreach "$section" "selector_proxy_links" proxy_group_add_manual_link "$section" "$udp_over_tcp"
         if [ -z "$selector_proxy_links" ]; then
@@ -5044,6 +5660,11 @@ configure_outbound_handler() {
 
         if rule_has_subscription_urls "$section"; then
             for_each_subscription_source "$section" proxy_group_add_subscription_source
+        fi
+
+        if [ "$PROXY_GROUP_DETECT_COUNTRIES" -eq 1 ]; then
+            PROXY_GROUP_COUNTRIES_JSON="$(detect_server_countries_for_tags "$PROXY_GROUP_SERVERS_JSON" "$section")"
+            [ -n "$PROXY_GROUP_COUNTRIES_JSON" ] || PROXY_GROUP_COUNTRIES_JSON="{}"
         fi
 
         outbounds_count="$(printf '%s' "$PROXY_GROUP_OUTBOUND_TAGS_JSON" | jq -r 'length' 2>/dev/null)"
@@ -5060,16 +5681,34 @@ configure_outbound_handler() {
             config_get urltest_tolerance "$section" "urltest_tolerance" 50
             config_get urltest_testing_url "$section" "urltest_testing_url" "https://www.gstatic.com/generate_204"
 
-            urltest_tag="$(get_outbound_tag_by_section "$section-urltest")"
-            selector_outbounds="$(json_array_append_string "$PROXY_GROUP_OUTBOUND_TAGS_JSON" "$urltest_tag")"
-            if [ -z "$selector_outbounds" ]; then
-                log "Failed to build selector outbounds for proxy rule '$section'. Aborted." "fatal"
-                exit 1
-            fi
+            urltest_outbounds="$(filter_urltest_outbounds "$section" "$PROXY_GROUP_OUTBOUND_TAGS_JSON" \
+                "$PROXY_GROUP_NAMES_JSON" "$PROXY_GROUP_COUNTRIES_JSON" "$detect_server_country")"
+            [ -n "$urltest_outbounds" ] || urltest_outbounds="[]"
+            urltest_outbounds_count="$(printf '%s' "$urltest_outbounds" | jq -r 'length' 2>/dev/null)"
+            case "$urltest_outbounds_count" in
+            '' | *[!0-9]*) urltest_outbounds_count=0 ;;
+            esac
 
-            config="$(sing_box_cm_add_urltest_outbound "$config" "$urltest_tag" "$PROXY_GROUP_OUTBOUND_TAGS_JSON" \
-                "$urltest_testing_url" "$urltest_check_interval" "$urltest_tolerance" "$urltest_idle_timeout")"
-            config="$(sing_box_cm_add_selector_outbound "$config" "$selector_tag" "$selector_outbounds" "$urltest_tag" "true")"
+            if [ "$urltest_outbounds_count" -gt 0 ]; then
+                urltest_tag="$(get_outbound_tag_by_section "$section-urltest")"
+                selector_outbounds="$(json_array_append_string "$PROXY_GROUP_OUTBOUND_TAGS_JSON" "$urltest_tag")"
+                if [ -z "$selector_outbounds" ]; then
+                    log "Failed to build selector outbounds for proxy rule '$section'. Aborted." "fatal"
+                    exit 1
+                fi
+
+                config="$(sing_box_cm_add_urltest_outbound "$config" "$urltest_tag" "$urltest_outbounds" \
+                    "$urltest_testing_url" "$urltest_check_interval" "$urltest_tolerance" "$urltest_idle_timeout")"
+                config="$(sing_box_cm_add_selector_outbound "$config" "$selector_tag" "$selector_outbounds" "$urltest_tag" "true")"
+            else
+                selector_default="$(printf '%s' "$PROXY_GROUP_OUTBOUND_TAGS_JSON" | jq -r '.[0] // empty' 2>/dev/null)"
+                if [ -z "$selector_default" ]; then
+                    log "Unable to determine default selector outbound for rule '$section'. Aborted." "fatal"
+                    exit 1
+                fi
+
+                config="$(sing_box_cm_add_selector_outbound "$config" "$selector_tag" "$PROXY_GROUP_OUTBOUND_TAGS_JSON" "$selector_default" "true")"
+            fi
         else
             selector_default="$(printf '%s' "$PROXY_GROUP_OUTBOUND_TAGS_JSON" | jq -r '.[0] // empty' 2>/dev/null)"
             if [ -z "$selector_default" ]; then
@@ -5081,6 +5720,7 @@ configure_outbound_handler() {
         fi
 
         write_subscription_outbound_links "$section" "$PROXY_GROUP_LINKS_JSON"
+        write_outbound_metadata "$section" "$PROXY_GROUP_NAMES_JSON" "$PROXY_GROUP_COUNTRIES_JSON"
         return 0
     fi
 
@@ -7622,6 +8262,36 @@ get_outbound_link_states() {
     printf '{}\n'
 }
 
+get_outbound_metadata() {
+    local section="$1"
+    local metadata_path
+
+    ensure_runtime_dirs
+    case "$section" in
+    "" | */* | *..*)
+        printf '{"names":{},"countries":{}}\n'
+        return 0
+        ;;
+    esac
+
+    metadata_path="$(get_outbound_metadata_path "$section")"
+    if [ -f "$metadata_path" ]; then
+        jq -c '
+            if type == "object" then
+                {
+                    names: (if (.names | type) == "object" then .names else {} end),
+                    countries: (if (.countries | type) == "object" then .countries else {} end)
+                }
+            else
+                {names:{}, countries:{}}
+            end
+        ' "$metadata_path" 2>/dev/null || printf '{"names":{},"countries":{}}\n'
+        return 0
+    fi
+
+    printf '{"names":{},"countries":{}}\n'
+}
+
 get_subscription_metadata() {
     local section="$1"
     local metadata_path
@@ -8466,6 +9136,7 @@ Available commands:
     show_system_info        Show system information
     get_status              Get Podkop Plus service status
     get_outbound_link       Get source proxy link for a generated outbound
+    get_outbound_metadata   Get generated outbound display names and countries
     get_subscription_metadata
                             Get UI-only metadata for a subscription rule
     get_sing_box_status     Get sing-box service status
@@ -8574,6 +9245,9 @@ get_outbound_link)
     ;;
 get_outbound_link_states)
     get_outbound_link_states "$2"
+    ;;
+get_outbound_metadata)
+    get_outbound_metadata "$2"
     ;;
 get_subscription_metadata)
     get_subscription_metadata "$2"

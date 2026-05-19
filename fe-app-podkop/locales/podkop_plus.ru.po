@@ -7,8 +7,8 @@ msgid ""
 msgstr ""
 "Project-Id-Version: PODKOP PLUS\n"
 "Report-Msgid-Bugs-To: \n"
-"POT-Creation-Date: 2026-05-19 16:03+0300\n"
-"PO-Revision-Date: 2026-05-19 16:03+0300\n"
+"POT-Creation-Date: 2026-05-19 18:51+0300\n"
+"PO-Revision-Date: 2026-05-19 18:51+0300\n"
 "Last-Translator: ushan0v\n"
 "Language-Team: none\n"
 "Language: ru\n"
@@ -200,6 +200,9 @@ msgstr "Задержка в миллисекундах перед перезап
 msgid "Delay value cannot be empty"
 msgstr "Значение задержки не может быть пустым"
 
+msgid "Detect server country"
+msgstr "Определять страну сервера"
+
 msgid "Dev"
 msgstr "Dev"
 
@@ -335,11 +338,20 @@ msgstr "Введите URL подписки"
 msgid "Exact full domain"
 msgstr "Точный полный домен"
 
+msgid "Exclude country from URLTest"
+msgstr "Исключить страну из URLTest"
+
 msgid "Exclude NTP"
 msgstr "Исключить NTP"
 
 msgid "Exclude NTP protocol traffic from the tunnel to prevent it from being routed through the proxy or VPN"
 msgstr "Исключите трафик протокола NTP из туннеля, чтобы предотвратить его маршрутизацию через прокси-сервер или VPN."
+
+msgid "Exclude server by regular expression from URLTest"
+msgstr "Исключить сервер по регулярному выражению из URLTest"
+
+msgid "Exclude server from URLTest"
+msgstr "Исключить сервер из URLTest"
 
 msgid "Expecting: %s"
 msgstr "Ожидается: %s"
@@ -746,6 +758,9 @@ msgstr "Разрешать доменные имена перед маршрут
 msgid "Resolve real IP for routing"
 msgstr "Разрешать реальный IP для маршрутизации"
 
+msgid "Resolve server countries using country.is"
+msgstr "Определять страны серверов через country.is"
+
 msgid "Resource selection by hostname inside nfqws is not supported here; sing-box selects resources before NFQUEUE."
 msgstr "Выбор ресурсов по hostname внутри nfqws здесь не поддерживается; ресурсы выбирает sing-box до NFQUEUE."
 
@@ -809,6 +824,9 @@ msgstr "Имя секции"
 msgid "Sections"
 msgstr "Секции"
 
+msgid "Select a loaded server or enter an exact server name"
+msgstr "Выберите загруженный сервер или введите точное имя сервера"
+
 msgid "Select a predefined list for routing"
 msgstr "Выберите предустановленный набор правил для маршрутизации"
 
@@ -838,6 +856,12 @@ msgstr "Выберите сетевой интерфейс, на который 
 
 msgid "Select the WAN interfaces to be monitored"
 msgstr "Выберите WAN интерфейсы для мониторинга"
+
+msgid "Servers from selected countries will not be tested by URLTest"
+msgstr "Серверы из выбранных стран не будут проверяться через URLTest"
+
+msgid "Servers with names matching these regular expressions will not be tested by URLTest"
+msgstr "Серверы, имена которых совпадают с этими регулярными выражениями, не будут проверяться через URLTest"
 
 msgid "Service list"
 msgstr "Список сервисов"
@@ -1039,6 +1063,9 @@ msgstr "неизвестно"
 
 msgid "Unknown ByeDPI option: %s"
 msgstr "Неизвестная опция ByeDPI: %s"
+
+msgid "Unknown country"
+msgstr "Неизвестная страна"
 
 msgid "Unknown error"
 msgstr "Неизвестная ошибка"

@@ -263,6 +263,137 @@ const actionProvidersAvailabilityState = {
   byedpiInstalled: false,
 };
 let actionProvidersAvailabilityPromise = null;
+const outboundNameChoicesCache = {};
+const COUNTRY_CODES =
+  "AD AE AF AG AI AL AM AO AQ AR AS AT AU AW AX AZ BA BB BD BE BF BG BH BI BJ BL BM BN BO BQ BR BS BT BV BW BY BZ CA CC CD CF CG CH CI CK CL CM CN CO CR CU CV CW CX CY CZ DE DJ DK DM DO DZ EC EE EG EH ER ES ET FI FJ FK FM FO FR GA GB GD GE GF GG GH GI GL GM GN GP GQ GR GS GT GU GW GY HK HM HN HR HT HU ID IE IL IM IN IO IQ IR IS IT JE JM JO JP KE KG KH KI KM KN KP KR KW KY KZ LA LB LC LI LK LR LS LT LU LV LY MA MC MD ME MF MG MH MK ML MM MN MO MP MQ MR MS MT MU MV MW MX MY MZ NA NC NE NF NG NI NL NO NP NR NU NZ OM PA PE PF PG PH PK PL PM PN PR PS PT PW PY QA RE RO RS RU RW SA SB SC SD SE SG SH SI SJ SK SL SM SN SO SR SS ST SV SX SY SZ TC TD TF TG TH TJ TK TL TM TN TO TR TT TV TW TZ UA UG UM US UY UZ VA VC VE VG VI VN VU WF WS YE YT ZA ZM ZW XK".split(
+    " ",
+  );
+const REGION_NAME_FALLBACKS = {
+  XK: "Kosovo",
+};
+let regionDisplayNamesCache = {};
+
+function getLuciLanguage() {
+  if (typeof L !== "undefined" && L.env && L.env.lang) {
+    return `${L.env.lang}`.replace("_", "-");
+  }
+
+  if (document.documentElement.lang) {
+    return document.documentElement.lang;
+  }
+
+  return navigator.language || "en";
+}
+
+function getRegionDisplayName(code) {
+  const normalizedCode = `${code || ""}`.toUpperCase();
+  const language = getLuciLanguage();
+  const cacheKey = `${language}:${normalizedCode}`;
+
+  if (regionDisplayNamesCache[cacheKey]) {
+    return regionDisplayNamesCache[cacheKey];
+  }
+
+  try {
+    if (typeof Intl !== "undefined" && Intl.DisplayNames) {
+      const displayNames = new Intl.DisplayNames([language, "en"], {
+        type: "region",
+      });
+      const displayName = displayNames.of(normalizedCode);
+      if (displayName && displayName !== normalizedCode) {
+        regionDisplayNamesCache[cacheKey] = displayName;
+        return displayName;
+      }
+    }
+  } catch (_error) {
+    // Fall through to the static fallback.
+  }
+
+  const fallback = REGION_NAME_FALLBACKS[normalizedCode] || normalizedCode;
+  regionDisplayNamesCache[cacheKey] = fallback;
+  return fallback;
+}
+
+function getCountryFlagEmoji(code) {
+  const normalizedCode = `${code || ""}`.toUpperCase();
+
+  if (!/^[A-Z]{2}$/.test(normalizedCode)) {
+    return "";
+  }
+
+  return String.fromCodePoint(
+    ...normalizedCode
+      .split("")
+      .map((char) => 0x1f1e6 + char.charCodeAt(0) - 65),
+  );
+}
+
+function getCountryOptionLabel(code) {
+  return `${getCountryFlagEmoji(code)} ${getRegionDisplayName(code)}`;
+}
+
+function resetOptionChoices(option) {
+  delete option.keylist;
+  delete option.vallist;
+}
+
+function populateCountryOptionValues(option) {
+  resetOptionChoices(option);
+  COUNTRY_CODES.map((code) => ({
+    code,
+    label: getCountryOptionLabel(code),
+    name: getRegionDisplayName(code),
+  }))
+    .sort((a, b) => a.name.localeCompare(b.name))
+    .forEach((country) => option.value(country.code, country.label));
+}
+
+function validateCountryCode(_section_id, value) {
+  const values = Array.isArray(value) ? value : [value];
+  const normalizedValues = values
+    .filter((item) => item && `${item}`.length)
+    .map((item) => `${item}`.toUpperCase());
+
+  if (!normalizedValues.length) {
+    return true;
+  }
+
+  return normalizedValues.every((item) => COUNTRY_CODES.includes(item))
+    ? true
+    : _("Unknown country");
+}
+
+function loadOutboundNameChoices(option, section_id) {
+  resetOptionChoices(option);
+
+  if (outboundNameChoicesCache[section_id]) {
+    outboundNameChoicesCache[section_id].forEach((name) =>
+      option.value(name, name),
+    );
+    return getConfigListValues(section_id, "urltest_exclude_outbounds");
+  }
+
+  return main.PodkopShellMethods.getOutboundMetadata(section_id)
+    .then((response) => {
+      resetOptionChoices(option);
+
+      const names =
+        response && response.success && response.data && response.data.names
+          ? Object.values(response.data.names)
+          : [];
+
+      const choices = names
+        .filter(Boolean)
+        .filter((name, index, values) => values.indexOf(name) === index)
+        .sort((a, b) => `${a}`.localeCompare(`${b}`));
+
+      choices.forEach((name) => option.value(name, name));
+      outboundNameChoicesCache[section_id] = choices;
+
+      return getConfigListValues(section_id, "urltest_exclude_outbounds");
+    })
+    .catch(() => getConfigListValues(section_id, "urltest_exclude_outbounds"));
+}
 
 function ensureActionProvidersAvailabilityLoaded() {
   if (actionProvidersAvailabilityState.loaded) {
@@ -2680,6 +2811,18 @@ function createSectionContent(section) {
   o = section.taboption(
     "settings",
     form.Flag,
+    "detect_server_country",
+    _("Detect server country"),
+    _("Resolve server countries using country.is"),
+  );
+  o.default = "0";
+  o.rmempty = false;
+  o.depends("action", "proxy");
+  o.modalonly = true;
+
+  o = section.taboption(
+    "settings",
+    form.Flag,
     "urltest_enabled",
     _("Auto select by URLTest"),
   );
@@ -2787,6 +2930,50 @@ function createSectionContent(section) {
     const validation = main.validateUrl(value);
     return validation.valid ? true : validation.message;
   };
+
+  o = section.taboption(
+    "settings",
+    form.DynamicList,
+    "urltest_exclude_countries",
+    _("Exclude country from URLTest"),
+    _("Servers from selected countries will not be tested by URLTest"),
+  );
+  populateCountryOptionValues(o);
+  o.create = false;
+  o.rmempty = true;
+  o.depends({
+    action: "proxy",
+    detect_server_country: "1",
+    urltest_enabled: "1",
+  });
+  o.modalonly = true;
+  o.validate = validateCountryCode;
+
+  o = section.taboption(
+    "settings",
+    form.DynamicList,
+    "urltest_exclude_outbounds",
+    _("Exclude server from URLTest"),
+    _("Select a loaded server or enter an exact server name"),
+  );
+  o.rmempty = true;
+  o.depends({ action: "proxy", urltest_enabled: "1" });
+  o.modalonly = true;
+  o.load = function (section_id) {
+    return loadOutboundNameChoices(this, section_id);
+  };
+
+  o = section.taboption(
+    "settings",
+    form.DynamicList,
+    "urltest_exclude_regex",
+    _("Exclude server by regular expression from URLTest"),
+    _("Servers with names matching these regular expressions will not be tested by URLTest"),
+  );
+  o.rmempty = true;
+  o.depends({ action: "proxy", urltest_enabled: "1" });
+  o.modalonly = true;
+  o.validate = validateRegex;
 
   o = section.taboption(
     "settings",

@@ -23,6 +23,18 @@ interface IRenderSectionsProps {
   subscriptionUpdating: boolean;
 }
 
+function getCountryFlagEmoji(country?: string) {
+  const code = `${country || ''}`.trim().toUpperCase();
+
+  if (!/^[A-Z]{2}$/.test(code)) {
+    return '';
+  }
+
+  return String.fromCodePoint(
+    ...code.split('').map((char) => 0x1f1e6 + char.charCodeAt(0) - 65),
+  );
+}
+
 function renderFailedState() {
   return E(
     'div',
@@ -256,6 +268,7 @@ export function renderDefaultState({
 
     const canCopyLink =
       Boolean(outbound.canCopyLink) || isCopyableProxyLink(outbound.link);
+    const countryFlag = getCountryFlagEmoji(outbound.country);
 
     return E(
       'div',
@@ -292,7 +305,7 @@ export function renderDefaultState({
           E(
             'div',
             { class: 'pdk_dashboard-page__outbound-grid__item__type' },
-            outbound.type,
+            [countryFlag, outbound.type].filter(Boolean).join(' '),
           ),
           E(
             'div',

@@ -735,6 +735,7 @@ var Podkop;
     AvailableMethods2["GET_STATUS"] = "get_status";
     AvailableMethods2["GET_OUTBOUND_LINK"] = "get_outbound_link";
     AvailableMethods2["GET_OUTBOUND_LINK_STATES"] = "get_outbound_link_states";
+    AvailableMethods2["GET_OUTBOUND_METADATA"] = "get_outbound_metadata";
     AvailableMethods2["GET_SUBSCRIPTION_METADATA"] = "get_subscription_metadata";
     AvailableMethods2["CHECK_SING_BOX"] = "check_sing_box";
     AvailableMethods2["GET_SING_BOX_STATUS"] = "get_sing_box_status";
@@ -786,6 +787,10 @@ var PodkopShellMethods = {
   ),
   getOutboundLinkStates: async (section) => callBaseMethod(
     Podkop.AvailableMethods.GET_OUTBOUND_LINK_STATES,
+    [section]
+  ),
+  getOutboundMetadata: async (section) => callBaseMethod(
+    Podkop.AvailableMethods.GET_OUTBOUND_METADATA,
     [section]
   ),
   getSubscriptionMetadata: async (section) => callBaseMethod(
@@ -1009,7 +1014,7 @@ function sortUrlTestFirst(outbounds) {
     ...outbounds.filter((outbound) => !isUrlTestOutbound(outbound))
   ];
 }
-function buildProxyGroupOutbounds(section, proxies) {
+function buildProxyGroupOutbounds(section, proxies, outboundMetadata) {
   const sectionName = section[".name"];
   const proxyByCode = getProxyEntryByCode(proxies);
   const selector = proxyByCode.get(`${sectionName}-out`);
@@ -1032,7 +1037,8 @@ function buildProxyGroupOutbounds(section, proxies) {
         type: item.value.type || "",
         selected: selector?.value?.now === item.code,
         link,
-        canCopyLink: isCopyableProxyLink(link)
+        canCopyLink: isCopyableProxyLink(link),
+        country: outboundMetadata?.countries?.[item.code]
       }
     ];
   });
@@ -1102,6 +1108,13 @@ async function getSubscriptionMetadata(sectionName) {
     return visibleMetadataItems;
   }
   return void 0;
+}
+async function getOutboundMetadata(sectionName) {
+  const response = await PodkopShellMethods.getOutboundMetadata(sectionName);
+  if (!response.success || !response.data) {
+    return void 0;
+  }
+  return response.data;
 }
 async function getDashboardSections(options = {}) {
   const includeSubscriptionCopyState = options.includeSubscriptionCopyState ?? true;
@@ -1220,12 +1233,20 @@ async function getDashboardSections(options = {}) {
       if (sectionAction === "proxy" && shouldUseProxyGroup(section)) {
         const subscriptionSourceCount = getSubscriptionSourceCount(section);
         const subscriptionEnabled = subscriptionSourceCount > 0;
+        const [
+          outboundMetadata,
+          subscriptionMetadata,
+          outboundLinkStates
+        ] = await Promise.all([
+          subscriptionEnabled ? getOutboundMetadata(sectionName) : Promise.resolve(void 0),
+          subscriptionEnabled ? getSubscriptionMetadata(sectionName) : Promise.resolve(void 0),
+          includeSubscriptionCopyState ? getSubscriptionOutboundLinkStates(sectionName) : Promise.resolve({})
+        ]);
         const { selector, outbounds } = buildProxyGroupOutbounds(
           section,
-          proxies
+          proxies,
+          outboundMetadata
         );
-        const subscriptionMetadata = subscriptionEnabled ? await getSubscriptionMetadata(sectionName) : void 0;
-        const outboundLinkStates = includeSubscriptionCopyState ? await getSubscriptionOutboundLinkStates(sectionName) : {};
         return {
           withTagSelect: true,
           code: selector?.code || sectionName,
@@ -2697,6 +2718,15 @@ function prettyBytes(n) {
 }
 
 // src/podkop/tabs/dashboard/partials/renderSections.ts
+function getCountryFlagEmoji(country) {
+  const code = `${country || ""}`.trim().toUpperCase();
+  if (!/^[A-Z]{2}$/.test(code)) {
+    return "";
+  }
+  return String.fromCodePoint(
+    ...code.split("").map((char) => 127462 + char.charCodeAt(0) - 65)
+  );
+}
 function renderFailedState() {
   return E(
     "div",
@@ -2882,6 +2912,7 @@ function renderDefaultState({
       return "pdk_dashboard-page__outbound-grid__item__latency--red";
     }
     const canCopyLink = Boolean(outbound.canCopyLink) || isCopyableProxyLink(outbound.link);
+    const countryFlag = getCountryFlagEmoji(outbound.country);
     return E(
       "div",
       {
@@ -2912,7 +2943,7 @@ function renderDefaultState({
           E(
             "div",
             { class: "pdk_dashboard-page__outbound-grid__item__type" },
-            outbound.type
+            [countryFlag, outbound.type].filter(Boolean).join(" ")
           ),
           E(
             "div",

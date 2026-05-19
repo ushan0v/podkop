@@ -197,6 +197,7 @@ function sortUrlTestFirst(outbounds: Podkop.Outbound[]) {
 function buildProxyGroupOutbounds(
   section: Podkop.ConfigSection,
   proxies: ClashProxyEntry[],
+  outboundMetadata?: Podkop.GetOutboundMetadata,
 ) {
   const sectionName = section['.name'];
   const proxyByCode = getProxyEntryByCode(proxies);
@@ -228,6 +229,7 @@ function buildProxyGroupOutbounds(
         selected: selector?.value?.now === item.code,
         link,
         canCopyLink: isCopyableProxyLink(link),
+        country: outboundMetadata?.countries?.[item.code],
       },
     ];
   });
@@ -337,6 +339,16 @@ async function getSubscriptionMetadata(sectionName: string) {
   }
 
   return undefined;
+}
+
+async function getOutboundMetadata(sectionName: string) {
+  const response = await PodkopShellMethods.getOutboundMetadata(sectionName);
+
+  if (!response.success || !response.data) {
+    return undefined;
+  }
+
+  return response.data;
 }
 
 export async function getDashboardSections(
@@ -479,16 +491,26 @@ export async function getDashboardSections(
         if (sectionAction === 'proxy' && shouldUseProxyGroup(section)) {
           const subscriptionSourceCount = getSubscriptionSourceCount(section);
           const subscriptionEnabled = subscriptionSourceCount > 0;
+          const [
+            outboundMetadata,
+            subscriptionMetadata,
+            outboundLinkStates,
+          ] = await Promise.all([
+            subscriptionEnabled
+              ? getOutboundMetadata(sectionName)
+              : Promise.resolve(undefined),
+            subscriptionEnabled
+              ? getSubscriptionMetadata(sectionName)
+              : Promise.resolve(undefined),
+            includeSubscriptionCopyState
+              ? getSubscriptionOutboundLinkStates(sectionName)
+              : Promise.resolve({}),
+          ]);
           const { selector, outbounds } = buildProxyGroupOutbounds(
             section,
             proxies,
+            outboundMetadata,
           );
-          const subscriptionMetadata = subscriptionEnabled
-            ? await getSubscriptionMetadata(sectionName)
-            : undefined;
-          const outboundLinkStates = includeSubscriptionCopyState
-            ? await getSubscriptionOutboundLinkStates(sectionName)
-            : {};
 
           return {
             withTagSelect: true,

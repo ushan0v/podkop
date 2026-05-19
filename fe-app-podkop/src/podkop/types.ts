@@ -58,6 +58,7 @@ export namespace Podkop {
     GET_STATUS = 'get_status',
     GET_OUTBOUND_LINK = 'get_outbound_link',
     GET_OUTBOUND_LINK_STATES = 'get_outbound_link_states',
+    GET_OUTBOUND_METADATA = 'get_outbound_metadata',
     GET_SUBSCRIPTION_METADATA = 'get_subscription_metadata',
     CHECK_SING_BOX = 'check_sing_box',
     GET_SING_BOX_STATUS = 'get_sing_box_status',
@@ -92,6 +93,7 @@ export namespace Podkop {
     selected: boolean;
     link?: string;
     canCopyLink?: boolean;
+    country?: string;
   }
 
   export interface OutboundGroup {
@@ -173,6 +175,10 @@ export namespace Podkop {
     subscription_update_interval_disabled?: '0' | '1';
     urltest_enabled?: '0' | '1';
     urltest_check_interval_disabled?: '0' | '1';
+    detect_server_country?: '0' | '1';
+    urltest_exclude_countries?: string[];
+    urltest_exclude_outbounds?: string[];
+    urltest_exclude_regex?: string[];
     outbound_json?: string;
     interface?: string;
     yacd_secret_key?: string;
@@ -244,6 +250,11 @@ export namespace Podkop {
   }
 
   export type GetOutboundLinkStates = Record<string, boolean>;
+
+  export interface GetOutboundMetadata {
+    names?: Record<string, string>;
+    countries?: Record<string, string>;
+  }
 
   export interface GetSingBoxStatus {
     running: number;
