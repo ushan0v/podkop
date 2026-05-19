@@ -388,49 +388,69 @@ sing_box_cf_subscription_candidate_outbounds() {
 sing_box_cf_log_subscription_skips() {
     local prepared_json="$1"
     local context="$2"
-    local skipped_count index display_name reason
+    local skipped_count reason_summary
 
-    skipped_count="$(printf '%s' "$prepared_json" | jq -r '(.skipped_names // []) | length' 2>/dev/null)"
-    [ -n "$skipped_count" ] || return 0
+    skipped_count="$(printf '%s' "$prepared_json" | jq -r '.skipped // 0' 2>/dev/null)"
+    case "$skipped_count" in
+    '' | *[!0-9]*) return 0 ;;
+    esac
+    [ "$skipped_count" -gt 0 ] || return 0
 
-    index=0
-    while [ "$index" -lt "$skipped_count" ]; do
-        display_name="$(printf '%s' "$prepared_json" |
-            jq -r --argjson index "$index" '(.skipped_names[$index] // "unknown") | tostring' 2>/dev/null |
-            tr '\r\n\t' '   ' |
-            sed 's/[[:space:]][[:space:]]*/ /g;s/^[[:space:]]*//;s/[[:space:]]*$//')"
-        reason="$(printf '%s' "$prepared_json" |
-            jq -r --argjson index "$index" '(.skipped_reasons[$index] // "unsupported or invalid outbound") | tostring' 2>/dev/null |
-            tr '\r\n\t' '   ' |
-            sed 's/[[:space:]][[:space:]]*/ /g;s/^[[:space:]]*//;s/[[:space:]]*$//')"
-        log "Skipped subscription outbound '$display_name' $context: $reason" "warn"
-        index=$((index + 1))
-    done
+    reason_summary="$(printf '%s' "$prepared_json" | jq -r '
+        (.skipped_reason_counts // {})
+        | to_entries
+        | sort_by([-.value, .key])
+        | map("\(.value)x \(.key)")
+        | join("; ")
+    ' 2>/dev/null)"
+
+    if [ -n "$reason_summary" ]; then
+        log "Skipped $skipped_count subscription outbounds $context: $reason_summary" "warn"
+    else
+        log "Skipped $skipped_count subscription outbounds $context" "warn"
+    fi
 }
 
 sing_box_cf_subscription_plugin_supports() {
     local outbounds_json="$1"
-    local plugin plugin_name plugin_supports_json supported
+    local plugins_tmp records_tmp plugin_name plugin_supports_json supported
 
-    plugin_supports_json="{}"
-    while IFS= read -r plugin || [ -n "$plugin" ]; do
-        [ -n "$plugin" ] || continue
-        plugin_name="${plugin%%;*}"
+    plugins_tmp="$(mktemp)" || return 1
+    records_tmp="$(mktemp)" || {
+        rm -f "$plugins_tmp"
+        return 1
+    }
+
+    printf '%s' "$outbounds_json" | jq -r '
+        .[]?
+        | select(.type == "shadowsocks")
+        | (.plugin // empty)
+        | tostring
+        | split(";")[0]
+        | select(. != "")
+    ' 2>/dev/null | sort -u > "$plugins_tmp"
+
+    : > "$records_tmp"
+    while IFS= read -r plugin_name || [ -n "$plugin_name" ]; do
         [ -n "$plugin_name" ] || continue
+        command -v "$plugin_name" >/dev/null 2>&1 && supported=true || supported=false
+        printf '%s\t%s\n' "$plugin_name" "$supported" >> "$records_tmp"
+    done < "$plugins_tmp"
 
-        if command -v "$plugin_name" >/dev/null 2>&1; then
-            supported=true
-        else
-            supported=false
-        fi
+    plugin_supports_json="$(jq -Rn '
+        reduce inputs as $line (
+            {};
+            ($line | split("\t")) as $parts
+            | if ($parts | length) >= 2 and $parts[0] != "" then
+                .[$parts[0]] = ($parts[1] == "true")
+              else
+                .
+              end
+        )
+    ' < "$records_tmp" 2>/dev/null)"
 
-        plugin_supports_json="$(printf '%s' "$plugin_supports_json" |
-            jq -c --arg plugin "$plugin_name" --argjson supported "$supported" '.[$plugin] = $supported' 2>/dev/null)"
-        [ -n "$plugin_supports_json" ] || plugin_supports_json="{}"
-    done <<EOF
-$(printf '%s' "$outbounds_json" | jq -r '.[]? | select(.type == "shadowsocks") | .plugin // empty' 2>/dev/null)
-EOF
-
+    rm -f "$plugins_tmp" "$records_tmp"
+    [ -n "$plugin_supports_json" ] || plugin_supports_json="{}"
     printf '%s\n' "$plugin_supports_json"
 }
 
@@ -567,8 +587,7 @@ sing_box_cf_prepare_subscription_batch() {
                 servers: [],
                 links: [],
                 skipped: 0,
-                skipped_names: [],
-                skipped_reasons: [],
+                skipped_reason_counts: {},
                 taken: (reduce $existing_tags[] as $tag ({}; .[$tag] = true))
             };
             ((.outbounds | length) + 1) as $index
@@ -576,8 +595,7 @@ sing_box_cf_prepare_subscription_batch() {
             | prefilter_skip_reason($outbound) as $skip_reason
             | if $skip_reason != "" then
                 .skipped += 1
-                | .skipped_names += [$display_name]
-                | .skipped_reasons += [$skip_reason]
+                | .skipped_reason_counts[$skip_reason] = ((.skipped_reason_counts[$skip_reason] // 0) + 1)
               else
                 safe_string($outbound.tag // $outbound.remark; "server-\($index)") as $base_tag
                 | (.taken as $taken | unique_tag($base_tag; $taken)) as $tag
@@ -722,8 +740,7 @@ sing_box_cf_subscription_prepared_slice() {
             servers: ((.servers // [])[$start:$end]),
             links: ((.links // [])[$start:$end]),
             skipped: 0,
-            skipped_names: [],
-            skipped_reasons: []
+            skipped_reason_counts: {}
         }
     ' 2>/dev/null
 }
@@ -932,7 +949,6 @@ sing_box_cf_add_subscription_outbounds() {
     if [ -n "$prepared_json" ]; then
         skipped_count="$(printf '%s' "$prepared_json" | jq -r '.skipped // 0' 2>/dev/null)"
         if [ "${skipped_count:-0}" -gt 0 ]; then
-            log "Skipped $skipped_count unsupported subscription outbounds before validation" "warn"
             sing_box_cf_log_subscription_skips "$prepared_json" "before validation"
         fi
 
