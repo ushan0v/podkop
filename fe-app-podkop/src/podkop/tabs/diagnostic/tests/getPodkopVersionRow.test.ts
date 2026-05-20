@@ -95,6 +95,24 @@ describe('getPodkopVersionRow', () => {
     });
   });
 
+  it('returns Outdated when a dot-based Plus release supersedes a legacy dash release', () => {
+    const row = getPodkopVersionRow(
+      makeDiagnosticsSystemInfo({
+        podkop_version: '0.7.17-9',
+        podkop_latest_version: '0.7.17.10',
+      }),
+    );
+
+    expect(row).toEqual({
+      key: 'Podkop Plus',
+      value: '0.7.17-9',
+      tag: {
+        label: 'Outdated',
+        kind: 'warning',
+      },
+    });
+  });
+
   it('returns Dev when the current fork release is newer than latest', () => {
     const row = getPodkopVersionRow(
       makeDiagnosticsSystemInfo({

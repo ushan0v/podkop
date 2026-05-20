@@ -26,6 +26,13 @@ describe('compareReleaseVersions', () => {
     expect(compareReleaseVersions('0.7.15-1', '0.7.14-3')).toBe(1);
   });
 
+  it('supports dot-based Plus release versions after legacy dash releases', () => {
+    expect(compareReleaseVersions('0.7.17-9', '0.7.17.10')).toBe(-1);
+    expect(compareReleaseVersions('0.7.17.10', '0.7.17-9')).toBe(1);
+    expect(compareReleaseVersions('0.7.17.20', '0.7.17.19')).toBe(1);
+    expect(compareReleaseVersions('0.7.18.1', '0.7.17.20')).toBe(1);
+  });
+
   it('returns null for non-release versions', () => {
     expect(compareReleaseVersions('0.7.14-dev+abc123', '0.7.14-3')).toBeNull();
   });

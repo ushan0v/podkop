@@ -673,29 +673,59 @@ normalize_podkop_plus_release_version() {
     printf '%s\n' "$1" | sed 's/^v//;s/-r\([0-9][0-9]*\)$/-\1/'
 }
 
+podkop_plus_release_version_parts() {
+    version="$(normalize_podkop_plus_release_version "$1")"
+    release=0
+
+    case "$version" in
+        *-*)
+            release="${version##*-}"
+            version="${version%-*}"
+            ;;
+        *.*.*.*)
+            release="${version##*.}"
+            version="${version%.*}"
+            ;;
+    esac
+
+    case "$version" in ''|*[!0-9.]*|.*|*.) return 1 ;; esac
+    case "$release" in ''|*[!0-9]*) return 1 ;; esac
+
+    old_ifs="$IFS"
+    IFS='.'
+    set -- $version
+    IFS="$old_ifs"
+
+    [ -n "$1" ] || return 1
+    case "$1" in *[!0-9]*) return 1 ;; esac
+    case "${2:-0}" in *[!0-9]*) return 1 ;; esac
+    case "${3:-0}" in *[!0-9]*) return 1 ;; esac
+
+    printf '%s %s %s %s\n' "$1" "${2:-0}" "${3:-0}" "$release"
+}
+
 podkop_plus_release_version_lt() {
-    lhs="$(normalize_podkop_plus_release_version "$1")"
-    rhs="$(normalize_podkop_plus_release_version "$2")"
+    lhs_parts="$(podkop_plus_release_version_parts "$1")" || return 1
+    rhs_parts="$(podkop_plus_release_version_parts "$2")" || return 1
 
-    lhs_release="${lhs##*-}"
-    rhs_release="${rhs##*-}"
-    lhs_base="${lhs%-*}"
-    rhs_base="${rhs%-*}"
+    set -- $lhs_parts
+    lhs_major="$1"
+    lhs_minor="$2"
+    lhs_patch="$3"
+    lhs_release="$4"
 
-    [ "$lhs_base" = "$lhs" ] && lhs_release=0
-    [ "$rhs_base" = "$rhs" ] && rhs_release=0
+    set -- $rhs_parts
+    rhs_major="$1"
+    rhs_minor="$2"
+    rhs_patch="$3"
+    rhs_release="$4"
 
-    if ! version_ge "$lhs_base" "$rhs_base"; then
-        return 0
-    fi
-
-    if ! version_ge "$rhs_base" "$lhs_base"; then
-        return 1
-    fi
-
-    case "$lhs_release" in ''|*[!0-9]*) lhs_release=0 ;; esac
-    case "$rhs_release" in ''|*[!0-9]*) rhs_release=0 ;; esac
-
+    [ "$lhs_major" -lt "$rhs_major" ] && return 0
+    [ "$lhs_major" -gt "$rhs_major" ] && return 1
+    [ "$lhs_minor" -lt "$rhs_minor" ] && return 0
+    [ "$lhs_minor" -gt "$rhs_minor" ] && return 1
+    [ "$lhs_patch" -lt "$rhs_patch" ] && return 0
+    [ "$lhs_patch" -gt "$rhs_patch" ] && return 1
     [ "$lhs_release" -lt "$rhs_release" ]
 }
 
@@ -812,12 +842,67 @@ fetch_github_release_json() {
     printf '%s' "$response"
 }
 
+fetch_github_releases_json() {
+    owner="$1"
+    repo="$2"
+    response=""
+    message=""
+    url="https://api.github.com/repos/${owner}/${repo}/releases?per_page=50"
+
+    response="$(http_get "$url" 2>/dev/null || true)"
+    [ -n "$response" ] || fail "Failed to query GitHub releases metadata for ${owner}/${repo}"
+
+    printf '%s' "$response" | jq -e . >/dev/null 2>&1 || fail "GitHub returned an invalid response for ${owner}/${repo}"
+
+    message="$(printf '%s' "$response" | jq -r 'if type == "object" then (.message // empty) else empty end' 2>/dev/null)"
+    case "$message" in
+        *"API rate limit"*|*"rate limit exceeded"*)
+            fail "GitHub API rate limit reached. Try again later."
+            ;;
+        "Not Found")
+            fail "No published releases found for ${owner}/${repo}"
+            ;;
+    esac
+
+    printf '%s' "$response"
+}
+
+select_latest_podkop_plus_release_json() {
+    asset_ext="$1"
+
+    jq -c --arg ext "$asset_ext" '
+        def normalized_tag:
+            (.tag_name // "")
+            | sub("^v"; "")
+            | sub("-r(?<n>[0-9]+)$"; "-\(.n)");
+        def version_key:
+            normalized_tag as $tag
+            | if ($tag | test("^[0-9]+(\\.[0-9]+)*-[0-9]+$")) then
+                (($tag | split("-")[0] | split(".") | map(tonumber)) + [($tag | split("-")[1] | tonumber)])
+              elif ($tag | test("^[0-9]+(\\.[0-9]+){3}$")) then
+                ($tag | split(".") | map(tonumber))
+              else
+                empty
+              end;
+        def has_asset($prefix):
+            any(.assets[]?; ((.name | startswith($prefix + "_")) or (.name | startswith($prefix + "-"))) and (.name | endswith("." + $ext)));
+        [
+            .[]
+            | select(((.draft // false) | not) and ((.prerelease // false) | not))
+            | select(has_asset("podkop-plus") and has_asset("luci-app-podkop-plus"))
+            | . + {podkop_plus_version_key: version_key}
+        ]
+        | sort_by(.podkop_plus_version_key)
+        | last // empty
+    '
+}
+
 resolve_podkop_plus_release() {
     asset_ext="ipk"
 
     [ "$PKG_IS_APK" -eq 1 ] && asset_ext="apk"
 
-    PODKOP_PLUS_RELEASE_JSON="$(fetch_github_release_json "$REPO_OWNER" "$REPO_NAME")"
+    PODKOP_PLUS_RELEASE_JSON="$(fetch_github_releases_json "$REPO_OWNER" "$REPO_NAME" | select_latest_podkop_plus_release_json "$asset_ext")"
     PODKOP_PLUS_RELEASE_TAG="$(printf '%s' "$PODKOP_PLUS_RELEASE_JSON" | jq -r '.tag_name // empty')"
     [ -n "$PODKOP_PLUS_RELEASE_TAG" ] || fail "Failed to detect the Podkop Plus release tag"
 

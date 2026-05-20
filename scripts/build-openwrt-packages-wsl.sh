@@ -16,14 +16,18 @@ if [[ "$DEFAULT_BUILD_HOME" == "/root" ]]; then
   DEFAULT_BUILD_HOME="${DEFAULT_BUILD_HOME:-/root}"
 fi
 
-if [[ ! "$RELEASE_VERSION" =~ ^[0-9]+(\.[0-9]+)*-[0-9]+$ ]]; then
-  echo "Expected release version in the form x.y.z-n" >&2
+if [[ "$RELEASE_VERSION" =~ ^[0-9]+(\.[0-9]+)*-[0-9]+$ ]]; then
+  BASE_VERSION="${RELEASE_VERSION%-*}"
+  FORK_RELEASE="${RELEASE_VERSION##*-}"
+  APK_INTERNAL_VERSION="${APK_INTERNAL_VERSION:-${BASE_VERSION}-r${FORK_RELEASE}}"
+elif [[ "$RELEASE_VERSION" =~ ^[0-9]+(\.[0-9]+){3}$ ]]; then
+  BASE_VERSION="${RELEASE_VERSION%.*}"
+  FORK_RELEASE="${RELEASE_VERSION##*.}"
+  APK_INTERNAL_VERSION="${APK_INTERNAL_VERSION:-${RELEASE_VERSION}}"
+else
+  echo "Expected release version in the form x.y.z.n; legacy x.y.z-n is also accepted" >&2
   exit 1
 fi
-
-BASE_VERSION="${RELEASE_VERSION%-*}"
-FORK_RELEASE="${RELEASE_VERSION##*-}"
-APK_INTERNAL_VERSION="${APK_INTERNAL_VERSION:-${BASE_VERSION}-r${FORK_RELEASE}}"
 
 WSL_NATIVE_ROOT="${WSL_NATIVE_ROOT:-$DEFAULT_BUILD_HOME/build/podkop-plus}"
 WORK_DIR="${WORK_DIR:-$ROOT_DIR/.wsl-build}"

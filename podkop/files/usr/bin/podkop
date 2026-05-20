@@ -7269,6 +7269,34 @@ show_system_info() {
 fetch_latest_podkop_version() {
     command -v curl >/dev/null 2>&1 || return 1
 
+    if command -v jq >/dev/null 2>&1; then
+        curl --connect-timeout 2 -m 5 -fsSL "https://api.github.com/repos/$PODKOP_RELEASE_REPO/releases?per_page=50" 2>/dev/null |
+            jq -r '
+                def normalized_tag:
+                    (.tag_name // "")
+                    | sub("^v"; "")
+                    | sub("-r(?<n>[0-9]+)$"; "-\(.n)");
+                def version_key:
+                    normalized_tag as $tag
+                    | if ($tag | test("^[0-9]+(\\.[0-9]+)*-[0-9]+$")) then
+                        (($tag | split("-")[0] | split(".") | map(tonumber)) + [($tag | split("-")[1] | tonumber)])
+                      elif ($tag | test("^[0-9]+(\\.[0-9]+){3}$")) then
+                        ($tag | split(".") | map(tonumber))
+                      else
+                        empty
+                      end;
+                [
+                    .[]
+                    | select(((.draft // false) | not) and ((.prerelease // false) | not))
+                    | . + {podkop_plus_version_key: version_key}
+                ]
+                | sort_by(.podkop_plus_version_key)
+                | last
+                | .tag_name // empty
+            ' 2>/dev/null
+        return 0
+    fi
+
     curl --connect-timeout 2 -m 5 -fsSL "https://api.github.com/repos/$PODKOP_RELEASE_REPO/releases/latest" 2>/dev/null |
         sed -n 's/^[[:space:]]*"tag_name":[[:space:]]*"\([^"]*\)".*/\1/p' |
         head -n 1
@@ -7279,39 +7307,91 @@ normalize_podkop_release_version() {
 }
 
 is_podkop_release_version() {
-    normalize_podkop_release_version "$1" | grep -Eq '^[0-9]+([.][0-9]+)*(-[0-9]+)?$'
+    normalize_podkop_release_version "$1" | grep -Eq '^([0-9]+([.][0-9]+)*(-[0-9]+)?|[0-9]+([.][0-9]+){3})$'
+}
+
+podkop_release_version_parts() {
+    local version release old_ifs
+
+    version="$(normalize_podkop_release_version "$1")"
+    release=0
+
+    case "$version" in
+    *-*)
+        release="${version##*-}"
+        version="${version%-*}"
+        ;;
+    *.*.*.*)
+        release="${version##*.}"
+        version="${version%.*}"
+        ;;
+    esac
+
+    case "$version" in '' | *[!0-9.]* | .* | *.) return 1 ;; esac
+    case "$release" in '' | *[!0-9]*) return 1 ;; esac
+
+    old_ifs="$IFS"
+    IFS='.'
+    set -- $version
+    IFS="$old_ifs"
+
+    [ -n "$1" ] || return 1
+    case "$1" in *[!0-9]*) return 1 ;; esac
+    case "${2:-0}" in *[!0-9]*) return 1 ;; esac
+    case "${3:-0}" in *[!0-9]*) return 1 ;; esac
+
+    printf '%s %s %s %s\n' "$1" "${2:-0}" "${3:-0}" "$release"
+}
+
+podkop_release_version_compare() {
+    local lhs_parts rhs_parts lhs_major lhs_minor lhs_patch lhs_release rhs_major rhs_minor rhs_patch rhs_release
+
+    lhs_parts="$(podkop_release_version_parts "$1")" || return 1
+    rhs_parts="$(podkop_release_version_parts "$2")" || return 1
+
+    set -- $lhs_parts
+    lhs_major="$1"
+    lhs_minor="$2"
+    lhs_patch="$3"
+    lhs_release="$4"
+
+    set -- $rhs_parts
+    rhs_major="$1"
+    rhs_minor="$2"
+    rhs_patch="$3"
+    rhs_release="$4"
+
+    [ "$lhs_major" -lt "$rhs_major" ] && echo -1 && return 0
+    [ "$lhs_major" -gt "$rhs_major" ] && echo 1 && return 0
+    [ "$lhs_minor" -lt "$rhs_minor" ] && echo -1 && return 0
+    [ "$lhs_minor" -gt "$rhs_minor" ] && echo 1 && return 0
+    [ "$lhs_patch" -lt "$rhs_patch" ] && echo -1 && return 0
+    [ "$lhs_patch" -gt "$rhs_patch" ] && echo 1 && return 0
+    [ "$lhs_release" -lt "$rhs_release" ] && echo -1 && return 0
+    [ "$lhs_release" -gt "$rhs_release" ] && echo 1 && return 0
+    echo 0
 }
 
 podkop_latest_version_is_older_than_current() {
     local latest_version="$1"
-    local latest_normalized current_normalized lowest
+    local compare_result
 
     is_podkop_release_version "$latest_version" || return 1
     is_podkop_release_version "$PODKOP_VERSION" || return 1
 
-    latest_normalized="$(normalize_podkop_release_version "$latest_version")"
-    current_normalized="$(normalize_podkop_release_version "$PODKOP_VERSION")"
-
-    [ "$latest_normalized" != "$current_normalized" ] || return 1
-
-    lowest="$(printf '%s\n%s\n' "$latest_normalized" "$current_normalized" | sort -V | head -n 1)"
-    [ "$lowest" = "$latest_normalized" ]
+    compare_result="$(podkop_release_version_compare "$latest_version" "$PODKOP_VERSION")" || return 1
+    [ "$compare_result" -lt 0 ]
 }
 
 podkop_latest_version_is_newer_than_current() {
     local latest_version="$1"
-    local latest_normalized current_normalized lowest
+    local compare_result
 
     is_podkop_release_version "$latest_version" || return 1
     is_podkop_release_version "$PODKOP_VERSION" || return 1
 
-    latest_normalized="$(normalize_podkop_release_version "$latest_version")"
-    current_normalized="$(normalize_podkop_release_version "$PODKOP_VERSION")"
-
-    [ "$latest_normalized" != "$current_normalized" ] || return 1
-
-    lowest="$(printf '%s\n%s\n' "$latest_normalized" "$current_normalized" | sort -V | head -n 1)"
-    [ "$lowest" = "$current_normalized" ]
+    compare_result="$(podkop_release_version_compare "$latest_version" "$PODKOP_VERSION")" || return 1
+    [ "$compare_result" -gt 0 ]
 }
 
 write_podkop_latest_version_cache() {

@@ -1,6 +1,6 @@
 param(
     [Parameter(Mandatory = $true)]
-    [ValidatePattern('^[0-9]+(\.[0-9]+)*-[0-9]+$')]
+    [ValidatePattern('^([0-9]+(\.[0-9]+)*-[0-9]+|[0-9]+(\.[0-9]+){3})$')]
     [string]$ReleaseVersion,
 
     [string]$RouterHost = "192.168.1.1",
@@ -47,6 +47,8 @@ $CurrentDir = Split-Path -Parent $MyInvocation.MyCommand.Path
 # Скрипт можно положить в корень репозитория или в папку scripts
 if (Test-Path (Join-Path $CurrentDir "scripts\build-openwrt-packages-wsl.sh")) {
     $RepoRoot = $CurrentDir
+} elseif (Test-Path (Join-Path $CurrentDir "build-openwrt-packages-wsl.sh")) {
+    $RepoRoot = Split-Path -Parent $CurrentDir
 } elseif (Test-Path (Join-Path (Split-Path -Parent $CurrentDir) "scripts\build-openwrt-packages-wsl.sh")) {
     $RepoRoot = Split-Path -Parent $CurrentDir
 } else {
@@ -113,29 +115,6 @@ if ($ForceDepends) {
 
 $ForceOptionsText = $ForceOptions -join " "
 
-$InstallCommand = @"
-set -e
-
-echo 'Installing IPK packages from $RemoteDir...'
-
-for pkg in \
-  $RemoteDir/podkop-plus_*.ipk \
-  $RemoteDir/luci-app-podkop-plus_*.ipk \
-  $RemoteDir/luci-i18n-podkop-plus-ru_*.ipk
-do
-  [ -e "`$pkg" ] || continue
-  echo "Installing `$pkg"
-  opkg $ForceOptionsText install "`$pkg"
-done
-
-rm -rf /tmp/luci-indexcache.* /tmp/luci-modulecache/ 2>/dev/null || true
-/etc/init.d/rpcd restart 2>/dev/null || killall -HUP rpcd 2>/dev/null || true
-
-echo 'Done.'
-"@
-
-Write-Host "Installing packages on router..."
-& ssh.exe @SshArgs $Remote $InstallCommand
 $InstallParts = @(
     "set -e",
     "echo 'Installing IPK packages from $RemoteDir...'",

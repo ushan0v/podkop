@@ -33,8 +33,8 @@ jobs:
           else
             VERSION=$(git describe --tags --exact-match 2>/dev/null || true)
           fi
-          if [[ ! "$VERSION" =~ ^[0-9]+(\.[0-9]+)*-[0-9]+$ ]]; then
-            echo "Release version must use x.y.z-n format, got: ${VERSION:-<empty>}" >&2
+          if [[ ! "$VERSION" =~ ^([0-9]+(\.[0-9]+)*-[0-9]+|[0-9]+(\.[0-9]+){3})$ ]]; then
+            echo "Release version must use x.y.z.n format; legacy x.y.z-n is also accepted, got: ${VERSION:-<empty>}" >&2
             exit 1
           fi
           echo "version=$VERSION" >> "$GITHUB_OUTPUT"
@@ -87,6 +87,7 @@ jobs:
           files: ./filtered-bin/release/*.*
           draft: false
           prerelease: false
+          make_latest: true
           name: ${{ needs.preparation.outputs.version }}
           tag_name: ${{ needs.preparation.outputs.version }}
           target_commitish: ${{ needs.preparation.outputs.commitish }}
